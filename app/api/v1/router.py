@@ -1,16 +1,20 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    analytics,
     audit,
     bootstrap,
     channels,
     data_catalog,
     health,
+    notifications,
     ordering,
     production,
     review,
     sales,
+    signals,
     simulation,
+    sv,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -25,3 +29,7 @@ api_router.include_router(review.router)
 api_router.include_router(ordering.router)
 api_router.include_router(production.router)
 api_router.include_router(sales.router)
+api_router.include_router(notifications.router)
+api_router.include_router(analytics.router)
+api_router.include_router(sv.router)
+api_router.include_router(signals.router)

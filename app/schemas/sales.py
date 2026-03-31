@@ -35,3 +35,8 @@ class SalesQueryResponse(BaseModel):
     processing_route: Optional[str] = None
     blocked: bool = False
     masked_fields: list[str] = Field(default_factory=list)
+    # AI 고도화 필드 추가
+    confidence_score: Optional[float] = 1.0
+    semantic_logic: Optional[str] = None
+    sources: Optional[list[str]] = None
+    visual_data: Optional[dict] = None
