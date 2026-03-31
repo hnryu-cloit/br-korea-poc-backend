@@ -26,7 +26,7 @@ br-korea-poc의 bootstrap API와 정책/상태 전달을 담당하는 백엔드 
 
 ## Stack
 
-- Python 3.11+
+- Python 3.9+
 - FastAPI
 - Uvicorn
 - Pydantic
@@ -50,6 +50,15 @@ app/
 - 입력과 출력은 스키마로 검증합니다.
 - 정책과 상태 전이는 서비스 계층에서 일관되게 처리합니다.
 - bootstrap payload도 API 계약으로 노출합니다.
+
+## POC Architecture Principles
+
+- 현재 백엔드는 운영 시스템 연동 전 단계의 데모 API 레이어로 유지합니다.
+- 샘플 데이터 소스는 우선 in-memory 또는 CSV/Excel 적재용 repository로 다루고, 이후 실제 운영 시스템 연동 시 repository 구현을 교체합니다.
+- 도메인 API는 `production`, `ordering`, `sales` 단위로 분리하고, 공통 정책이나 조합 로직만 서비스 계층에서 담당합니다.
+- 라우터는 요청/응답 계약과 HTTP 처리만 담당하고, 데이터 가공과 상태 판단은 서비스 계층으로 올립니다.
+- POC 단계에서는 인증/인가를 강제하지 않지만, 향후 추가될 수 있도록 엔드포인트 계약과 계층 경계를 명확히 유지합니다.
+- 운영 연동 전까지는 검증 가능한 API 계약을 우선하며, 과도한 인프라 복잡도보다 교체 가능한 구조를 우선합니다.
 
 ## Run
 
