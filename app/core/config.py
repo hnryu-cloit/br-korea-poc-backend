@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
 
-    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/br_korea_poc"
+    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc"
     EXTERNAL_API_KEY: str = "stub-key"
 
     AI_SERVICE_URL: str = ""
