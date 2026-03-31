@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: br-korea-poc-postgres
+    environment:
+      POSTGRES_DB: br_korea_poc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - br_korea_poc_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d br_korea_poc"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  br_korea_poc_postgres_data:
