@@ -1,16 +1,28 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
 from app.repositories.ordering_repository import OrderingRepository
 from app.schemas.ordering import (
+    OrderingAlertsResponse,
     OrderingContextResponse,
+    OrderingDeadlineAlert,
+    OrderSelectionHistoryItem,
+    OrderSelectionHistoryResponse,
+    OrderSelectionSummaryResponse,
     OrderingOptionsResponse,
     OrderSelectionRequest,
     OrderSelectionResponse,
 )
 from app.schemas.simulation import SimulationInput, SimulationResponse
+from app.services.audit_service import AuditService
 
 
 class OrderingService:
-    def __init__(self, repository: OrderingRepository) -> None:
+    def __init__(self, repository: OrderingRepository, audit_service: Optional[AuditService] = None) -> None:
         self.repository = repository
+        self.audit_service = audit_service
 
     async def list_options(self, notification_entry: bool = False) -> OrderingOptionsResponse:
         options = await self.repository.list_options()
@@ -25,9 +37,82 @@ class OrderingService:
         context = await self.repository.get_notification_context(notification_id)
         return OrderingContextResponse(**context)
 
+    async def list_deadline_alerts(self, before_minutes: int = 20) -> OrderingAlertsResponse:
+        options = await self.repository.list_options()
+        focus_option = next((option for option in options if option.get("recommended")), options[0] if options else None)
+        alerts: list[OrderingDeadlineAlert] = []
+        if focus_option is not None:
+            alerts.append(
+                OrderingDeadlineAlert(
+                    notification_id=2,
+                    title=f"주문 마감 {before_minutes}분 전입니다",
+                    message=f"{focus_option['label']} 옵션을 우선 확인해 주세요. 추천 주문 수량 3개 옵션이 준비되었습니다.",
+                    deadline_minutes=before_minutes,
+                    target_path="/ordering",
+                    focus_option_id=focus_option["id"],
+                    target_roles=["store_owner"],
+                )
+            )
+        return OrderingAlertsResponse(
+            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            alerts=alerts,
+        )
+
     async def save_selection(self, payload: OrderSelectionRequest) -> OrderSelectionResponse:
         saved = await self.repository.save_selection(payload.model_dump())
-        return OrderSelectionResponse(saved=True, **saved)
+        if self.audit_service:
+            await self.audit_service.record(
+                domain="ordering",
+                event_type="order_selection_saved",
+                actor_role=payload.actor,
+                route="api",
+                outcome="success",
+                message=f"{payload.option_id} 주문 선택을 저장했습니다.",
+                metadata={"reason_provided": bool(payload.reason), "option_id": payload.option_id},
+            )
+        return OrderSelectionResponse(**({"saved": True, **saved} if "saved" not in saved else saved))
+
+    async def list_selection_history(
+        self,
+        limit: int = 20,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> OrderSelectionHistoryResponse:
+        items = await self.repository.list_selection_history(
+            limit=limit,
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return OrderSelectionHistoryResponse(
+            items=[OrderSelectionHistoryItem(**item) for item in items],
+            total=len(items),
+            filtered_store_id=store_id,
+            filtered_date_from=date_from,
+            filtered_date_to=date_to,
+        )
+
+    async def get_selection_summary(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> OrderSelectionSummaryResponse:
+        summary = await self.repository.get_selection_summary(store_id=store_id, date_from=date_from, date_to=date_to)
+        latest = summary.get("latest")
+        return OrderSelectionSummaryResponse(
+            total=int(summary["total"]),
+            latest=OrderSelectionHistoryItem(**latest) if latest else None,
+            recommended_selected=bool(summary["recommended_selected"]),
+            recent_actor_roles=list(summary["recent_actor_roles"]),
+            recent_selection_count_7d=int(summary["recent_selection_count_7d"]),
+            option_counts=dict(summary["option_counts"]),
+            summary_status=str(summary["summary_status"]),
+            filtered_store_id=summary.get("filtered_store_id"),
+            filtered_date_from=summary.get("filtered_date_from"),
+            filtered_date_to=summary.get("filtered_date_to"),
+        )
 
     async def simulate(self, payload: SimulationInput) -> SimulationResponse:
         expected_patients = round(payload.expected_leads * payload.close_rate, 1)

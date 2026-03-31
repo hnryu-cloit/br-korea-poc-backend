@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.infrastructure.db.utils import has_table
+
 SUGGESTED_PROMPTS = [
     {"label": "배달 주문이 줄었어요", "category": "배달", "prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘"},
     {"label": "행사 효과가 궁금해요", "category": "캠페인", "prompt": "T-day 행사 이후 매출과 재방문 영향이 어땠는지 분석해줘"},
@@ -21,10 +29,68 @@ QUERY_RESPONSES = {
 
 
 class SalesRepository:
+    def __init__(self, engine: Engine | None = None) -> None:
+        self.engine = engine
+
     async def list_prompts(self) -> list[dict]:
         return SUGGESTED_PROMPTS
 
     async def get_query_response(self, prompt: str) -> dict:
+        source_relation = None
+        if self.engine and has_table(self.engine, "core_channel_sales"):
+            source_relation = "core_channel_sales"
+        elif self.engine and has_table(self.engine, "raw_daily_store_online"):
+            source_relation = "raw_daily_store_online"
+
+        if self.engine and source_relation:
+            try:
+                with self.engine.connect() as connection:
+                    if "배달 건수" in prompt or "배달" in prompt:
+                        summary = connection.execute(
+                            text(
+                                f"""
+                                WITH daily AS (
+                                    SELECT
+                                        sale_dt,
+                                        SUM(ord_cnt) AS ord_cnt,
+                                        SUM(sale_amt) AS sale_amt
+                                    FROM {source_relation}
+                                    WHERE ho_chnl_div LIKE '온라인%'
+                                    GROUP BY sale_dt
+                                    ORDER BY sale_dt DESC
+                                    LIMIT 14
+                                )
+                                SELECT
+                                    COALESCE(SUM(CASE WHEN rn <= 7 THEN ord_cnt END), 0) AS recent_orders,
+                                    COALESCE(SUM(CASE WHEN rn > 7 THEN ord_cnt END), 0) AS prior_orders,
+                                    COALESCE(SUM(CASE WHEN rn <= 7 THEN sale_amt END), 0) AS recent_sales,
+                                    COALESCE(SUM(CASE WHEN rn > 7 THEN sale_amt END), 0) AS prior_sales
+                                FROM (
+                                    SELECT sale_dt, ord_cnt, sale_amt, ROW_NUMBER() OVER (ORDER BY sale_dt DESC) AS rn
+                                    FROM daily
+                                ) ranked
+                                """
+                            )
+                        ).mappings().first()
+                        if summary:
+                            recent_orders = float(summary["recent_orders"] or 0)
+                            prior_orders = float(summary["prior_orders"] or 0)
+                            change_pct = 0.0 if prior_orders == 0 else round(((recent_orders - prior_orders) / prior_orders) * 100, 1)
+                            return {
+                                "text": f"최근 1주 온라인 주문은 직전 1주 대비 {change_pct}% 변화했습니다. 주문 수와 채널 매출을 함께 확인해 원인을 점검하는 것이 좋습니다.",
+                                "evidence": [
+                                    f"최근 1주 온라인 주문 {int(recent_orders)}건",
+                                    f"직전 1주 온라인 주문 {int(prior_orders)}건",
+                                    f"최근 1주 온라인 매출 {int(float(summary['recent_sales'] or 0)):,}원",
+                                ],
+                                "actions": [
+                                    "온라인 채널별 주문 수 변동을 추가 확인",
+                                    "프로모션/노출 변화 여부 점검",
+                                    "배달과 픽업 채널을 분리해 재분석",
+                                ],
+                            }
+            except SQLAlchemyError:
+                pass
         return QUERY_RESPONSES.get(
             prompt,
             {

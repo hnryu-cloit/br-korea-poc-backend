@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SalesPrompt(BaseModel):
@@ -31,3 +31,7 @@ class SalesQueryResponse(BaseModel):
     evidence: list[str]
     actions: list[str]
     comparison: Optional[SalesComparison] = None
+    query_type: Optional[str] = None
+    processing_route: Optional[str] = None
+    blocked: bool = False
+    masked_fields: list[str] = Field(default_factory=list)
