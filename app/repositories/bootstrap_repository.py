@@ -331,5 +331,5 @@ BOOTSTRAP_PAYLOAD = {
 
 
 class BootstrapRepository:
-    def get_bootstrap(self) -> dict:
+    async def get_bootstrap(self) -> dict:
         return BOOTSTRAP_PAYLOAD

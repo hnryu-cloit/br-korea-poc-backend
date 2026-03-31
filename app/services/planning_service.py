@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from app.repositories.bootstrap_repository import BootstrapRepository
-from app.schemas.contracts import SimulationInput, SimulationResponse
+from app.schemas.simulation import SimulationInput, SimulationResponse
 
 
 class PlanningService:
     def __init__(self, repository: BootstrapRepository | None = None) -> None:
         self.repository = repository or BootstrapRepository()
 
-    def get_bootstrap(self) -> dict:
-        return self.repository.get_bootstrap()
+    async def get_bootstrap(self) -> dict:
+        return await self.repository.get_bootstrap()
 
-    def simulate(self, payload: SimulationInput) -> SimulationResponse:
+    async def simulate(self, payload: SimulationInput) -> SimulationResponse:
         expected_patients = round(payload.expected_leads * payload.close_rate, 1)
         per_patient_revenue = (
             payload.promo_price
