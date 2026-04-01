@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.repositories.sales_repository import SalesRepository
-from app.schemas.sales import SalesComparison, SalesPrompt, SalesQueryRequest, SalesQueryResponse
+from app.schemas.sales import SalesComparison, SalesInsightsResponse, SalesPrompt, SalesQueryRequest, SalesQueryResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
 
@@ -96,6 +96,15 @@ class SalesService:
                 metadata={"prompt": payload.prompt, "query_type": query_type, "comparison": comparison is not None},
             )
         return result
+
+    async def get_insights(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> SalesInsightsResponse:
+        payload = await self.repository.get_insights(store_id=store_id, date_from=date_from, date_to=date_to)
+        return SalesInsightsResponse(**payload)
 
     def _classify_query(self, prompt: str) -> str:
         if any(keyword in prompt for keyword in _SENSITIVE_KEYWORDS):

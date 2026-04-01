@@ -279,6 +279,18 @@ def test_sales_query_blocks_sensitive_prompt_for_store_role() -> None:
     assert payload["masked_fields"] == ["profitability"]
 
 
+def test_sales_insights() -> None:
+    response = client.get("/api/sales/insights?store_id=gangnam&date_from=2026-03-01&date_to=2026-03-31")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filtered_store_id"] == "gangnam"
+    assert payload["filtered_date_from"] == "2026-03-01"
+    assert payload["peak_hours"]["title"] == "시간대 운영 코칭"
+    assert len(payload["channel_mix"]["metrics"]) >= 1
+    assert len(payload["payment_mix"]["actions"]) >= 1
+    assert len(payload["menu_mix"]["metrics"]) >= 1
+
+
 def test_audit_logs_require_hq_role_and_return_recent_events() -> None:
     client.post(
         "/api/ordering/selections",
@@ -307,3 +319,33 @@ def test_data_catalog_endpoint_returns_response_shape() -> None:
     payload = response.json()
     assert "db_path" in payload
     assert "tables" in payload
+
+
+def test_notifications_endpoint_returns_response_shape() -> None:
+    response = client.get("/api/notifications")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+    assert "unread_count" in payload
+    if payload["items"]:
+        assert "title" in payload["items"][0]
+        assert "category" in payload["items"][0]
+
+
+def test_analytics_metrics_endpoint_returns_response_shape() -> None:
+    response = client.get("/api/analytics/metrics")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+    assert len(payload["items"]) >= 1
+    assert {"label", "value", "change", "trend", "detail"} <= set(payload["items"][0].keys())
+
+
+def test_signals_endpoint_returns_response_shape() -> None:
+    response = client.get("/api/signals")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+    assert "high_count" in payload
+    assert len(payload["items"]) >= 1
+    assert {"id", "title", "metric", "value", "change", "trend", "priority", "region", "insight"} <= set(payload["items"][0].keys())

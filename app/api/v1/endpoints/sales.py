@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 
 from app.core.auth import get_current_role
 from app.core.deps import get_sales_service
-from app.schemas.sales import SalesPrompt, SalesQueryRequest, SalesQueryResponse
+from app.schemas.sales import SalesInsightsResponse, SalesPrompt, SalesQueryRequest, SalesQueryResponse
 from app.services.sales_service import SalesService
 
 router = APIRouter(prefix="/sales", tags=["sales"])
@@ -22,3 +24,13 @@ async def query_sales(
     service: SalesService = Depends(get_sales_service),
 ) -> SalesQueryResponse:
     return await service.query(payload, actor_role=role)
+
+
+@router.get("/insights", response_model=SalesInsightsResponse)
+async def get_sales_insights(
+    store_id: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+    service: SalesService = Depends(get_sales_service),
+) -> SalesInsightsResponse:
+    return await service.get_insights(store_id=store_id, date_from=date_from, date_to=date_to)

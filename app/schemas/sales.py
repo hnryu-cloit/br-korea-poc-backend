@@ -40,3 +40,27 @@ class SalesQueryResponse(BaseModel):
     semantic_logic: Optional[str] = None
     sources: Optional[list[str]] = None
     visual_data: Optional[dict] = None
+
+
+class SalesInsightMetric(BaseModel):
+    label: str
+    value: str
+    detail: Optional[str] = None
+
+
+class SalesInsightSection(BaseModel):
+    title: str
+    summary: str
+    metrics: list[SalesInsightMetric]
+    actions: list[str]
+    status: str = "normal"
+
+
+class SalesInsightsResponse(BaseModel):
+    peak_hours: SalesInsightSection
+    channel_mix: SalesInsightSection
+    payment_mix: SalesInsightSection
+    menu_mix: SalesInsightSection
+    filtered_store_id: Optional[str] = None
+    filtered_date_from: Optional[str] = None
+    filtered_date_to: Optional[str] = None

@@ -27,6 +27,54 @@ QUERY_RESPONSES = {
     }
 }
 
+_DEFAULT_PEAK_HOURS = {
+    "title": "시간대 운영 코칭",
+    "summary": "점심 전후와 퇴근 시간대 매출 집중 패턴을 기준으로 생산과 진열 우선순위를 안내합니다.",
+    "metrics": [
+        {"label": "핵심 시간대", "value": "11시", "detail": "대표 상품 글레이즈드"},
+        {"label": "보완 시간대", "value": "15시", "detail": "프로모션 점검 필요"},
+        {"label": "집중 상품", "value": "오리지널 글레이즈드", "detail": "시간대 매출 상위"},
+    ],
+    "actions": ["11시 이전 핵심 상품 진열을 완료해 주세요.", "15시 저조 시간대에는 세트/음료 동시 노출을 강화해 주세요."],
+    "status": "active",
+}
+
+_DEFAULT_CHANNEL_MIX = {
+    "title": "채널 전환 인사이트",
+    "summary": "오프라인 중심 매출 구조로 보이며 특정 시간대 온라인 전환 보완 여지가 있습니다.",
+    "metrics": [
+        {"label": "오프라인 비중", "value": "68%", "detail": "매장 방문 중심"},
+        {"label": "온라인 비중", "value": "32%", "detail": "점심 시간대 보완 가능"},
+        {"label": "온라인 강세 시간대", "value": "12시", "detail": "배달/픽업 집중"},
+    ],
+    "actions": ["점심 시간대 온라인 전용 구성 노출을 검토해 주세요.", "오프라인 강세 시간대는 회전율 중심 운영을 유지해 주세요."],
+    "status": "active",
+}
+
+_DEFAULT_PAYMENT_MIX = {
+    "title": "결제/할인 민감도",
+    "summary": "카드와 간편결제 비중이 높고 할인 의존도는 과도하지 않은 편입니다.",
+    "metrics": [
+        {"label": "주요 결제수단", "value": "신용카드", "detail": "매출 비중 54%"},
+        {"label": "할인 비중", "value": "12%", "detail": "쿠폰/제휴 포함"},
+        {"label": "점검 포인트", "value": "간편결제", "detail": "프로모션 연계 여지"},
+    ],
+    "actions": ["간편결제 프로모션의 추가 유입 효과를 확인해 주세요.", "할인 비중이 높아지는 기간에는 객단가 방어 상품을 함께 제안해 주세요."],
+    "status": "normal",
+}
+
+_DEFAULT_MENU_MIX = {
+    "title": "메뉴 믹스 추천",
+    "summary": "상위 상품 집중도가 높아 보완 상품을 동시 진열하면 객단가 개선 여지가 있습니다.",
+    "metrics": [
+        {"label": "대표 상품", "value": "오리지널 글레이즈드", "detail": "순매출 상위"},
+        {"label": "보완 상품", "value": "아메리카노", "detail": "동반 제안 후보"},
+        {"label": "운영 포인트", "value": "세트 노출", "detail": "점심 이후 강화"},
+    ],
+    "actions": ["대표 상품과 음료를 묶어 동시 노출해 주세요.", "저성과 상품은 피크타임보다 비피크 시간대에 테스트해 주세요."],
+    "status": "active",
+}
+
 
 class SalesRepository:
     def __init__(self, engine: Engine | None = None) -> None:
@@ -99,3 +147,351 @@ class SalesRepository:
                 "actions": ["점심 시간대 채널 성과 재점검", "쿠폰 정책 재설계 검토"],
             },
         )
+
+    async def get_insights(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict:
+        insights = {
+            "peak_hours": _DEFAULT_PEAK_HOURS,
+            "channel_mix": _DEFAULT_CHANNEL_MIX,
+            "payment_mix": _DEFAULT_PAYMENT_MIX,
+            "menu_mix": _DEFAULT_MENU_MIX,
+            "filtered_store_id": store_id,
+            "filtered_date_from": date_from,
+            "filtered_date_to": date_to,
+        }
+        if not self.engine:
+            return insights
+
+        try:
+            if has_table(self.engine, "core_hourly_item_sales"):
+                peak_hours = self._fetch_peak_hours_insight(store_id=store_id, date_from=date_from, date_to=date_to)
+                if peak_hours:
+                    insights["peak_hours"] = peak_hours
+            if has_table(self.engine, "core_channel_sales"):
+                channel_mix = self._fetch_channel_mix_insight(store_id=store_id, date_from=date_from, date_to=date_to)
+                if channel_mix:
+                    insights["channel_mix"] = channel_mix
+            if has_table(self.engine, "raw_daily_store_pay_way"):
+                payment_mix = self._fetch_payment_mix_insight(store_id=store_id, date_from=date_from, date_to=date_to)
+                if payment_mix:
+                    insights["payment_mix"] = payment_mix
+            if has_table(self.engine, "core_daily_item_sales"):
+                menu_mix = self._fetch_menu_mix_insight(store_id=store_id, date_from=date_from, date_to=date_to)
+                if menu_mix:
+                    insights["menu_mix"] = menu_mix
+        except SQLAlchemyError:
+            pass
+        return insights
+
+    def _build_filters(
+        self,
+        column_store: str,
+        column_date: str,
+        store_id: str | None,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> tuple[str, dict]:
+        clauses: list[str] = []
+        params: dict[str, str] = {}
+        if store_id:
+            clauses.append(f"{column_store} = :store_id")
+            params["store_id"] = store_id
+        if date_from:
+            clauses.append(f"{column_date} >= :date_from")
+            params["date_from"] = date_from.replace("-", "")
+        if date_to:
+            clauses.append(f"{column_date} <= :date_to")
+            params["date_to"] = date_to.replace("-", "")
+        if not clauses:
+            return "", params
+        return "WHERE " + " AND ".join(clauses), params
+
+    def _fetch_peak_hours_insight(self, store_id: str | None, date_from: str | None, date_to: str | None) -> dict | None:
+        where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
+        with self.engine.connect() as connection:
+            metrics = connection.execute(
+                text(
+                    f"""
+                    WITH hourly AS (
+                        SELECT
+                            tmzon_div,
+                            SUM(net_sale_amt) AS net_sale_amt,
+                            SUM(sale_qty) AS sale_qty
+                        FROM core_hourly_item_sales
+                        {where_clause}
+                        GROUP BY tmzon_div
+                    ),
+                    top_items AS (
+                        SELECT
+                            tmzon_div,
+                            item_nm,
+                            SUM(net_sale_amt) AS net_sale_amt,
+                            ROW_NUMBER() OVER (PARTITION BY tmzon_div ORDER BY SUM(net_sale_amt) DESC, item_nm) AS rn
+                        FROM core_hourly_item_sales
+                        {where_clause}
+                        GROUP BY tmzon_div, item_nm
+                    )
+                    SELECT
+                        h.tmzon_div,
+                        h.net_sale_amt,
+                        h.sale_qty,
+                        ti.item_nm
+                    FROM hourly h
+                    LEFT JOIN top_items ti
+                        ON h.tmzon_div = ti.tmzon_div
+                       AND ti.rn = 1
+                    ORDER BY h.net_sale_amt DESC, h.tmzon_div
+                    LIMIT 3
+                    """
+                ),
+                params,
+            ).mappings().all()
+            slow_slots = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        tmzon_div,
+                        SUM(net_sale_amt) AS net_sale_amt
+                    FROM core_hourly_item_sales
+                    {where_clause}
+                    GROUP BY tmzon_div
+                    HAVING SUM(net_sale_amt) > 0
+                    ORDER BY SUM(net_sale_amt) ASC, tmzon_div
+                    LIMIT 2
+                    """
+                ),
+                params,
+            ).mappings().all()
+
+        if not metrics:
+            return None
+
+        lead = metrics[0]
+        summary = (
+            f"{int(lead['tmzon_div']):02d}시가 가장 강하고 "
+            f"{(lead['item_nm'] or '핵심 상품')} 중심으로 매출이 집중됩니다."
+        )
+        metric_items = [
+            {
+                "label": f"{int(metric['tmzon_div']):02d}시",
+                "value": f"{int(float(metric['net_sale_amt'] or 0)):,}원",
+                "detail": f"대표 상품 {metric['item_nm'] or '-'} / 판매 {int(float(metric['sale_qty'] or 0))}개",
+            }
+            for metric in metrics[:2]
+        ]
+        if slow_slots:
+            slow = slow_slots[0]
+            metric_items.append(
+                {
+                    "label": "보완 시간대",
+                    "value": f"{int(slow['tmzon_div']):02d}시",
+                    "detail": f"순매출 {int(float(slow['net_sale_amt'] or 0)):,}원",
+                }
+            )
+
+        return {
+            "title": "시간대 운영 코칭",
+            "summary": summary,
+            "metrics": metric_items,
+            "actions": [
+                f"{int(lead['tmzon_div']):02d}시 이전에 핵심 상품 생산·진열을 완료해 주세요.",
+                "저조 시간대에는 세트 제안이나 음료 동시 노출을 강화해 주세요.",
+            ],
+            "status": "active",
+        }
+
+    def _fetch_channel_mix_insight(self, store_id: str | None, date_from: str | None, date_to: str | None) -> dict | None:
+        where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
+        with self.engine.connect() as connection:
+            channel_rows = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
+                        SUM(sale_amt) AS sale_amt,
+                        SUM(ord_cnt) AS ord_cnt
+                    FROM core_channel_sales
+                    {where_clause}
+                    GROUP BY COALESCE(NULLIF(ho_chnl_div, ''), '기타')
+                    ORDER BY SUM(sale_amt) DESC
+                    """
+                ),
+                params,
+            ).mappings().all()
+            time_rows = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        tmzon_div,
+                        SUM(CASE WHEN ho_chnl_div LIKE '온라인%' THEN sale_amt ELSE 0 END) AS online_sale_amt,
+                        SUM(CASE WHEN ho_chnl_div LIKE '오프라인%' THEN sale_amt ELSE 0 END) AS offline_sale_amt
+                    FROM core_channel_sales
+                    {where_clause}
+                    GROUP BY tmzon_div
+                    ORDER BY online_sale_amt DESC, tmzon_div
+                    LIMIT 1
+                    """
+                ),
+                params,
+            ).mappings().first()
+
+        if not channel_rows:
+            return None
+
+        total_sales = sum(float(row["sale_amt"] or 0) for row in channel_rows)
+        metric_items = []
+        for row in channel_rows[:2]:
+            ratio = 0 if total_sales == 0 else round(float(row["sale_amt"] or 0) / total_sales * 100, 1)
+            metric_items.append(
+                {
+                    "label": str(row["channel_div"]),
+                    "value": f"{ratio:.1f}%",
+                    "detail": f"매출 {int(float(row['sale_amt'] or 0)):,}원 / 주문 {int(float(row['ord_cnt'] or 0)):,}건",
+                }
+            )
+
+        if time_rows:
+            online_sale = float(time_rows["online_sale_amt"] or 0)
+            offline_sale = float(time_rows["offline_sale_amt"] or 0)
+            metric_items.append(
+                {
+                    "label": "온라인 강세 시간대",
+                    "value": f"{int(time_rows['tmzon_div']):02d}시",
+                    "detail": f"온라인 {int(online_sale):,}원 / 오프라인 {int(offline_sale):,}원",
+                }
+            )
+
+        top_channel = channel_rows[0]
+        return {
+            "title": "채널 전환 인사이트",
+            "summary": f"{top_channel['channel_div']} 비중이 가장 높고 채널별 집중 시간대 차이가 보입니다.",
+            "metrics": metric_items,
+            "actions": [
+                "온라인 강세 시간대에는 배달/픽업 전용 구성을 노출해 주세요.",
+                "오프라인 강세 시간대에는 회전율 중심으로 진열 우선순위를 유지해 주세요.",
+            ],
+            "status": "active",
+        }
+
+    def _fetch_payment_mix_insight(self, store_id: str | None, date_from: str | None, date_to: str | None) -> dict | None:
+        where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        COALESCE(NULLIF(pay_way_cd_nm, ''), NULLIF(pay_way_cd, ''), '기타') AS payment_label,
+                        SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) AS payment_amt
+                    FROM raw_daily_store_pay_way
+                    {where_clause}
+                    GROUP BY COALESCE(NULLIF(pay_way_cd_nm, ''), NULLIF(pay_way_cd, ''), '기타')
+                    ORDER BY SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) DESC
+                    LIMIT 3
+                    """
+                ),
+                params,
+            ).mappings().all()
+
+        if not rows:
+            return None
+
+        total_amt = sum(float(row["payment_amt"] or 0) for row in rows)
+        metric_items = []
+        for row in rows[:3]:
+            ratio = 0 if total_amt == 0 else round(float(row["payment_amt"] or 0) / total_amt * 100, 1)
+            metric_items.append(
+                {
+                    "label": str(row["payment_label"]),
+                    "value": f"{ratio:.1f}%",
+                    "detail": f"결제금액 {int(float(row['payment_amt'] or 0)):,}원",
+                }
+            )
+
+        return {
+            "title": "결제/할인 민감도",
+            "summary": f"{rows[0]['payment_label']} 비중이 가장 높고 결제수단 편중 여부를 운영 관점에서 점검할 수 있습니다.",
+            "metrics": metric_items,
+            "actions": [
+                "상위 결제수단과 연결된 프로모션 성과를 함께 비교해 주세요.",
+                "특정 할인수단 비중이 높아질 때는 객단가 방어 상품을 함께 제안해 주세요.",
+            ],
+            "status": "normal",
+        }
+
+    def _fetch_menu_mix_insight(self, store_id: str | None, date_from: str | None, date_to: str | None) -> dict | None:
+        where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
+        with self.engine.connect() as connection:
+            top_rows = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        item_nm,
+                        SUM(sale_qty) AS sale_qty,
+                        SUM(net_sale_amt) AS net_sale_amt
+                    FROM core_daily_item_sales
+                    {where_clause}
+                    GROUP BY item_nm
+                    ORDER BY SUM(net_sale_amt) DESC, SUM(sale_qty) DESC
+                    LIMIT 3
+                    """
+                ),
+                params,
+            ).mappings().all()
+            low_rows = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        item_nm,
+                        SUM(net_sale_amt) AS net_sale_amt
+                    FROM core_daily_item_sales
+                    {where_clause}
+                    GROUP BY item_nm
+                    HAVING SUM(net_sale_amt) > 0
+                    ORDER BY SUM(net_sale_amt) ASC, item_nm
+                    LIMIT 1
+                    """
+                ),
+                params,
+            ).mappings().all()
+
+        if not top_rows:
+            return None
+
+        metric_items = [
+            {
+                "label": "대표 상품",
+                "value": str(top_rows[0]["item_nm"] or "-"),
+                "detail": f"순매출 {int(float(top_rows[0]['net_sale_amt'] or 0)):,}원 / 판매 {int(float(top_rows[0]['sale_qty'] or 0)):,}개",
+            }
+        ]
+        if len(top_rows) > 1:
+            metric_items.append(
+                {
+                    "label": "보완 후보",
+                    "value": str(top_rows[1]["item_nm"] or "-"),
+                    "detail": f"순매출 {int(float(top_rows[1]['net_sale_amt'] or 0)):,}원",
+                }
+            )
+        if low_rows:
+            metric_items.append(
+                {
+                    "label": "저성과 점검",
+                    "value": str(low_rows[0]["item_nm"] or "-"),
+                    "detail": f"순매출 {int(float(low_rows[0]['net_sale_amt'] or 0)):,}원",
+                }
+            )
+
+        return {
+            "title": "메뉴 믹스 추천",
+            "summary": f"{top_rows[0]['item_nm']} 중심으로 매출이 형성되고 있어 동반 제안 상품 운영 여지가 있습니다.",
+            "metrics": metric_items,
+            "actions": [
+                "대표 상품과 음료 또는 세트 상품을 함께 제안해 주세요.",
+                "저성과 상품은 피크타임보다 비피크 시간대 테스트로 노출해 주세요.",
+            ],
+            "status": "active",
+        }
