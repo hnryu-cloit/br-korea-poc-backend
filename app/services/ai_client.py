@@ -18,12 +18,11 @@ class AIServiceClient:
             return {"Authorization": f"Bearer {self._token}"}
         return {}
 
-    async def query_sales(self, prompt: str) -> dict | None:
-        """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
-        url = f"{self._base_url}/sales/query"
+    async def _post(self, path: str, body: dict) -> dict | None:
+        url = f"{self._base_url}{path}"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json={"prompt": prompt}, headers=self._headers)
+                response = await client.post(url, json=body, headers=self._headers)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as exc:
@@ -32,3 +31,43 @@ class AIServiceClient:
         except httpx.RequestError as exc:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
+
+    async def query_sales(self, prompt: str) -> dict | None:
+        """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
+        return await self._post("/sales/query", {"prompt": prompt})
+
+    async def predict_production(
+        self,
+        sku: str,
+        current_stock: int,
+        history: list[dict],
+        pattern_4w: list[float],
+    ) -> dict | None:
+        """AI 서비스에 생산 위험 예측을 요청합니다. 실패 시 None을 반환합니다."""
+        return await self._post(
+            "/management/production/predict",
+            {
+                "sku": sku,
+                "current_stock": current_stock,
+                "history": history,
+                "pattern_4w": pattern_4w,
+            },
+        )
+
+    async def recommend_ordering(
+        self,
+        store_id: str,
+        current_date: str,
+        is_campaign: bool = False,
+        is_holiday: bool = False,
+    ) -> dict | None:
+        """AI 서비스에 주문 추천을 요청합니다. 실패 시 None을 반환합니다."""
+        return await self._post(
+            "/management/ordering/recommend",
+            {
+                "store_id": store_id,
+                "current_date": current_date,
+                "is_campaign": is_campaign,
+                "is_holiday": is_holiday,
+            },
+        )

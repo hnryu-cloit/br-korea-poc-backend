@@ -1,0 +1,184 @@
+"""
+백엔드 AIServiceClient 통합 테스트
+- httpx를 mock하여 AI 서비스 API 계약을 검증합니다.
+- 실제 AI 서비스 없이 실행 가능합니다.
+"""
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+import respx
+import httpx
+
+from app.services.ai_client import AIServiceClient
+
+AI_BASE_URL = "http://localhost:8001"
+TOKEN = "test-token"
+
+
+@pytest.fixture
+def client() -> AIServiceClient:
+    return AIServiceClient(base_url=AI_BASE_URL, token=TOKEN)
+
+
+# ── query_sales ───────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_query_sales_success(client: AIServiceClient) -> None:
+    stub = {
+        "text": "배달 매출이 14% 감소했습니다.",
+        "evidence": ["배달앱 노출 하락"],
+        "actions": ["광고 입찰가 조정"],
+        "confidence_score": 0.9,
+        "semantic_logic": None,
+        "sources": [],
+        "visual_data": None,
+    }
+    respx.post(f"{AI_BASE_URL}/sales/query").mock(
+        return_value=httpx.Response(200, json=stub)
+    )
+
+    result = await client.query_sales("배달 매출 분석해줘")
+
+    assert result is not None
+    assert result["text"] == stub["text"]
+    assert result["evidence"] == stub["evidence"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_query_sales_returns_none_on_server_error(client: AIServiceClient) -> None:
+    respx.post(f"{AI_BASE_URL}/sales/query").mock(
+        return_value=httpx.Response(500, text="Internal Server Error")
+    )
+    result = await client.query_sales("배달 분석")
+    assert result is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_query_sales_returns_none_on_connection_error(client: AIServiceClient) -> None:
+    respx.post(f"{AI_BASE_URL}/sales/query").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    result = await client.query_sales("배달 분석")
+    assert result is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_query_sales_sends_bearer_token(client: AIServiceClient) -> None:
+    stub = {"text": "ok", "evidence": [], "actions": [], "confidence_score": 1.0, "semantic_logic": None, "sources": [], "visual_data": None}
+    route = respx.post(f"{AI_BASE_URL}/sales/query").mock(
+        return_value=httpx.Response(200, json=stub)
+    )
+
+    await client.query_sales("테스트")
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+# ── predict_production ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_predict_production_success(client: AIServiceClient) -> None:
+    stub = {
+        "sku": "SKU_001",
+        "predicted_stock_1h": 8.5,
+        "risk_detected": True,
+        "stockout_expected_at": "14:45",
+        "alert_message": "1시간 이내 품절 위험. 지금 생산을 시작하세요.",
+        "confidence": 0.91,
+    }
+    respx.post(f"{AI_BASE_URL}/management/production/predict").mock(
+        return_value=httpx.Response(200, json=stub)
+    )
+
+    result = await client.predict_production(
+        sku="SKU_001",
+        current_stock=12,
+        history=[{"timestamp": "2024-01-01T12:00:00", "stock": 20, "production": 0, "sales": 8}],
+        pattern_4w=[0.9, 1.1],
+    )
+
+    assert result is not None
+    assert result["sku"] == "SKU_001"
+    assert result["risk_detected"] is True
+    assert result["alert_message"] != ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_predict_production_returns_none_on_error(client: AIServiceClient) -> None:
+    respx.post(f"{AI_BASE_URL}/management/production/predict").mock(
+        return_value=httpx.Response(401, text="Unauthorized")
+    )
+    result = await client.predict_production("SKU_X", 0, [], [])
+    assert result is None
+
+
+# ── recommend_ordering ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_recommend_ordering_success(client: AIServiceClient) -> None:
+    stub = {
+        "options": [
+            {"name": "전주 동요일 기준", "recommended_quantity": 120, "priority": 1},
+            {"name": "전전주 동요일 기준", "recommended_quantity": 115, "priority": 2},
+            {"name": "전월 동요일 기준", "recommended_quantity": 108, "priority": 3},
+        ],
+        "reasoning": "지난주 패턴이 최신 수요와 가장 유사합니다.",
+        "guardrail_note": "최종 주문 결정은 점주의 권한입니다.",
+    }
+    respx.post(f"{AI_BASE_URL}/management/ordering/recommend").mock(
+        return_value=httpx.Response(200, json=stub)
+    )
+
+    result = await client.recommend_ordering(
+        store_id="POC_001",
+        current_date="2024-01-15",
+        is_campaign=False,
+        is_holiday=False,
+    )
+
+    assert result is not None
+    assert len(result["options"]) == 3
+    assert result["options"][0]["priority"] == 1
+    assert "reasoning" in result
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_recommend_ordering_campaign_flag_passed(client: AIServiceClient) -> None:
+    stub = {
+        "options": [{"name": "전주 동요일 기준", "recommended_quantity": 150, "priority": 1}],
+        "reasoning": "캠페인 기간 수요 증가 반영.",
+        "guardrail_note": "최종 주문 결정은 점주의 권한입니다.",
+    }
+    route = respx.post(f"{AI_BASE_URL}/management/ordering/recommend").mock(
+        return_value=httpx.Response(200, json=stub)
+    )
+
+    await client.recommend_ordering(
+        store_id="POC_001",
+        current_date="2024-01-15",
+        is_campaign=True,
+    )
+
+    import json
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["is_campaign"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_recommend_ordering_returns_none_on_error(client: AIServiceClient) -> None:
+    respx.post(f"{AI_BASE_URL}/management/ordering/recommend").mock(
+        return_value=httpx.Response(503, text="Service Unavailable")
+    )
+    result = await client.recommend_ordering("POC_001", "2024-01-15")
+    assert result is None
