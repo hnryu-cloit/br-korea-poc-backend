@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/sv", tags=["sv"])
+router = APIRouter(prefix="/hq", tags=["hq"])
 
 
 class StoreOrderItem(BaseModel):
@@ -21,7 +21,7 @@ class CoachingTip(BaseModel):
     tip: str
 
 
-class SvCoachingResponse(BaseModel):
+class HQCoachingResponse(BaseModel):
     store_orders: list[StoreOrderItem]
     coaching_tips: list[CoachingTip]
 
@@ -36,7 +36,7 @@ class StoreInspectionItem(BaseModel):
     status: str
 
 
-class SvInspectionResponse(BaseModel):
+class HQInspectionResponse(BaseModel):
     items: list[StoreInspectionItem]
 
 
@@ -62,11 +62,11 @@ _INSPECTIONS: list[StoreInspectionItem] = [
 ]
 
 
-@router.get("/coaching", response_model=SvCoachingResponse)
-async def get_sv_coaching() -> SvCoachingResponse:
-    return SvCoachingResponse(store_orders=_COACHING_ORDERS, coaching_tips=_COACHING_TIPS)
+@router.get("/coaching", response_model=HQCoachingResponse)
+async def get_hq_coaching() -> HQCoachingResponse:
+    return HQCoachingResponse(store_orders=_COACHING_ORDERS, coaching_tips=_COACHING_TIPS)
 
 
-@router.get("/inspection", response_model=SvInspectionResponse)
-async def get_sv_inspection() -> SvInspectionResponse:
-    return SvInspectionResponse(items=_INSPECTIONS)
+@router.get("/inspection", response_model=HQInspectionResponse)
+async def get_hq_inspection() -> HQInspectionResponse:
+    return HQInspectionResponse(items=_INSPECTIONS)

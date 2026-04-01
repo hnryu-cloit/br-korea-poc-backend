@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     channels,
     data_catalog,
     health,
+    hq,
     notifications,
     ordering,
     production,
@@ -14,7 +15,6 @@ from app.api.v1.endpoints import (
     sales,
     signals,
     simulation,
-    sv,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -31,5 +31,5 @@ api_router.include_router(production.router)
 api_router.include_router(sales.router)
 api_router.include_router(notifications.router)
 api_router.include_router(analytics.router)
-api_router.include_router(sv.router)
+api_router.include_router(hq.router)
 api_router.include_router(signals.router)
