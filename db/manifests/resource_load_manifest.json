@@ -18,10 +18,10 @@
     },
     {
       "name": "store_master",
-      "loader": "csv",
+      "loader": "xlsx",
       "table": "raw_store_master",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/01. 점포 마스터/던킨+점포마스터_매핑용.csv"
+        "../resource/04. POC 대상 데이터_제공데이터/01. 점포 마스터/던킨+점포마스터_매핑용.xlsx"
       ],
       "columns": [
         "row_no",
@@ -39,15 +39,15 @@
     },
     {
       "name": "daily_store_item_tmzon",
-      "loader": "csv",
+      "loader": "xlsx",
       "table": "raw_daily_store_item_tmzon",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_01.csv",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_02.csv",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_03.csv",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_04.csv",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_05.csv",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_06.csv"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_01.xlsx",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_02.xlsx",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_03.xlsx",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_04.xlsx",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_05.xlsx",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_06.xlsx"
       ],
       "columns": [
         "masked_stor_cd",
@@ -79,10 +79,10 @@
     },
     {
       "name": "daily_store_cpi_tmzon",
-      "loader": "csv",
+      "loader": "xlsx",
       "table": "raw_daily_store_cpi_tmzon",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/02. 일자별 시간대별 캠페인 매출 데이터/일자별+시간대별+캠페인+매출.csv"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/02. 일자별 시간대별 캠페인 매출 데이터/일자별+시간대별+캠페인+매출.xlsx"
       ],
       "columns": [
         "masked_stor_cd","masked_stor_nm","cpi_cd","cpi_nm","bill_cnt","qty_00","qty_01","qty_02","qty_03","qty_04","qty_05","qty_06","qty_07","qty_08","qty_09","qty_10","qty_11","qty_12","qty_13","qty_14","qty_15","qty_16","qty_17","qty_18","qty_19","qty_20","qty_21","qty_22","qty_23","dc_amt_00","dc_amt_01","dc_amt_02","dc_amt_03","dc_amt_04","dc_amt_05","dc_amt_06","dc_amt_07","dc_amt_08","dc_amt_09","dc_amt_10","dc_amt_11","dc_amt_12","dc_amt_13","dc_amt_14","dc_amt_15","dc_amt_16","dc_amt_17","dc_amt_18","dc_amt_19","dc_amt_20","dc_amt_21","dc_amt_22","dc_amt_23","act_amt_00","act_amt_01","act_amt_02","act_amt_03","act_amt_04","act_amt_05","act_amt_06","act_amt_07","act_amt_08","act_amt_09","act_amt_10","act_amt_11","act_amt_12","act_amt_13","act_amt_14","act_amt_15","act_amt_16","act_amt_17","act_amt_18","act_amt_19","act_amt_20","act_amt_21","act_amt_22","act_amt_23"
@@ -90,10 +90,10 @@
     },
     {
       "name": "daily_store_pay_way",
-      "loader": "csv",
+      "loader": "xlsx",
       "table": "raw_daily_store_pay_way",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/03. 일자별 결제 수단별 매출 데이터/일자별+결제+수단별+매출.csv"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/03. 일자별 결제 수단별 매출 데이터/일자별+결제+수단별+매출.xlsx"
       ],
       "columns": [
         "masked_stor_cd","masked_stor_nm","pay_way_cd_nm","pay_dtl_cd_nm","sale_dt","pay_way_cd","pay_dtl_cd","pay_amt","rec_amt","change_amt","rtn_pay_amt","rtn_rec_amt","rtn_change","etc_profit_amt","rtn_etc_profit_amt","cash_exchng_cpn","rtn_cash_exchng_cpn","reg_user_id","reg_date","upd_user_id","upd_date"
@@ -101,10 +101,10 @@
     },
     {
       "name": "daily_store_item",
-      "loader": "csv",
+      "loader": "xlsx",
       "table": "raw_daily_store_item",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/04. 일자별 상품별 매출/일자별+상품별+매출.csv"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/04. 일자별 상품별 매출/일자별+상품별+매출.xlsx"
       ],
       "columns": [
         "masked_stor_cd","masked_stor_nm","item_nm","sale_dt","item_cd","item_tax_div","sale_qty","sale_amt","rtn_qty","rtn_amt","dc_amt","enuri_amt","vat_amt","actual_sale_amt","net_sale_amt","take_in_amt","take_in_vat_amt","take_out_amt","take_out_vat_amt","svc_fee_amt","svc_fee_vat_amt","reg_user_id","reg_date","upd_user_id","upd_date"
@@ -112,14 +112,62 @@
     },
     {
       "name": "daily_store_online",
-      "loader": "csv",
+      "loader": "xlsx",
       "table": "raw_daily_store_online",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+오프라인.csv",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+온라인.csv"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+오프라인.xlsx",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+온라인.xlsx"
       ],
       "columns": [
         "masked_stor_cd","masked_stor_nm","sale_dt","tmzon_div","ho_chnl_cd","sales_org_nm","ho_chnl_div","ho_chnl_nm","sale_amt","ord_cnt"
+      ]
+    },
+    {
+      "name": "production_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/04. POC 대상 데이터_제공데이터/04. 생산/생산 데이터 추출.xlsx"
+      ]
+    },
+    {
+      "name": "ordering_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/04. POC 대상 데이터_제공데이터/05. 주문/주문+데이터.xlsx"
+      ]
+    },
+    {
+      "name": "inventory_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/04. POC 대상 데이터_제공데이터/06. 재고/재고+데이터+추출.xlsx"
+      ]
+    },
+    {
+      "name": "settlement_master_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/04. POC 대상 데이터_제공데이터/07. 정산 기준 정보/정산+기준정보+마스터+테이블+추출.xlsx"
+      ]
+    },
+    {
+      "name": "telecom_discount_master_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/04. POC 대상 데이터_제공데이터/08. 통신사 제휴 할인 마스터/통신사+제휴+할인마스터.xlsx"
+      ]
+    },
+    {
+      "name": "campaign_master_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx"
       ]
     }
   ]

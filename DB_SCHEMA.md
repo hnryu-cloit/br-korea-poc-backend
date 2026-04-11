@@ -5,17 +5,145 @@
 
 ---
 
+## 문서 목적
+
+이 문서는 두 가지 목적을 함께 가집니다.
+
+1. 고객사 원본 기준 테이블 스키마를 설명한다.
+2. 현재 백엔드 코드 기준으로 원본 데이터가 어떤 적재/정제/운영 구조로 사용되는지 설명한다.
+
+즉, 아래의 업무 테이블 설명은 원본 제공 데이터 기준이고, 실제 앱은 이 원본을 그대로 직접 조회하기보다 `raw_*` 적재 테이블, `core_*` 정제 뷰, 운영 테이블을 함께 사용한다.
+
+## 현재 구현 기준 데이터 계층
+
+현재 백엔드 DB 구조는 아래 3개 계층으로 나뉜다.
+
+### 1. Raw 적재 테이블
+
+- 목적: 원본 CSV 데이터를 손실 없이 적재
+- 생성 위치: `db/migrations/0001_create_raw_resource_tables.sql`
+- 예시:
+  - `raw_store_master`
+  - `raw_pay_cd`
+  - `raw_daily_store_item_tmzon`
+  - `raw_daily_store_cpi_tmzon`
+  - `raw_daily_store_pay_way`
+  - `raw_daily_store_item`
+  - `raw_daily_store_online`
+
+특징:
+- 대부분 컬럼이 `TEXT`로 적재된다.
+- 원본 파일명, 시트명, 적재 시각(`source_file`, `source_sheet`, `loaded_at`)을 함께 저장한다.
+- ingestion 이력은 `ingestion_runs`, `ingestion_files`에 기록된다.
+
+### 2. Core 정제 뷰
+
+- 목적: 앱 조회용으로 타입을 정제하고 공통 형식을 맞춤
+- 생성 위치: `db/migrations/0002_create_core_views.sql`
+- 현재 구현된 뷰:
+  - `core_store_master`
+  - `core_daily_item_sales`
+  - `core_hourly_item_sales`
+  - `core_channel_sales`
+
+특징:
+- 공백 문자열을 `NULL`로 정리한다.
+- 수치형 문자열을 `numeric`으로 캐스팅한다.
+- 시간대 값은 `LPAD(..., 2, '0')`로 정규화한다.
+- 앱의 분석/조회 서비스는 raw 테이블보다 core 뷰 사용을 우선한다.
+
+### 3. 운영 테이블
+
+- 목적: 사용자 행동, 감사 로그, 운영 등록 이력 저장
+- 생성 위치:
+  - `db/migrations/0003_create_operational_tables.sql`
+  - `db/migrations/0004_add_store_id_to_operational_tables.sql`
+- 현재 구현된 운영 테이블:
+  - `audit_logs`
+  - `ordering_selections`
+  - `production_registrations`
+
+특징:
+- 원본 제공 데이터가 아니라 앱 사용 중 생성되는 데이터다.
+- 프론트의 주문/생산 화면, 시스템 현황 화면이 직접 참조한다.
+
+## 원본 데이터 적재 흐름
+
+현재 적재 흐름은 다음과 같다.
+
+1. 상위 `resource/` 폴더의 CSV 원본을 읽는다.
+2. `db/manifests/resource_load_manifest.json`에서 파일 경로와 대상 raw 테이블을 매핑한다.
+3. `scripts/load_resource_to_db.py`가 해당 데이터를 `raw_*` 테이블에 적재한다.
+4. `core_*` 뷰에서 타입 정제 후 앱 조회에 사용한다.
+
+대표 매핑 예시는 아래와 같다.
+
+| 원본 업무 테이블 | 현재 raw 테이블 | 현재 core 뷰 | 비고 |
+|----------|--------|------|------|
+| `STOR_MST` | `raw_store_master` | `core_store_master` | 점포 기본 정보 |
+| `PAY_CD` | `raw_pay_cd` | - | 현재 코드상 별도 core 뷰 없음 |
+| `DAILY_STOR_ITEM_TMZON` | `raw_daily_store_item_tmzon` | `core_hourly_item_sales` | 시간대/상품 매출 분석 기초 데이터 |
+| `DAILY_STOR_CPI_TMZON` | `raw_daily_store_cpi_tmzon` | - | 현재 코드상 별도 core 뷰 없음 |
+| `DAILY_STOR_PAY_WAY` | `raw_daily_store_pay_way` | - | 현재 코드상 별도 core 뷰 없음 |
+| `DAILY_STOR_ITEM` | `raw_daily_store_item` | `core_daily_item_sales` | 상품/일자 매출 분석 기초 데이터 |
+| `DAILY_STOR_ONLINE` | `raw_daily_store_online` | `core_channel_sales` | 채널/온오프라인 매출 분석 기초 데이터 |
+
+## 현재 앱 사용 방식
+
+현재 코드 기준으로 데이터는 아래처럼 사용된다.
+
+### 매출/분석 계열
+
+- 점포/기본 정보: `core_store_master`
+- 일자별 상품 매출: `core_daily_item_sales`
+- 시간대별 상품 매출: `core_hourly_item_sales`
+- 채널별 매출: `core_channel_sales`
+
+이 계층은 아래 기능의 기초 데이터로 사용된다.
+
+- 매출 질의 API
+- 매출 구조화 인사이트 API
+- 데이터 카탈로그 / 미리보기 API
+
+### 운영 저장 계열
+
+- 감사/오케스트레이션 추적: `audit_logs`
+- 주문 선택 저장 및 이력: `ordering_selections`
+- 생산 등록 저장 및 이력: `production_registrations`
+
+이 계층은 아래 기능과 직접 연결된다.
+
+- 주문 관리 화면
+- 생산 현황 화면
+- 시스템 현황 / 매출 조회 화면의 로그 표시
+
+## 현재 문서 해석 시 주의사항
+
+- 아래 컬럼 정의는 원본 제공 문서 기준 업무 스키마 설명이다.
+- 실제 DB 적재 시에는 raw 테이블 컬럼명이 일부 단순화되거나 원본과 다를 수 있다.
+  - 예: 원본 `STOR_MST`는 현재 `raw_store_master`로 적재된다.
+- 일부 원본 테이블은 현재 코드에서 적재만 되어 있고, 아직 별도 `core_*` 뷰나 서비스 로직으로 직접 연결되지 않았다.
+- 반대로 `audit_logs`, `ordering_selections`, `production_registrations`는 원본 파일에 없는 현재 앱 운영용 테이블이다.
+
 ## 테이블 목록
 
-| 테이블명 | 시트명 | 설명 |
-|----------|--------|------|
-| `STOR_MST` | 점포 마스터 | 점포 기본 정보 |
-| `PAY_CD` | 결제수단 코드 | 결제/할인 코드 마스터 |
-| `DAILY_STOR_ITEM_TMZON` | 일자·시간대·상품별 매출 | 시간대별 상품 매출 상세 |
-| `DAILY_STOR_CPI_TMZON` | 일자별 시간대별 캠페인 매출 | 캠페인별 매출 집계 |
-| `DAILY_STOR_PAY_WAY` | 일자별 결제수단별 매출 | 결제수단별 매출 집계 |
-| `DAILY_STOR_ITEM` | 일자별 상품별 매출 | 상품별 일자 매출 집계 |
-| `DAILY_STOR_ONLINE` | 일자별 온/오프라인 매출 | 채널(온/오프라인)별 매출 |
+| 테이블명 | 현재 raw 테이블 | 현재 core 뷰 | 설명 |
+|----------|--------|------|------|
+| `STOR_MST` | `raw_store_master` | `core_store_master` | 점포 기본 정보 |
+| `PAY_CD` | `raw_pay_cd` | - | 결제/할인 코드 마스터 |
+| `DAILY_STOR_ITEM_TMZON` | `raw_daily_store_item_tmzon` | `core_hourly_item_sales` | 시간대별 상품 매출 상세 |
+| `DAILY_STOR_CPI_TMZON` | `raw_daily_store_cpi_tmzon` | - | 캠페인별 매출 집계 |
+| `DAILY_STOR_PAY_WAY` | `raw_daily_store_pay_way` | - | 결제수단별 매출 집계 |
+| `DAILY_STOR_ITEM` | `raw_daily_store_item` | `core_daily_item_sales` | 상품별 일자 매출 집계 |
+| `DAILY_STOR_ONLINE` | `raw_daily_store_online` | `core_channel_sales` | 채널(온/오프라인)별 매출 |
+
+## 운영 테이블 목록
+
+| 테이블명 | 용도 | 주요 사용 화면/API |
+|----------|------|------|
+| `audit_logs` | 질의 라우팅, 차단, 응답 처리 감사 로그 저장 | `/api/audit/logs`, 시스템 현황, 매출 조회 |
+| `ordering_selections` | 점주의 주문 선택 저장 | `/api/ordering/selections`, 주문 관리 |
+| `production_registrations` | 생산 등록 저장 | `/api/production/registrations`, 생산 현황 |
 
 ---
 
@@ -188,3 +316,76 @@
 | HO_CHNL_DIV | VARCHAR | str | 판매유형 (온/오프라인) |
 | SALE_AMT | NUMBER | float | 판매금액 |
 | ORD_CNT | NUMBER | int | 판매수량 |
+
+---
+
+## 현재 API별 참조 테이블/뷰
+
+아래는 현재 백엔드 코드 기준으로, 주요 API가 어떤 테이블 또는 뷰를 우선 참조하는지 정리한 목록이다.
+
+### 데이터 조회/메타데이터 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/data/catalog` | 전체 테이블 메타데이터 | DB에 존재하는 테이블 목록과 row count를 동적으로 조회한다. |
+| `GET /api/data/preview/{table_name}` | 요청한 테이블 전체 | 지정한 테이블을 그대로 preview 한다. raw/core/운영 테이블 모두 대상이 될 수 있다. |
+
+### 주문 관리 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/ordering/options` | `core_daily_item_sales` 우선, 없으면 `raw_daily_store_item` | 최근 판매량 기준으로 주문 옵션의 상품/수량을 계산한다. |
+| `POST /api/ordering/selections` | `ordering_selections` | 점주의 최종 주문 선택을 저장한다. |
+| `GET /api/ordering/selections/history` | `ordering_selections` | 저장된 주문 선택 이력을 조회한다. |
+| `GET /api/ordering/selections/summary` | `ordering_selections` | 최근 주문 선택 상태와 요약 지표를 계산한다. |
+| `GET /api/ordering/context/{notification_id}` | DB 직접 참조 없음 | 현재는 정적 컨텍스트 응답이다. |
+| `GET /api/ordering/alerts` | DB 직접 참조 없음 | 현재는 서비스 로직 중심 알림 응답이다. |
+
+### 생산 관리 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/production/overview` | `core_hourly_item_sales` 우선, 없으면 `raw_daily_store_item_tmzon` | 최신 일자 판매 데이터를 기준으로 생산 대상 품목을 계산한다. |
+| `GET /api/production/alerts` | `core_hourly_item_sales` / `raw_daily_store_item_tmzon` 기반 계산 | 생산 위험 SKU를 서비스 로직으로 도출한다. |
+| `POST /api/production/registrations` | `production_registrations` | 생산 등록과 피드백 결과를 저장한다. |
+| `GET /api/production/registrations/history` | `production_registrations` | 생산 등록 이력을 조회한다. |
+| `GET /api/production/registrations/summary` | `production_registrations` | 최근 생산 등록 요약 지표를 계산한다. |
+
+### 매출 분석 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/sales/prompts` | DB 직접 참조 없음 | 추천 질문 목록은 현재 코드상 정적 데이터다. |
+| `POST /api/sales/query` | `core_channel_sales` 우선, 없으면 `raw_daily_store_online` | 배달/온라인 관련 질의는 채널 매출 데이터를 우선 사용한다. 그 외 질의는 스텁 응답 또는 서비스 로직을 사용한다. |
+| `GET /api/sales/insights` | `core_hourly_item_sales`, `core_channel_sales`, `raw_daily_store_pay_way`, `core_daily_item_sales` | 피크타임, 채널 믹스, 결제 믹스, 메뉴 믹스 인사이트를 각각 다른 소스에서 계산한다. |
+
+### 감사 로그 / 시스템 현황 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/audit/logs` | `audit_logs` | 질의 라우팅, 차단, 응답 처리 로그를 조회한다. |
+
+### 알림 / 부트스트랩 / 리뷰 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/notifications` | DB 직접 참조 없음 또는 제한적 | 현재는 알림 서비스의 응답 중심이며, 운영 이벤트의 완전한 DB 연동 구조는 아님. |
+| `GET /api/bootstrap` | DB 직접 참조 없음 | 제품/목표/정책/기능 설명용 bootstrap 데이터다. |
+| `GET /api/channels/drafts` | DB 직접 참조 없음 | 채널별 초안 데이터는 현재 서비스 로직에서 제공한다. |
+| `GET /api/review/checklist` | DB 직접 참조 없음 | 리뷰 체크리스트는 현재 서비스 로직에서 제공한다. |
+| `POST /api/simulation/preview` | 운영 DB 직접 참조 없음 | 입력 payload 기준 계산형 응답이다. |
+
+### 지표 / 본사 / 시그널 API
+
+| API | 주요 참조 대상 | 설명 |
+|------|------|------|
+| `GET /api/analytics/metrics` | `core_channel_sales`, `core_daily_item_sales` | 최근 7일 기준 매출, 온라인 비중, 객단가, 커피 동반 구매율 등을 계산한다. |
+| `GET /api/hq/coaching` | DB 직접 참조 없음 | 현재는 정적 응답 기반 본사 코칭 데이터다. |
+| `GET /api/hq/inspection` | DB 직접 참조 없음 | 현재는 정적 응답 기반 생산 점검 데이터다. |
+| `GET /api/signals` | `core_channel_sales`, `core_store_master`, `production_registrations`, `core_daily_item_sales` | 지역별 배달 감소, 생산 대응 집중, 커피 동반 구매 강세 시그널을 계산한다. |
+
+## 해석 메모
+
+- "우선 참조"는 코드상 `has_table(...)` 확인 뒤 가장 먼저 사용하는 소스를 의미한다.
+- 동일 API라도 DB가 없거나 대상 테이블이 없으면 스텁 응답으로 폴백할 수 있다.
+- 특히 `notifications`, `hq/coaching`, `hq/inspection`, `bootstrap`, `review`, `channels`는 현재 코드상 DB 직접 참조보다 서비스 내부 데이터 비중이 높다.
