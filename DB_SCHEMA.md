@@ -30,11 +30,13 @@
   - `raw_daily_store_pay_way`
   - `raw_daily_store_item`
   - `raw_daily_store_online`
+  - `raw_workbook_rows`
 
 특징:
 - 대부분 컬럼이 `TEXT`로 적재된다.
 - 원본 파일명, 시트명, 적재 시각(`source_file`, `source_sheet`, `loaded_at`)을 함께 저장한다.
 - ingestion 이력은 `ingestion_runs`, `ingestion_files`에 기록된다.
+- 다중 시트 xlsx 또는 아직 정식 스키마가 없는 workbook은 우선 `raw_workbook_rows`에 보존 적재한다.
 
 ### 2. Core 정제 뷰
 
@@ -71,7 +73,7 @@
 
 현재 적재 흐름은 다음과 같다.
 
-1. 상위 `resource/` 폴더의 CSV 원본을 읽는다.
+1. 상위 `resource/` 폴더의 CSV/XLSX 원본을 읽는다.
 2. `db/manifests/resource_load_manifest.json`에서 파일 경로와 대상 raw 테이블을 매핑한다.
 3. `scripts/load_resource_to_db.py`가 해당 데이터를 `raw_*` 테이블에 적재한다.
 4. `core_*` 뷰에서 타입 정제 후 앱 조회에 사용한다.
@@ -87,6 +89,17 @@
 | `DAILY_STOR_PAY_WAY` | `raw_daily_store_pay_way` | - | 현재 코드상 별도 core 뷰 없음 |
 | `DAILY_STOR_ITEM` | `raw_daily_store_item` | `core_daily_item_sales` | 상품/일자 매출 분석 기초 데이터 |
 | `DAILY_STOR_ONLINE` | `raw_daily_store_online` | `core_channel_sales` | 채널/온오프라인 매출 분석 기초 데이터 |
+
+신규 workbook 계열은 현재 아래처럼 보존 적재만 수행한다.
+
+| 원본 workbook | 현재 적재 테이블 | 현재 앱 직접 사용 여부 | 비고 |
+|----------|--------|------|------|
+| `04. 생산/생산 데이터 추출.xlsx` | `raw_workbook_rows` | 아니오 | 생산 추천 로직 연결 전 단계 |
+| `05. 주문/주문+데이터.xlsx` | `raw_workbook_rows` | 아니오 | 다중 시트 workbook 보존 적재 |
+| `06. 재고/재고+데이터+추출.xlsx` | `raw_workbook_rows` | 아니오 | 재고 역산 로직 연결 전 단계 |
+| `07. 정산 기준 정보/*.xlsx` | `raw_workbook_rows` | 아니오 | 기준 정보 보존 |
+| `08. 통신사 제휴 할인 마스터/*.xlsx` | `raw_workbook_rows` | 아니오 | 코드/마스터 보존 |
+| `09. 캠페인 마스터/캠페인+마스터.xlsx` | `raw_workbook_rows` | 아니오 | 시즌성/캠페인 가중치 연결 전 단계 |
 
 ## 현재 앱 사용 방식
 
@@ -117,6 +130,13 @@
 - 생산 현황 화면
 - 시스템 현황 / 매출 조회 화면의 로그 표시
 
+### 신규 workbook 보존 적재 계열
+
+- 생산/주문/재고/캠페인/정산 기준 정보는 현재 `raw_workbook_rows`에 저장된다.
+- 이 계층은 원본 보존과 후속 모델링 준비가 목적이다.
+- 현재 앱 API는 이 데이터를 직접 조회하지 않는다.
+- 따라서 신규 resource가 적재되더라도, 별도 raw 테이블/뷰/서비스 연결 전까지는 사용자 기능이 즉시 늘어나지 않는다.
+
 ## 현재 문서 해석 시 주의사항
 
 - 아래 컬럼 정의는 원본 제공 문서 기준 업무 스키마 설명이다.
@@ -124,6 +144,7 @@
   - 예: 원본 `STOR_MST`는 현재 `raw_store_master`로 적재된다.
 - 일부 원본 테이블은 현재 코드에서 적재만 되어 있고, 아직 별도 `core_*` 뷰나 서비스 로직으로 직접 연결되지 않았다.
 - 반대로 `audit_logs`, `ordering_selections`, `production_registrations`는 원본 파일에 없는 현재 앱 운영용 테이블이다.
+- `raw_workbook_rows`는 임시 스테이징 성격이 강하므로, 이 문서의 업무 스키마 표와 1:1로 대응하지 않을 수 있다.
 
 ## 테이블 목록
 
@@ -136,6 +157,7 @@
 | `DAILY_STOR_PAY_WAY` | `raw_daily_store_pay_way` | - | 결제수단별 매출 집계 |
 | `DAILY_STOR_ITEM` | `raw_daily_store_item` | `core_daily_item_sales` | 상품별 일자 매출 집계 |
 | `DAILY_STOR_ONLINE` | `raw_daily_store_online` | `core_channel_sales` | 채널(온/오프라인)별 매출 |
+| 생산/주문/재고/캠페인 등 신규 workbook | `raw_workbook_rows` | - | 정식 raw 테이블 설계 전 보존 적재 |
 
 ## 운영 테이블 목록
 
@@ -389,3 +411,13 @@
 - "우선 참조"는 코드상 `has_table(...)` 확인 뒤 가장 먼저 사용하는 소스를 의미한다.
 - 동일 API라도 DB가 없거나 대상 테이블이 없으면 스텁 응답으로 폴백할 수 있다.
 - 특히 `notifications`, `hq/coaching`, `hq/inspection`, `bootstrap`, `review`, `channels`는 현재 코드상 DB 직접 참조보다 서비스 내부 데이터 비중이 높다.
+
+## 신규 workbook 후속 모델링 계획
+
+현재 적재 기준으로는 신규 workbook 데이터가 `raw_workbook_rows`에 안전하게 보존된다. 다만 실제 기능 고도화를 위해서는 아래 순서의 후속 작업이 필요하다.
+
+1. 생산/주문/재고/캠페인 workbook별 시트 구조를 고정 스키마로 정의한다.
+2. `raw_production_*`, `raw_ordering_*`, `raw_inventory_*`, `raw_campaign_*` 형태의 정식 raw 테이블을 추가한다.
+3. 필요 지표를 `core_*` 뷰 또는 mart 성격의 집계 뷰로 정제한다.
+4. `production_service`, `ordering_service`, `sales_service`가 새 raw/core 계층을 우선 사용하도록 확장한다.
+5. 그 후에야 재고 역산, 찬스로스, 시즌성 가중치, 예측 근거 설명 같은 요구사항을 데이터 기반으로 구현할 수 있다.
