@@ -61,6 +61,7 @@ class SalesInsightsResponse(BaseModel):
     channel_mix: SalesInsightSection
     payment_mix: SalesInsightSection
     menu_mix: SalesInsightSection
+    campaign_seasonality: Optional[SalesInsightSection] = None
     filtered_store_id: Optional[str] = None
     filtered_date_from: Optional[str] = None
     filtered_date_to: Optional[str] = None

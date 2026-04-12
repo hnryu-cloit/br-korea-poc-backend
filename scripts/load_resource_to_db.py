@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings
 from app.infrastructure.db.connection import get_database_engine, get_safe_database_url
 
+# Migration은 raw/운영 테이블을 만들고, 이 스크립트는 manifest 정의대로
+# resource 파일을 해당 테이블에 적재한다.
 
 def normalize_cell(value: Any) -> str | None:
     if value is None:
@@ -40,10 +42,13 @@ def read_csv_rows(path: Path) -> list[list[str | None]]:
 
 def iter_xlsx_rows(path: Path, sheet_name: str | None = None) -> tuple[str, list[list[str | None]]]:
     workbook = load_workbook(path, read_only=True, data_only=True)
-    target_sheet = sheet_name or workbook.sheetnames[0]
-    worksheet = workbook[target_sheet]
-    rows = [[normalize_cell(cell) for cell in row] for row in worksheet.iter_rows(values_only=True)]
-    return target_sheet, rows
+    try:
+        target_sheet = sheet_name or workbook.sheetnames[0]
+        worksheet = workbook[target_sheet]
+        rows = [[normalize_cell(cell) for cell in row] for row in worksheet.iter_rows(values_only=True)]
+        return target_sheet, rows
+    finally:
+        workbook.close()
 
 
 def insert_tabular_rows(
@@ -84,6 +89,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
     backend_root = settings.backend_root
     loaded_at = datetime.now().isoformat(timespec="seconds")
 
+    # dataset은 db/manifests/resource_load_manifest.json의 단일 항목이다.
     for relative_path in dataset["paths"]:
         source_path = (backend_root / relative_path).resolve()
         source_file = str(source_path.relative_to(settings.project_root))
@@ -109,7 +115,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                     loaded_at=loaded_at,
                 )
             elif dataset["loader"] == "xlsx":
-                source_sheet, rows = iter_xlsx_rows(source_path)
+                source_sheet, rows = iter_xlsx_rows(source_path, sheet_name=dataset.get("sheet") or dataset.get("sheet_name"))
                 row_count = insert_tabular_rows(
                     connection,
                     table=table,
@@ -121,41 +127,44 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                 )
             elif dataset["loader"] == "workbook_rows":
                 workbook = load_workbook(source_path, read_only=True, data_only=True)
-                for sheet in workbook.sheetnames:
-                    connection.execute(
-                        text("DELETE FROM raw_workbook_rows WHERE source_file = :source_file AND sheet_name = :sheet_name"),
-                        {"source_file": source_file, "sheet_name": sheet},
-                    )
-                    worksheet = workbook[sheet]
-                    payload_rows = []
-                    for index, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
-                        normalized = [normalize_cell(cell) for cell in row]
-                        if not any(value not in (None, "") for value in normalized):
-                            continue
-                        payload_rows.append(
-                            {
-                                "workbook_name": source_path.name,
-                                "sheet_name": sheet,
-                                "row_index": index,
-                                "row_values_json": json.dumps(normalized, ensure_ascii=False),
-                                "source_file": source_file,
-                                "loaded_at": loaded_at,
-                            }
-                        )
-                        row_count += 1
-                    if payload_rows:
+                try:
+                    for sheet in workbook.sheetnames:
                         connection.execute(
-                            text(
-                                """
-                                INSERT INTO raw_workbook_rows(
-                                    workbook_name, sheet_name, row_index, row_values_json, source_file, loaded_at
-                                ) VALUES (
-                                    :workbook_name, :sheet_name, :row_index, :row_values_json, :source_file, :loaded_at
-                                )
-                                """
-                            ),
-                            payload_rows,
+                            text("DELETE FROM raw_workbook_rows WHERE source_file = :source_file AND sheet_name = :sheet_name"),
+                            {"source_file": source_file, "sheet_name": sheet},
                         )
+                        worksheet = workbook[sheet]
+                        payload_rows = []
+                        for index, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
+                            normalized = [normalize_cell(cell) for cell in row]
+                            if not any(value not in (None, "") for value in normalized):
+                                continue
+                            payload_rows.append(
+                                {
+                                    "workbook_name": source_path.name,
+                                    "sheet_name": sheet,
+                                    "row_index": index,
+                                    "row_values_json": json.dumps(normalized, ensure_ascii=False),
+                                    "source_file": source_file,
+                                    "loaded_at": loaded_at,
+                                }
+                            )
+                            row_count += 1
+                        if payload_rows:
+                            connection.execute(
+                                text(
+                                    """
+                                    INSERT INTO raw_workbook_rows(
+                                        workbook_name, sheet_name, row_index, row_values_json, source_file, loaded_at
+                                    ) VALUES (
+                                        :workbook_name, :sheet_name, :row_index, :row_values_json, :source_file, :loaded_at
+                                    )
+                                    """
+                                ),
+                                payload_rows,
+                            )
+                finally:
+                    workbook.close()
                 source_sheet = "*"
             else:
                 raise ValueError(f"Unsupported loader: {dataset['loader']}")

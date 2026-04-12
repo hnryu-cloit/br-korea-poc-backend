@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -85,81 +85,187 @@ class OrderingRepository:
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
 
-    async def list_options(self) -> list[dict]:
-        source_relation = None
-        if self.engine and has_table(self.engine, "core_daily_item_sales"):
-            source_relation = "core_daily_item_sales"
-        elif self.engine and has_table(self.engine, "raw_daily_store_item"):
-            source_relation = "raw_daily_store_item"
+    def _table_columns(self, table_name: str) -> dict[str, str]:
+        if not self.engine:
+            return {}
+        try:
+            return {column["name"].lower(): column["name"] for column in inspect(self.engine).get_columns(table_name)}
+        except SQLAlchemyError:
+            return {}
+        except Exception:
+            return {}
 
-        if self.engine and source_relation:
-            try:
-                with self.engine.connect() as connection:
-                    dates = connection.execute(
+    @staticmethod
+    def _pick_column(columns: dict[str, str], candidates: tuple[str, ...]) -> str | None:
+        for candidate in candidates:
+            column_name = columns.get(candidate.lower())
+            if column_name:
+                return column_name
+        return None
+
+    @staticmethod
+    def _safe_int(value: object) -> int:
+        if value in (None, ""):
+            return 0
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _format_basis_date(value: object) -> str:
+        basis = str(value).strip()
+        if len(basis) == 8 and basis.isdigit():
+            return f"{basis[:4]}-{basis[4:6]}-{basis[6:8]}"
+        return basis.replace("/", "-")[:10]
+
+    def _build_options_from_relation(
+        self,
+        relation: str,
+        date_candidates: tuple[str, ...],
+        item_name_candidates: tuple[str, ...],
+        item_code_candidates: tuple[str, ...],
+        quantity_candidates: tuple[str, ...],
+    ) -> list[dict]:
+        columns = self._table_columns(relation)
+        date_column = self._pick_column(columns, date_candidates)
+        item_name_column = self._pick_column(columns, item_name_candidates)
+        item_code_column = self._pick_column(columns, item_code_candidates)
+        quantity_column = self._pick_column(columns, quantity_candidates)
+        if not self.engine or not date_column or not item_name_column or not quantity_column:
+            return []
+
+        item_name_expr = (
+            f"COALESCE(NULLIF(TRIM(CAST({item_name_column} AS TEXT)), ''), NULLIF(TRIM(CAST({item_code_column} AS TEXT)), ''))"
+            if item_code_column
+            else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
+        )
+        item_code_expr = (
+            f"COALESCE(NULLIF(TRIM(CAST({item_code_column} AS TEXT)), ''), NULLIF(TRIM(CAST({item_name_column} AS TEXT)), ''))"
+            if item_code_column
+            else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
+        )
+        quantity_expr = f"COALESCE(NULLIF(TRIM(CAST({quantity_column} AS TEXT)), '')::numeric, 0)"
+
+        labels = ["지난주 같은 요일", "2주 전 같은 요일", "지난달 같은 요일"]
+        descriptions = [
+            "가장 최근 주문 데이터 기준이에요. 오늘 운영에 바로 참고할 수 있습니다.",
+            "행사나 이벤트 영향이 적은 비교 기준이에요. 무난한 기준입니다.",
+            "시즌성과 채널 변동을 함께 반영한 비교 기준이에요.",
+        ]
+        notes_map = [
+            ["최근 주문 수량이 가장 높은 SKU를 우선 반영했어요", "주문 회전이 빠른 품목 중심으로 정리했어요"],
+            ["주문 변동성이 낮은 날짜를 참고했어요", "재고 리스크를 낮추는 쪽으로 정리했어요"],
+            ["수요가 조금 높았던 날을 반영했어요", "배달/온라인 유입 증가 가능성을 고려했어요"],
+        ]
+
+        try:
+            with self.engine.connect() as connection:
+                dates = connection.execute(
+                    text(
+                        f"""
+                        SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
+                        FROM {relation}
+                        WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
+                        ORDER BY date_value DESC
+                        LIMIT 6
+                        """
+                    )
+                ).scalars().all()
+                options: list[dict] = []
+                for idx, date_value in enumerate(dates[:3]):
+                    rows = connection.execute(
                         text(
                             f"""
-                            SELECT DISTINCT sale_dt
-                            FROM {source_relation}
-                            WHERE sale_dt IS NOT NULL AND sale_dt <> ''
-                            ORDER BY sale_dt DESC
-                            LIMIT 6
+                            SELECT
+                                {item_name_expr} AS item_name,
+                                {item_code_expr} AS item_code,
+                                {quantity_expr} AS quantity
+                            FROM {relation}
+                            WHERE CAST({date_column} AS TEXT) = :date_value
                             """
-                        )
-                    ).scalars().all()
+                        ),
+                        {"date_value": str(date_value)},
+                    ).mappings().all()
 
-                    if len(dates) >= 3:
-                        labels = ["지난주 같은 요일", "2주 전 같은 요일", "지난달 같은 요일"]
-                        descriptions = [
-                            "가장 최근 데이터 기준이에요. 오늘 날씨와 비슷해 무난한 선택입니다.",
-                            "행사나 이벤트 영향이 적은 비교 기준이에요. 무난한 기준입니다.",
-                            "시즌성과 채널 변동을 크게 반영한 비교 기준이에요.",
-                        ]
-                        notes_map = [
-                            ["최근 판매 추이를 가장 잘 반영한 기준이에요", "운영 변동성이 낮은 SKU를 우선 추천했어요"],
-                            ["최근 프로모션 영향이 적은 날짜를 참고했어요", "재고 리스크를 낮추는 쪽으로 정리했어요"],
-                            ["수요가 조금 높았던 날을 반영했어요", "배달/온라인 유입 증가 가능성을 고려했어요"],
-                        ]
-                        options = []
-                        for idx, sale_dt in enumerate(dates[:3]):
-                            rows = connection.execute(
-                                text(
-                                    f"""
-                                    SELECT item_nm, SUM(sale_qty) AS sale_qty
-                                    FROM {source_relation}
-                                    WHERE sale_dt = :sale_dt
-                                    GROUP BY item_nm
-                                    ORDER BY sale_qty DESC, item_nm
-                                    LIMIT 4
-                                    """
-                                ),
-                                {"sale_dt": sale_dt},
-                            ).mappings()
-                            items = []
-                            for row_index, row in enumerate(rows):
-                                qty = int(round(float(row["sale_qty"])))
-                                items.append(
-                                    {
-                                        "name": row["item_nm"],
-                                        "qty": qty,
-                                        "note": "추천 상위 SKU" if idx == 0 and row_index == 0 else None,
-                                    }
-                                )
-                            if items:
-                                options.append(
-                                    {
-                                        "id": f"opt-{chr(97 + idx)}",
-                                        "label": labels[idx],
-                                        "basis": f"{sale_dt[:4]}-{sale_dt[4:6]}-{sale_dt[6:8]} 기준",
-                                        "description": descriptions[idx],
-                                        "recommended": idx == 0,
-                                        "items": items,
-                                        "notes": notes_map[idx],
-                                    }
-                                )
-                        if options:
-                            return options
-            except SQLAlchemyError:
-                pass
+                    aggregated: dict[str, dict[str, object]] = {}
+                    for row in rows:
+                        item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
+                        item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
+                        key = item_code or item_name
+                        if not key:
+                            continue
+                        bucket = aggregated.setdefault(
+                            key,
+                            {
+                                "name": item_name or item_code or key,
+                                "qty": 0,
+                            },
+                        )
+                        bucket["qty"] = int(bucket["qty"]) + self._safe_int(row["quantity"])
+
+                    if not aggregated:
+                        continue
+
+                    items = [
+                        {
+                            "name": bucket["name"],
+                            "qty": int(bucket["qty"]),
+                            "note": "추천 상위 SKU" if row_index == 0 and idx == 0 else None,
+                        }
+                        for row_index, bucket in enumerate(
+                            sorted(aggregated.values(), key=lambda bucket: (-int(bucket["qty"]), str(bucket["name"])))
+                        )
+                    ][:4]
+                    if items:
+                        options.append(
+                            {
+                                "id": f"opt-{chr(97 + idx)}",
+                                "label": labels[idx],
+                                "basis": self._format_basis_date(date_value),
+                                "description": descriptions[idx],
+                                "recommended": idx == 0,
+                                "items": items,
+                                "notes": notes_map[idx],
+                            }
+                        )
+                return options
+        except SQLAlchemyError:
+            return []
+
+    async def list_options(self) -> list[dict]:
+        if self.engine and has_table(self.engine, "raw_order_extract"):
+            options = self._build_options_from_relation(
+                "raw_order_extract",
+                ("dlv_dt", "ord_dt", "sale_dt"),
+                ("item_nm", "item_name", "product_nm"),
+                ("item_cd", "item_code", "sku_id"),
+                ("ord_rec_qty", "ord_qty", "confrm_qty"),
+            )
+            if options:
+                return options
+
+        if self.engine and has_table(self.engine, "core_daily_item_sales"):
+            options = self._build_options_from_relation(
+                "core_daily_item_sales",
+                ("sale_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("sale_qty",),
+            )
+            if options:
+                return options
+
+        if self.engine and has_table(self.engine, "raw_daily_store_item"):
+            options = self._build_options_from_relation(
+                "raw_daily_store_item",
+                ("sale_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("sale_qty",),
+            )
+            if options:
+                return options
         return ORDER_OPTIONS
 
     async def get_notification_context(self, notification_id: int) -> dict:

@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings
 from app.infrastructure.db.connection import get_database_engine, get_safe_database_url
 
+# 이 스크립트는 db/migrations 아래 SQL을 적용해 테이블/뷰를 만들고,
+# resource 파일 적재는 수행하지 않는다.
 
 def split_statements(sql: str) -> list[str]:
     return [statement.strip() for statement in sql.split(";") if statement.strip()]

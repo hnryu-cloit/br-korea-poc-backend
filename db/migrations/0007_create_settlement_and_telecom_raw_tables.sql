@@ -1,0 +1,110 @@
+CREATE TABLE IF NOT EXISTS raw_settlement_master (
+    CMP_CD TEXT,
+    SALES_ORG_CD TEXT,
+    PAY_DC_TY_CD TEXT,
+    PAY_DC_TY_CD_NM TEXT,
+    COOP_CD TEXT,
+    START_DT TEXT,
+    FNSH_DT TEXT,
+    PAY_DC_METHD TEXT,
+    PAY_DC_METHD_NM TEXT,
+    MAT_LIST TEXT,
+    HQ_ALLOT_RATE TEXT,
+    STOR_ALLOT_RATE TEXT,
+    COOP_CMP_ALLOT_RATE TEXT,
+    HQ_VAT_YN TEXT,
+    HQ_VAT_YN_NM TEXT,
+    ERP_YN TEXT,
+    ERP_YN_NM TEXT,
+    USE_YN TEXT,
+    USE_YN_NM TEXT,
+    REG_USER_ID TEXT,
+    REG_DATE TEXT,
+    UPD_USER_ID TEXT,
+    UPD_DATE TEXT,
+    source_file TEXT NOT NULL,
+    source_sheet VARCHAR(255),
+    loaded_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS raw_telecom_discount_type (
+    CMP_CD TEXT,
+    PAY_DC_GRP_TYPE TEXT,
+    PAY_DC_GRP_TYPE_NM TEXT,
+    PAY_DC_CD TEXT,
+    PAY_DC_NM TEXT,
+    SALES_ORG_CD TEXT,
+    SALES_ORG_NM TEXT,
+    GRP_PRRTY TEXT,
+    source_file TEXT NOT NULL,
+    source_sheet VARCHAR(255),
+    loaded_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS raw_telecom_discount_policy (
+    CMP_CD TEXT,
+    PAY_DC_GRP_TYPE TEXT,
+    PAY_DC_GRP_TYPE_NM TEXT,
+    PAY_DC_CD TEXT,
+    PAY_DC_NM TEXT,
+    COOP_CMP_GRADE_CD TEXT,
+    FUNC_ID TEXT,
+    FUNC_ID_NM TEXT,
+    START_DT TEXT,
+    FNSH_DT TEXT,
+    DC_APPLY_TRGT TEXT,
+    DC_APPLY_TRGT_NM TEXT,
+    PAY_DC_METHD TEXT,
+    PAY_DC_METHD_NM TEXT,
+    PAY_DC_VAL TEXT,
+    PAY_DC_AMT_STD_PAY_AMT TEXT,
+    PAY_DC_DEC_PNT_CALC_METHD TEXT,
+    PAY_DC_DEC_PNT_CALC_METHD_NM TEXT,
+    PAY_DC_CALC_DIGT_NO TEXT,
+    ALL_UPD_YN TEXT,
+    FNSH_DT_UPD_YN TEXT,
+    SALES_ORG_CD TEXT,
+    GRP_PRRTY TEXT,
+    ITEM_DC_YN TEXT,
+    PAY_DC_AMT_MAX_PAY_AMT TEXT,
+    GRADE_PRRTY TEXT,
+    USE_YN TEXT,
+    USE_YN_NM TEXT,
+    source_file TEXT NOT NULL,
+    source_sheet VARCHAR(255),
+    loaded_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS raw_telecom_discount_item (
+    CMP_CD TEXT,
+    PAY_DC_GRP_TYPE TEXT,
+    PAY_DC_GRP_TYPE_NM TEXT,
+    PAY_DC_CD TEXT,
+    PAY_DC_NM TEXT,
+    COOP_CMP_GRADE_CD TEXT,
+    START_DT TEXT,
+    ITEM_CD TEXT,
+    ITEM_NM TEXT,
+    USE_YN TEXT,
+    USE_YN_NM TEXT,
+    L_ITEM_CLASS_NM TEXT,
+    M_ITEM_CLASS_NM TEXT,
+    S_ITEM_CLASS_NM TEXT,
+    SALES_ORG_CD TEXT,
+    ITEM_SEQ TEXT,
+    source_file TEXT NOT NULL,
+    source_sheet VARCHAR(255),
+    loaded_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_settlement_master_key
+    ON raw_settlement_master(CMP_CD, SALES_ORG_CD, PAY_DC_TY_CD, COOP_CD);
+
+CREATE INDEX IF NOT EXISTS idx_raw_telecom_discount_type_key
+    ON raw_telecom_discount_type(CMP_CD, PAY_DC_GRP_TYPE, PAY_DC_CD, SALES_ORG_CD);
+
+CREATE INDEX IF NOT EXISTS idx_raw_telecom_discount_policy_key
+    ON raw_telecom_discount_policy(CMP_CD, PAY_DC_GRP_TYPE, PAY_DC_CD, COOP_CMP_GRADE_CD, START_DT);
+
+CREATE INDEX IF NOT EXISTS idx_raw_telecom_discount_item_key
+    ON raw_telecom_discount_item(CMP_CD, PAY_DC_GRP_TYPE, PAY_DC_CD, COOP_CMP_GRADE_CD, ITEM_CD);

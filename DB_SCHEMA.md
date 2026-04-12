@@ -20,8 +20,12 @@
 
 ### 1. Raw 적재 테이블
 
-- 목적: 원본 CSV 데이터를 손실 없이 적재
-- 생성 위치: `db/migrations/0001_create_raw_resource_tables.sql`
+- 목적: 원본 CSV/XLSX 데이터를 손실 없이 적재
+- 생성 위치:
+  - `db/migrations/0001_create_raw_resource_tables.sql`
+  - `db/migrations/0005_create_new_workbook_raw_tables.sql`
+  - `db/migrations/0006_create_campaign_raw_tables.sql`
+  - `db/migrations/0007_create_settlement_and_telecom_raw_tables.sql`
 - 예시:
   - `raw_store_master`
   - `raw_pay_cd`
@@ -30,13 +34,24 @@
   - `raw_daily_store_pay_way`
   - `raw_daily_store_item`
   - `raw_daily_store_online`
+  - `raw_production_extract`
+  - `raw_order_extract`
+  - `raw_inventory_extract`
+  - `raw_campaign_master`
+  - `raw_campaign_item_group`
+  - `raw_campaign_item`
+  - `raw_settlement_master`
+  - `raw_telecom_discount_type`
+  - `raw_telecom_discount_policy`
+  - `raw_telecom_discount_item`
   - `raw_workbook_rows`
 
 특징:
 - 대부분 컬럼이 `TEXT`로 적재된다.
 - 원본 파일명, 시트명, 적재 시각(`source_file`, `source_sheet`, `loaded_at`)을 함께 저장한다.
 - ingestion 이력은 `ingestion_runs`, `ingestion_files`에 기록된다.
-- 다중 시트 xlsx 또는 아직 정식 스키마가 없는 workbook은 우선 `raw_workbook_rows`에 보존 적재한다.
+- 생산/주문/재고/캠페인/정산/통신사 workbook의 주요 데이터 시트는 정식 raw 테이블로 직접 적재한다.
+- 아직 정식 스키마가 없는 workbook은 우선 `raw_workbook_rows`에 보존 적재한다.
 
 ### 2. Core 정제 뷰
 
@@ -90,16 +105,35 @@
 | `DAILY_STOR_ITEM` | `raw_daily_store_item` | `core_daily_item_sales` | 상품/일자 매출 분석 기초 데이터 |
 | `DAILY_STOR_ONLINE` | `raw_daily_store_online` | `core_channel_sales` | 채널/온오프라인 매출 분석 기초 데이터 |
 
-신규 workbook 계열은 현재 아래처럼 보존 적재만 수행한다.
+신규 workbook 계열은 아래처럼 정식 raw 적재와 보존 적재가 나뉜다.
 
 | 원본 workbook | 현재 적재 테이블 | 현재 앱 직접 사용 여부 | 비고 |
 |----------|--------|------|------|
-| `04. 생산/생산 데이터 추출.xlsx` | `raw_workbook_rows` | 아니오 | 생산 추천 로직 연결 전 단계 |
-| `05. 주문/주문+데이터.xlsx` | `raw_workbook_rows` | 아니오 | 다중 시트 workbook 보존 적재 |
-| `06. 재고/재고+데이터+추출.xlsx` | `raw_workbook_rows` | 아니오 | 재고 역산 로직 연결 전 단계 |
-| `07. 정산 기준 정보/*.xlsx` | `raw_workbook_rows` | 아니오 | 기준 정보 보존 |
-| `08. 통신사 제휴 할인 마스터/*.xlsx` | `raw_workbook_rows` | 아니오 | 코드/마스터 보존 |
-| `09. 캠페인 마스터/캠페인+마스터.xlsx` | `raw_workbook_rows` | 아니오 | 시즌성/캠페인 가중치 연결 전 단계 |
+| `04. 생산/생산 데이터 추출.xlsx` | `raw_production_extract` | 아니오 | 생산 workbook 직접 적재 |
+| `05. 주문/주문+데이터.xlsx` | `raw_order_extract` | 아니오 | 주문 workbook 직접 적재 |
+| `06. 재고/재고+데이터+추출.xlsx` | `raw_inventory_extract` | 아니오 | 재고 workbook 직접 적재 |
+| `07. 정산 기준 정보/*.xlsx` | `raw_settlement_master`, `raw_workbook_rows` | 아니오 | 정산 기준 direct load + 원본 보존 |
+| `08. 통신사 제휴 할인 마스터/*.xlsx` | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | 아니오 | 데이터 시트 direct load + 메타 시트 보존 |
+| `09. 캠페인 마스터/캠페인+마스터.xlsx` | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | 아니오 | 캠페인 workbook 3개 raw 테이블로 직접 적재 |
+
+resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
+
+| resource 기준 파일/폴더 | manifest dataset | 생성/사용 raw 테이블 | 비고 |
+|------|------|------|------|
+| `03. 결제 수단 코드/결제 할인 수단 코드 테이블.csv` | `pay_code_csv` | `raw_pay_cd` | 결제/할인 코드 마스터 |
+| `01. 점포 마스터/던킨+점포마스터_매핑용.xlsx` | `store_master` | `raw_store_master` | 점포 기준 정보 |
+| `02. 매출/01. 일자별 시간대별 상품별 매출 데이터/*.xlsx` | `daily_store_item_tmzon` | `raw_daily_store_item_tmzon` | 6개 파일 direct load |
+| `02. 매출/02. 일자별 시간대별 캠페인 매출 데이터/*.xlsx` | `daily_store_cpi_tmzon` | `raw_daily_store_cpi_tmzon` | direct load |
+| `02. 매출/03. 일자별 결제 수단별 매출 데이터/*.xlsx` | `daily_store_pay_way` | `raw_daily_store_pay_way` | direct load |
+| `02. 매출/04. 일자별 상품별 매출/*.xlsx` | `daily_store_item` | `raw_daily_store_item` | direct load |
+| `02. 매출/05. 일자별 온_오프라인 구분/*.xlsx` | `daily_store_online` | `raw_daily_store_online` | direct load |
+| `04. 생산/생산 데이터 추출.xlsx` | `production_extract` | `raw_production_extract` | `Sheet1` direct load |
+| `05. 주문/주문+데이터.xlsx` | `order_extract`, `order_workbook_rows` | `raw_order_extract`, `raw_workbook_rows` | 정식 적재 + workbook 보존 |
+| `06. 재고/재고+데이터+추출.xlsx` | `inventory_extract` | `raw_inventory_extract` | `Sheet1` direct load |
+| `07. 정산 기준 정보/*.xlsx` | `settlement_master_extract`, `settlement_master_workbook` | `raw_settlement_master`, `raw_workbook_rows` | 정식 적재 + workbook 보존 |
+| `08. 통신사 제휴 할인 마스터/*.xlsx` | `telecom_discount_type`, `telecom_discount_policy`, `telecom_discount_item`, `telecom_discount_master_workbook` | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | 시트별 direct load + workbook 보존 |
+| `09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_master`, `campaign_item_group`, `campaign_item` | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | 시트별 direct load |
+| `00. 테이블 구조/*.xlsx`, `ERD_V0.2.png`, `POC_TABLE_DDL.sql` | - | - | 참고용 파일, 적재 대상 아님 |
 
 ## 현재 앱 사용 방식
 
@@ -130,12 +164,15 @@
 - 생산 현황 화면
 - 시스템 현황 / 매출 조회 화면의 로그 표시
 
-### 신규 workbook 보존 적재 계열
+### 신규 workbook raw 계열
 
-- 생산/주문/재고/캠페인/정산 기준 정보는 현재 `raw_workbook_rows`에 저장된다.
-- 이 계층은 원본 보존과 후속 모델링 준비가 목적이다.
-- 현재 앱 API는 이 데이터를 직접 조회하지 않는다.
-- 따라서 신규 resource가 적재되더라도, 별도 raw 테이블/뷰/서비스 연결 전까지는 사용자 기능이 즉시 늘어나지 않는다.
+- 생산 workbook은 `raw_production_extract`로 직접 적재된다.
+- 주문 workbook은 `raw_order_extract`로 직접 적재하고, `Sheet2`는 `raw_workbook_rows`에 보존한다.
+- 재고 workbook은 `raw_inventory_extract`로 직접 적재된다.
+- 캠페인 workbook은 `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item`으로 직접 적재된다.
+- 정산 기준 정보 workbook은 `raw_settlement_master`로 직접 적재되고, 원본 workbook도 `raw_workbook_rows`에 보존된다.
+- 통신사 제휴 할인 마스터 workbook은 데이터 시트 3개가 `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`으로 직접 적재되고, 메타 시트 보존을 위해 workbook 전체가 `raw_workbook_rows`에도 남는다.
+- 현재 앱 서비스는 새 raw 테이블을 직접 조회하지 않으므로, 기능 확장은 이후 core 뷰/서비스 연결 단계에서 이루어진다.
 
 ## 현재 문서 해석 시 주의사항
 
@@ -145,6 +182,7 @@
 - 일부 원본 테이블은 현재 코드에서 적재만 되어 있고, 아직 별도 `core_*` 뷰나 서비스 로직으로 직접 연결되지 않았다.
 - 반대로 `audit_logs`, `ordering_selections`, `production_registrations`는 원본 파일에 없는 현재 앱 운영용 테이블이다.
 - `raw_workbook_rows`는 임시 스테이징 성격이 강하므로, 이 문서의 업무 스키마 표와 1:1로 대응하지 않을 수 있다.
+- `raw_workbook_rows`는 원본 workbook 보존용이라서, 주문 workbook의 `Sheet2` 같은 메타 시트도 포함될 수 있다.
 
 ## 테이블 목록
 
@@ -157,7 +195,11 @@
 | `DAILY_STOR_PAY_WAY` | `raw_daily_store_pay_way` | - | 결제수단별 매출 집계 |
 | `DAILY_STOR_ITEM` | `raw_daily_store_item` | `core_daily_item_sales` | 상품별 일자 매출 집계 |
 | `DAILY_STOR_ONLINE` | `raw_daily_store_online` | `core_channel_sales` | 채널(온/오프라인)별 매출 |
-| 생산/주문/재고/캠페인 등 신규 workbook | `raw_workbook_rows` | - | 정식 raw 테이블 설계 전 보존 적재 |
+| 주문 workbook 보조 시트 | `raw_workbook_rows` | - | 주문 workbook `Sheet2` 보존 적재 |
+| 생산/주문/재고 workbook | `raw_production_extract`, `raw_order_extract`, `raw_inventory_extract` | - | 정식 raw 테이블로 직접 적재 |
+| 캠페인 workbook | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | - | 캠페인 3개 시트별 raw 테이블로 직접 적재 |
+| 정산 기준 정보 workbook | `raw_settlement_master`, `raw_workbook_rows` | - | 정식 raw direct load + 원본 보존 |
+| 통신사 제휴 할인 마스터 workbook | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | - | 데이터 시트 direct load + 메타 시트 보존 |
 
 ## 운영 테이블 목록
 
@@ -401,10 +443,10 @@
 
 | API | 주요 참조 대상 | 설명 |
 |------|------|------|
-| `GET /api/analytics/metrics` | `core_channel_sales`, `core_daily_item_sales` | 최근 7일 기준 매출, 온라인 비중, 객단가, 커피 동반 구매율 등을 계산한다. |
+| `GET /api/analytics/metrics` | `core_channel_sales`, `core_daily_item_sales`, `raw_daily_store_pay_way`, `raw_settlement_master`, `raw_telecom_discount_policy` | 최근 7일 기준 매출, 온라인 비중, 객단가, 커피 동반 구매율과 할인 결제 비중을 계산한다. |
 | `GET /api/hq/coaching` | DB 직접 참조 없음 | 현재는 정적 응답 기반 본사 코칭 데이터다. |
 | `GET /api/hq/inspection` | DB 직접 참조 없음 | 현재는 정적 응답 기반 생산 점검 데이터다. |
-| `GET /api/signals` | `core_channel_sales`, `core_store_master`, `production_registrations`, `core_daily_item_sales` | 지역별 배달 감소, 생산 대응 집중, 커피 동반 구매 강세 시그널을 계산한다. |
+| `GET /api/signals` | `core_channel_sales`, `core_store_master`, `production_registrations`, `core_daily_item_sales`, `raw_settlement_master`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_daily_store_pay_way` | 지역별 배달 감소, 생산 대응 집중, 커피 동반 구매 강세, 활성 제휴 할인 운영 점검 시그널을 계산한다. |
 
 ## 해석 메모
 
@@ -414,10 +456,14 @@
 
 ## 신규 workbook 후속 모델링 계획
 
-현재 적재 기준으로는 신규 workbook 데이터가 `raw_workbook_rows`에 안전하게 보존된다. 다만 실제 기능 고도화를 위해서는 아래 순서의 후속 작업이 필요하다.
+현재는 생산/주문/재고/캠페인/정산/통신사 workbook의 주요 데이터 시트가 정식 raw 테이블로 분리되었다. 다만 주문 workbook의 보조 시트와 정산/통신사 workbook의 메타 보존은 여전히 `raw_workbook_rows`에 남아 있다. 앞으로는 이 raw 계층을 바탕으로 core 뷰와 서비스 연결을 단계적으로 확장하면 된다.
 
-1. 생산/주문/재고/캠페인 workbook별 시트 구조를 고정 스키마로 정의한다.
-2. `raw_production_*`, `raw_ordering_*`, `raw_inventory_*`, `raw_campaign_*` 형태의 정식 raw 테이블을 추가한다.
-3. 필요 지표를 `core_*` 뷰 또는 mart 성격의 집계 뷰로 정제한다.
-4. `production_service`, `ordering_service`, `sales_service`가 새 raw/core 계층을 우선 사용하도록 확장한다.
+1. 생산/주문/재고/캠페인 raw 테이블의 컬럼 타입과 키를 업무 규칙에 맞춰 정제한다.
+2. 필요 지표를 `core_*` 뷰 또는 mart 성격의 집계 뷰로 정제한다.
+3. `production_service`, `ordering_service`, `sales_service`가 새 raw/core 계층을 우선 사용하도록 확장한다.
+4. 정산 기준 정보와 통신사 제휴 할인 마스터는 이미 정식 raw 테이블로 승격되었고, 다음 단계는 `sales_service` 외 다른 도메인으로 소비 범위를 넓히는 것이다.
 5. 그 후에야 재고 역산, 찬스로스, 시즌성 가중치, 예측 근거 설명 같은 요구사항을 데이터 기반으로 구현할 수 있다.
+
+## 운영 메모
+
+- `run_id = 11` cleanup 이후 `raw_store_master`, 주요 매출 raw 테이블, `raw_pay_cd`는 legacy csv/NFD source가 제거되었고 최신 manifest 기준 source만 남아 있다.

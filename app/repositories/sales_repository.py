@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -79,9 +81,393 @@ _DEFAULT_MENU_MIX = {
 class SalesRepository:
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
+        self._workbook_sheet_cache: dict[str, list[dict]] = {}
 
     async def list_prompts(self) -> list[dict]:
         return SUGGESTED_PROMPTS
+
+    @staticmethod
+    def _is_campaign_prompt(prompt: str) -> bool:
+        return any(keyword in prompt for keyword in ("캠페인", "행사", "프로모션", "시즌", "쿠폰"))
+
+    @staticmethod
+    def _format_campaign_date(value: str | None) -> str:
+        if not value:
+            return "-"
+        text_value = str(value)
+        if len(text_value) == 8 and text_value.isdigit():
+            return f"{text_value[:4]}-{text_value[4:6]}-{text_value[6:8]}"
+        return text_value
+
+    @staticmethod
+    def _format_campaign_period(start_value: str | None, end_value: str | None) -> str:
+        start_text = SalesRepository._format_campaign_date(start_value)
+        end_text = SalesRepository._format_campaign_date(end_value)
+        if start_text == "-" and end_text == "-":
+            return "기간 정보 없음"
+        if start_text == "-":
+            return f"{end_text} 종료"
+        if end_text == "-":
+            return f"{start_text} ~ 종료일 미상"
+        return f"{start_text} ~ {end_text}"
+
+    @staticmethod
+    def _has_text(value: object) -> bool:
+        return value is not None and str(value).strip() != ""
+
+    @staticmethod
+    def _first_text(*values: object) -> str:
+        for value in values:
+            if SalesRepository._has_text(value):
+                return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _normalize_date(value: str | None) -> str:
+        if not value:
+            return date.today().strftime("%Y%m%d")
+        return value.replace("-", "")
+
+    def _load_campaign_relation_rows(self, relation_name: str, sheet_name: str) -> list[dict]:
+        if self.engine and has_table(self.engine, relation_name):
+            try:
+                with self.engine.connect() as connection:
+                    rows = connection.execute(text(f"SELECT * FROM {relation_name}")).mappings().all()
+                    return [dict(row) for row in rows]
+            except SQLAlchemyError:
+                pass
+
+        if not self.engine or not has_table(self.engine, "raw_workbook_rows"):
+            return []
+        if sheet_name in self._workbook_sheet_cache:
+            return self._workbook_sheet_cache[sheet_name]
+
+        try:
+            with self.engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT row_index, row_values_json
+                        FROM raw_workbook_rows
+                        WHERE workbook_name = '캠페인+마스터.xlsx'
+                          AND sheet_name = :sheet_name
+                        ORDER BY row_index
+                        """
+                    ),
+                    {"sheet_name": sheet_name},
+                ).mappings().all()
+        except SQLAlchemyError:
+            return []
+
+        if not rows:
+            self._workbook_sheet_cache[sheet_name] = []
+            return []
+
+        headers = rows[0]["row_values_json"] or []
+        parsed_rows: list[dict] = []
+        for row in rows[1:]:
+            values = row["row_values_json"] or []
+            if not isinstance(headers, list) or not isinstance(values, list):
+                continue
+            parsed_row = {
+                str(header): values[index]
+                for index, header in enumerate(headers)
+                if header not in (None, "")
+                and index < len(values)
+                and values[index] not in (None, "")
+            }
+            if parsed_row:
+                parsed_rows.append(parsed_row)
+
+        self._workbook_sheet_cache[sheet_name] = parsed_rows
+        return parsed_rows
+
+    def _fetch_campaign_context(self) -> dict | None:
+        campaigns = self._load_campaign_relation_rows("raw_campaign_master", "CPI_MST")
+        if not campaigns:
+            return None
+
+        group_rows = self._load_campaign_relation_rows("raw_campaign_item_group", "CPI_ITEM_GRP_MNG")
+        item_rows = self._load_campaign_relation_rows("raw_campaign_item", "CPI_ITEM_MNG")
+
+        group_count_by_cd: dict[str, int] = {}
+        for row in group_rows:
+            campaign_cd = self._first_text(row.get("CPI_CD"))
+            if not campaign_cd:
+                continue
+            group_count_by_cd[campaign_cd] = group_count_by_cd.get(campaign_cd, 0) + 1
+
+        item_count_by_cd: dict[str, int] = {}
+        for row in item_rows:
+            campaign_cd = self._first_text(row.get("CPI_CD"))
+            if not campaign_cd:
+                continue
+            item_count_by_cd[campaign_cd] = item_count_by_cd.get(campaign_cd, 0) + 1
+
+        def _sort_key(row: dict) -> tuple[int, int, int, int, int, int, str, str]:
+            active_flag = 1 if (
+                (self._has_text(row.get("USE_YN")) and str(row.get("USE_YN")) == "1")
+                or row.get("USE_YN_NM") == "사용"
+            ) else 0
+            try:
+                priority = int(float(str(row.get("PRRTY") or "999999")))
+            except ValueError:
+                priority = 999999
+            campaign_cd = self._first_text(row.get("CPI_CD"))
+            campaign_name = self._first_text(row.get("CPI_NM"), row.get("CPI_INFO"))
+            name_score = 6 if self._has_text(row.get("CPI_NM")) else 4 if self._has_text(row.get("CPI_INFO")) else 0
+            period_score = (4 if self._has_text(row.get("START_DT")) else 0) + (4 if self._has_text(row.get("FNSH_DT")) else 0)
+            detail_score = 2 if self._has_text(row.get("CPI_CUST_BNFT_TYPE_NM") or row.get("CPI_CUST_BNFT_TYPE")) else 0
+            detail_score += min(group_count_by_cd.get(campaign_cd, 0), 3)
+            detail_score += min(item_count_by_cd.get(campaign_cd, 0), 5)
+            completeness_score = (
+                int(self._has_text(campaign_cd))
+                + name_score
+                + period_score
+                + detail_score
+            )
+            return (
+                completeness_score,
+                active_flag,
+                period_score,
+                detail_score,
+                -priority,
+                str(row.get("START_DT") or ""),
+                campaign_name,
+            )
+
+        campaigns_sorted = sorted(campaigns, key=_sort_key, reverse=True)
+        active_campaigns = [
+            row for row in campaigns_sorted if str(row.get("USE_YN")) == "1" or row.get("USE_YN_NM") == "사용"
+        ]
+        main_campaign = campaigns_sorted[0]
+        campaign_cd = self._first_text(main_campaign.get("CPI_CD"))
+        campaign_name = self._first_text(main_campaign.get("CPI_NM"), main_campaign.get("CPI_INFO"), campaign_cd, "대표 캠페인")
+        campaign_period = self._format_campaign_period(main_campaign.get("START_DT"), main_campaign.get("FNSH_DT"))
+        benefit_type = self._first_text(
+            main_campaign.get("CPI_CUST_BNFT_TYPE_NM"),
+            main_campaign.get("CPI_CUST_BNFT_TYPE"),
+            "캠페인",
+        )
+        related_groups = [row for row in group_rows if self._first_text(row.get("CPI_CD")) == campaign_cd]
+        related_items = [row for row in item_rows if self._first_text(row.get("CPI_CD")) == campaign_cd]
+        group_names = [str(row.get("CPI_ITEM_GRP_NM") or "") for row in related_groups if row.get("CPI_ITEM_GRP_NM")]
+        item_names = [str(row.get("ITEM_CD") or "") for row in related_items if row.get("ITEM_CD")]
+
+        return {
+            "campaign_cd": campaign_cd,
+            "campaign_name": campaign_name,
+            "campaign_period": campaign_period,
+            "benefit_type": benefit_type,
+            "campaign_count": len(active_campaigns) or len(campaigns_sorted),
+            "group_count": len(related_groups),
+            "item_count": len(related_items),
+            "group_names": group_names[:2],
+            "item_names": item_names[:2],
+        }
+
+    def _fetch_discount_program_context(self, reference_date: str | None) -> dict | None:
+        if not self.engine:
+            return None
+        if not has_table(self.engine, "raw_settlement_master") and not has_table(self.engine, "raw_telecom_discount_policy"):
+            return None
+
+        target_date = self._normalize_date(reference_date)
+        context = {
+            "active_settlement_count": 0,
+            "rate_program_count": 0,
+            "amount_program_count": 0,
+            "top_settlement_name": "",
+            "top_settlement_method": "",
+            "top_telecom_name": "",
+            "top_telecom_func": "",
+            "top_telecom_target": "",
+            "top_telecom_item_count": 0,
+        }
+
+        with self.engine.connect() as connection:
+            if has_table(self.engine, "raw_settlement_master"):
+                settlement = connection.execute(
+                    text(
+                        """
+                        WITH active_settlement AS (
+                            SELECT
+                                pay_dc_ty_cd_nm,
+                                pay_dc_methd_nm,
+                                COUNT(*) AS row_count
+                            FROM raw_settlement_master
+                            WHERE COALESCE(use_yn, '0') = '1'
+                              AND COALESCE(start_dt, '00000000') <= :target_date
+                              AND COALESCE(fnsh_dt, '99999999') >= :target_date
+                            GROUP BY pay_dc_ty_cd_nm, pay_dc_methd_nm
+                        )
+                        SELECT
+                            COALESCE(SUM(row_count), 0) AS active_settlement_count,
+                            COALESCE(SUM(CASE WHEN pay_dc_methd_nm = '율' THEN row_count ELSE 0 END), 0) AS rate_program_count,
+                            COALESCE(SUM(CASE WHEN pay_dc_methd_nm = '금액' THEN row_count ELSE 0 END), 0) AS amount_program_count,
+                            COALESCE(
+                                (
+                                    SELECT pay_dc_ty_cd_nm
+                                    FROM active_settlement
+                                    ORDER BY row_count DESC, pay_dc_ty_cd_nm
+                                    LIMIT 1
+                                ),
+                                ''
+                            ) AS top_settlement_name,
+                            COALESCE(
+                                (
+                                    SELECT pay_dc_methd_nm
+                                    FROM active_settlement
+                                    ORDER BY row_count DESC, pay_dc_ty_cd_nm
+                                    LIMIT 1
+                                ),
+                                ''
+                            ) AS top_settlement_method
+                        FROM active_settlement
+                        """
+                    ),
+                    {"target_date": target_date},
+                ).mappings().one()
+                context.update({key: settlement[key] for key in settlement.keys()})
+
+            if has_table(self.engine, "raw_telecom_discount_policy"):
+                telecom = connection.execute(
+                    text(
+                        """
+                        WITH active_policy AS (
+                            SELECT
+                                p.pay_dc_nm,
+                                p.func_id_nm,
+                                p.dc_apply_trgt_nm,
+                                COUNT(*) AS row_count,
+                                COALESCE(MAX(item_count.item_count), 0) AS item_count
+                            FROM raw_telecom_discount_policy p
+                            LEFT JOIN (
+                                SELECT
+                                    pay_dc_cd,
+                                    COUNT(*) AS item_count
+                                FROM raw_telecom_discount_item
+                                WHERE COALESCE(use_yn, '1') = '1'
+                                GROUP BY pay_dc_cd
+                            ) item_count
+                              ON p.pay_dc_cd = item_count.pay_dc_cd
+                            WHERE COALESCE(p.use_yn, '0') = '1'
+                              AND COALESCE(p.start_dt, '00000000') <= :target_date
+                              AND COALESCE(p.fnsh_dt, '99999999') >= :target_date
+                            GROUP BY p.pay_dc_nm, p.func_id_nm, p.dc_apply_trgt_nm
+                        )
+                        SELECT
+                            COALESCE(
+                                (
+                                    SELECT pay_dc_nm
+                                    FROM active_policy
+                                    ORDER BY row_count DESC, pay_dc_nm
+                                    LIMIT 1
+                                ),
+                                ''
+                            ) AS top_telecom_name,
+                            COALESCE(
+                                (
+                                    SELECT func_id_nm
+                                    FROM active_policy
+                                    ORDER BY row_count DESC, pay_dc_nm
+                                    LIMIT 1
+                                ),
+                                ''
+                            ) AS top_telecom_func,
+                            COALESCE(
+                                (
+                                    SELECT dc_apply_trgt_nm
+                                    FROM active_policy
+                                    ORDER BY row_count DESC, pay_dc_nm
+                                    LIMIT 1
+                                ),
+                                ''
+                            ) AS top_telecom_target,
+                            COALESCE(
+                                (
+                                    SELECT item_count
+                                    FROM active_policy
+                                    ORDER BY row_count DESC, pay_dc_nm
+                                    LIMIT 1
+                                ),
+                                0
+                            ) AS top_telecom_item_count
+                        """
+                    ),
+                    {"target_date": target_date},
+                ).mappings().one()
+                context.update({key: telecom[key] for key in telecom.keys()})
+
+        if not any(context.values()):
+            return None
+        return context
+
+    def _resolve_payment_reference_date(
+        self,
+        store_id: str | None,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> str | None:
+        if date_to:
+            return self._normalize_date(date_to)
+        if not self.engine or not has_table(self.engine, "raw_daily_store_pay_way"):
+            return None
+
+        where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    f"""
+                    SELECT MAX(sale_dt) AS max_sale_dt
+                    FROM raw_daily_store_pay_way
+                    {where_clause}
+                    """
+                ),
+                params,
+            ).mappings().first()
+        if not row or not row["max_sale_dt"]:
+            return None
+        return str(row["max_sale_dt"])
+
+    def _build_campaign_insight(self, campaign_context: dict) -> dict:
+        group_detail = " / ".join(campaign_context["group_names"]) if campaign_context["group_names"] else "대상 그룹 정보 없음"
+        item_detail = " / ".join(campaign_context["item_names"]) if campaign_context["item_names"] else "대상 상품 정보 없음"
+        return {
+            "title": "캠페인 시즌성 보정",
+            "summary": (
+                f"캠페인 마스터에서 사용 중인 캠페인 {campaign_context['campaign_count']}건을 확인했습니다. "
+                f"대표 캠페인 {campaign_context['campaign_name']}은 {campaign_context['campaign_period']} 기간의 "
+                f"{campaign_context['benefit_type']} 프로모션입니다."
+            ),
+            "metrics": [
+                {
+                    "label": "사용 캠페인",
+                    "value": f"{campaign_context['campaign_count']}건",
+                    "detail": "캠페인 마스터 기준",
+                },
+                {
+                    "label": "대표 캠페인",
+                    "value": campaign_context["campaign_name"],
+                    "detail": campaign_context["campaign_period"],
+                },
+                {
+                    "label": "상품 그룹",
+                    "value": f"{campaign_context['group_count']}개",
+                    "detail": group_detail,
+                },
+                {
+                    "label": "대상 상품",
+                    "value": f"{campaign_context['item_count']}개",
+                    "detail": item_detail,
+                },
+            ],
+            "actions": [
+                "캠페인 대상 상품군은 메뉴 믹스 인사이트와 함께 비교해 주세요.",
+                "행사 기간에는 채널 믹스와 결제수단 반응을 같이 점검해 주세요.",
+            ],
+            "status": "active",
+        }
 
     async def get_query_response(self, prompt: str) -> dict:
         source_relation = None
@@ -89,6 +475,27 @@ class SalesRepository:
             source_relation = "core_channel_sales"
         elif self.engine and has_table(self.engine, "raw_daily_store_online"):
             source_relation = "raw_daily_store_online"
+
+        campaign_context = self._fetch_campaign_context()
+        if campaign_context and self._is_campaign_prompt(prompt):
+            return {
+                "text": (
+                    f"캠페인 마스터 기준으로 사용 중인 캠페인 {campaign_context['campaign_count']}건을 확인했습니다. "
+                    f"대표 캠페인 {campaign_context['campaign_name']}은 {campaign_context['campaign_period']} 기간의 "
+                    f"{campaign_context['benefit_type']} 프로모션입니다. 캠페인 대상 상품군과 매출 지표를 함께 보면 "
+                    "행사 영향 해석이 더 명확해집니다."
+                ),
+                "evidence": [
+                    f"대표 캠페인 {campaign_context['campaign_name']} ({campaign_context['campaign_period']})",
+                    f"캠페인 상품 그룹 {campaign_context['group_count']}개",
+                    f"캠페인 대상 상품 {campaign_context['item_count']}개",
+                ],
+                "actions": [
+                    "캠페인 대상 상품군의 시간대별 매출 변화를 함께 확인",
+                    "행사 기간과 비행사 기간의 채널 믹스를 비교",
+                    "결제수단별 반응을 함께 점검해 프로모션 효율 확인",
+                ],
+            }
 
         if self.engine and source_relation:
             try:
@@ -163,6 +570,9 @@ class SalesRepository:
             "filtered_date_from": date_from,
             "filtered_date_to": date_to,
         }
+        campaign_context = self._fetch_campaign_context()
+        if campaign_context:
+            insights["campaign_seasonality"] = self._build_campaign_insight(campaign_context)
         if not self.engine:
             return insights
 
@@ -175,7 +585,11 @@ class SalesRepository:
                 channel_mix = self._fetch_channel_mix_insight(store_id=store_id, date_from=date_from, date_to=date_to)
                 if channel_mix:
                     insights["channel_mix"] = channel_mix
-            if has_table(self.engine, "raw_daily_store_pay_way"):
+            if (
+                has_table(self.engine, "raw_daily_store_pay_way")
+                or has_table(self.engine, "raw_settlement_master")
+                or has_table(self.engine, "raw_telecom_discount_policy")
+            ):
                 payment_mix = self._fetch_payment_mix_insight(store_id=store_id, date_from=date_from, date_to=date_to)
                 if payment_mix:
                     insights["payment_mix"] = payment_mix
@@ -378,48 +792,133 @@ class SalesRepository:
         }
 
     def _fetch_payment_mix_insight(self, store_id: str | None, date_from: str | None, date_to: str | None) -> dict | None:
-        where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
-        with self.engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    f"""
-                    SELECT
-                        COALESCE(NULLIF(pay_way_cd_nm, ''), NULLIF(pay_way_cd, ''), '기타') AS payment_label,
-                        SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) AS payment_amt
-                    FROM raw_daily_store_pay_way
-                    {where_clause}
-                    GROUP BY COALESCE(NULLIF(pay_way_cd_nm, ''), NULLIF(pay_way_cd, ''), '기타')
-                    ORDER BY SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) DESC
-                    LIMIT 3
-                    """
-                ),
-                params,
-            ).mappings().all()
+        rows: list[dict] = []
+        discount_ratio = 0.0
+        total_amt = 0.0
+        if has_table(self.engine, "raw_daily_store_pay_way"):
+            where_clause, params = self._build_filters("masked_stor_cd", "sale_dt", store_id, date_from, date_to)
+            with self.engine.connect() as connection:
+                rows = [
+                    dict(row)
+                    for row in connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                COALESCE(NULLIF(pay_way_cd_nm, ''), NULLIF(pay_way_cd, ''), '기타') AS payment_label,
+                                COALESCE(NULLIF(pay_way_cd, ''), '기타') AS payment_code,
+                                SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) AS payment_amt
+                            FROM raw_daily_store_pay_way
+                            {where_clause}
+                            GROUP BY
+                                COALESCE(NULLIF(pay_way_cd_nm, ''), NULLIF(pay_way_cd, ''), '기타'),
+                                COALESCE(NULLIF(pay_way_cd, ''), '기타')
+                            ORDER BY SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) DESC
+                            """
+                        ),
+                        params,
+                    ).mappings().all()
+                ]
 
-        if not rows:
+            total_amt = sum(float(row["payment_amt"] or 0) for row in rows)
+            discount_amt = sum(float(row["payment_amt"] or 0) for row in rows if row["payment_code"] in {"03", "19"})
+            discount_ratio = 0 if total_amt == 0 else round(discount_amt / total_amt * 100, 1)
+
+        reference_date = self._resolve_payment_reference_date(store_id=store_id, date_from=date_from, date_to=date_to)
+        discount_context = self._fetch_discount_program_context(reference_date)
+        if not rows and not discount_context:
             return None
 
-        total_amt = sum(float(row["payment_amt"] or 0) for row in rows)
         metric_items = []
-        for row in rows[:3]:
-            ratio = 0 if total_amt == 0 else round(float(row["payment_amt"] or 0) / total_amt * 100, 1)
+        if rows:
+            for row in rows[:2]:
+                ratio = 0 if total_amt == 0 else round(float(row["payment_amt"] or 0) / total_amt * 100, 1)
+                metric_items.append(
+                    {
+                        "label": str(row["payment_label"]),
+                        "value": f"{ratio:.1f}%",
+                        "detail": f"결제금액 {int(float(row['payment_amt'] or 0)):,}원",
+                    }
+                )
             metric_items.append(
                 {
-                    "label": str(row["payment_label"]),
-                    "value": f"{ratio:.1f}%",
-                    "detail": f"결제금액 {int(float(row['payment_amt'] or 0)):,}원",
+                    "label": "할인 결제 비중",
+                    "value": f"{discount_ratio:.1f}%",
+                    "detail": "제휴할인 + 캠페인할인결제 기준",
                 }
             )
 
+        actions = [
+            "상위 결제수단과 연결된 프로모션 성과를 함께 비교해 주세요.",
+            "특정 할인수단 비중이 높아질 때는 객단가 방어 상품을 함께 제안해 주세요.",
+        ]
+        summary = "결제수단 비중과 할인 프로그램 구성을 함께 점검할 수 있습니다."
+
+        if rows:
+            summary = f"{rows[0]['payment_label']} 비중이 가장 높고 결제수단 편중 여부를 운영 관점에서 점검할 수 있습니다."
+
+        if discount_context:
+            active_count = int(discount_context.get("active_settlement_count") or 0)
+            top_settlement_name = self._first_text(discount_context.get("top_settlement_name"))
+            top_settlement_method = self._first_text(discount_context.get("top_settlement_method"))
+            top_telecom_name = self._first_text(discount_context.get("top_telecom_name"))
+            top_telecom_target = self._first_text(discount_context.get("top_telecom_target"))
+            top_telecom_item_count = int(discount_context.get("top_telecom_item_count") or 0)
+
+            if active_count or top_telecom_name:
+                summary += " "
+                if active_count:
+                    summary += f"정산 기준 정보상 현재 활성 할인 기준은 {active_count}건이며 "
+                    if top_settlement_name:
+                        summary += f"대표 기준은 {top_settlement_name}"
+                        if top_settlement_method:
+                            summary += f"({top_settlement_method})"
+                        summary += "입니다."
+                if top_telecom_name:
+                    if active_count:
+                        summary += " "
+                    summary += f"통신사 제휴 정책 기준 대표 프로그램은 {top_telecom_name}"
+                    if top_telecom_target:
+                        summary += f"({top_telecom_target})"
+                    summary += "입니다."
+
+            if top_settlement_name:
+                metric_items.append(
+                    {
+                        "label": "활성 정산 기준",
+                        "value": top_settlement_name,
+                        "detail": top_settlement_method or "정산 기준 정보 기준",
+                    }
+                )
+            elif active_count:
+                metric_items.append(
+                    {
+                        "label": "활성 정산 기준",
+                        "value": f"{active_count}건",
+                        "detail": "정산 기준 정보 기준",
+                    }
+                )
+
+            if top_telecom_name:
+                telecom_detail = top_telecom_target or "통신사 제휴 할인"
+                if top_telecom_item_count:
+                    telecom_detail = f"{telecom_detail} / 대상 상품 {top_telecom_item_count}개"
+                metric_items.append(
+                    {
+                        "label": "대표 제휴 할인",
+                        "value": top_telecom_name,
+                        "detail": telecom_detail,
+                    }
+                )
+                actions[0] = f"{top_telecom_name} 반응을 상위 결제수단과 함께 비교해 주세요."
+                if top_telecom_item_count:
+                    actions.append("제휴 대상 상품 구성과 실제 판매 상위 상품이 맞는지 함께 점검해 주세요.")
+
         return {
             "title": "결제/할인 민감도",
-            "summary": f"{rows[0]['payment_label']} 비중이 가장 높고 결제수단 편중 여부를 운영 관점에서 점검할 수 있습니다.",
-            "metrics": metric_items,
-            "actions": [
-                "상위 결제수단과 연결된 프로모션 성과를 함께 비교해 주세요.",
-                "특정 할인수단 비중이 높아질 때는 객단가 방어 상품을 함께 제안해 주세요.",
-            ],
-            "status": "normal",
+            "summary": summary,
+            "metrics": metric_items[:5],
+            "actions": actions[:3],
+            "status": "active" if discount_context else "normal",
         }
 
     def _fetch_menu_mix_insight(self, store_id: str | None, date_from: str | None, date_to: str | None) -> dict | None:

@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.infrastructure.db.connection import get_database_engine, get_safe_database_url
 
+# 이 스크립트는 migration이나 적재를 수행하지 않고, 현재 DB에 들어간
+# raw/운영 테이블 상태만 조회한다.
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect loaded PostgreSQL resource data")

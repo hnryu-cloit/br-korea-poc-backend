@@ -26,8 +26,9 @@ class AnalyticsRepository:
         try:
             channel_metrics = self._get_channel_metrics()
             sales_metrics = self._get_sales_metrics()
+            discount_metrics = self._get_discount_metrics()
             if channel_metrics and sales_metrics:
-                return [
+                items = [
                     sales_metrics["total_sales"],
                     channel_metrics["delivery_orders"],
                     channel_metrics["hall_visits"],
@@ -35,6 +36,9 @@ class AnalyticsRepository:
                     sales_metrics["coffee_attach_ratio"],
                     channel_metrics["average_ticket"],
                 ]
+                if discount_metrics:
+                    items.append(discount_metrics["discount_ratio"])
+                return items
         except SQLAlchemyError:
             pass
         return _STUB
@@ -230,4 +234,109 @@ class AnalyticsRepository:
                 "trend": coffee_trend,
                 "detail": "커피 계열 매출 비중",
             },
+        }
+
+    def _get_discount_metrics(self) -> dict | None:
+        if not has_table(self.engine, "raw_daily_store_pay_way"):
+            return None
+
+        has_settlement = has_table(self.engine, "raw_settlement_master")
+        has_policy = has_table(self.engine, "raw_telecom_discount_policy")
+        with self.engine.connect() as connection:
+            summary = connection.execute(
+                text(
+                    """
+                    WITH daily AS (
+                        SELECT
+                            sale_dt,
+                            SUM(COALESCE(NULLIF(pay_amt, '')::numeric, 0)) AS total_amt,
+                            SUM(
+                                CASE
+                                    WHEN pay_way_cd IN ('03', '19')
+                                    THEN COALESCE(NULLIF(pay_amt, '')::numeric, 0)
+                                    ELSE 0
+                                END
+                            ) AS discount_amt
+                        FROM raw_daily_store_pay_way
+                        GROUP BY sale_dt
+                    ),
+                    ranked AS (
+                        SELECT
+                            sale_dt,
+                            total_amt,
+                            discount_amt,
+                            ROW_NUMBER() OVER (ORDER BY sale_dt DESC) AS rn
+                        FROM daily
+                    )
+                    SELECT
+                        COALESCE(SUM(CASE WHEN rn <= 7 THEN total_amt END), 0) AS recent_total_amt,
+                        COALESCE(SUM(CASE WHEN rn <= 7 THEN discount_amt END), 0) AS recent_discount_amt,
+                        COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN total_amt END), 0) AS prior_total_amt,
+                        COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN discount_amt END), 0) AS prior_discount_amt,
+                        COALESCE(MAX(sale_dt), '') AS max_sale_dt
+                    FROM ranked
+                    """
+                )
+            ).mappings().one()
+
+            active_settlement_count = 0
+            if has_settlement and summary["max_sale_dt"]:
+                active_settlement_count = int(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT COUNT(*)
+                            FROM raw_settlement_master
+                            WHERE COALESCE(use_yn, '0') = '1'
+                              AND COALESCE(start_dt, '00000000') <= :target_date
+                              AND COALESCE(fnsh_dt, '99999999') >= :target_date
+                            """
+                        ),
+                        {"target_date": summary["max_sale_dt"]},
+                    ).scalar_one()
+                    or 0
+                )
+
+            active_policy_count = 0
+            if has_policy and summary["max_sale_dt"]:
+                active_policy_count = int(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT COUNT(*)
+                            FROM raw_telecom_discount_policy
+                            WHERE COALESCE(use_yn, '0') = '1'
+                              AND COALESCE(start_dt, '00000000') <= :target_date
+                              AND COALESCE(fnsh_dt, '99999999') >= :target_date
+                            """
+                        ),
+                        {"target_date": summary["max_sale_dt"]},
+                    ).scalar_one()
+                    or 0
+                )
+
+        recent_total_amt = float(summary["recent_total_amt"] or 0)
+        recent_discount_amt = float(summary["recent_discount_amt"] or 0)
+        prior_total_amt = float(summary["prior_total_amt"] or 0)
+        prior_discount_amt = float(summary["prior_discount_amt"] or 0)
+
+        recent_ratio = 0 if recent_total_amt == 0 else round(recent_discount_amt / recent_total_amt * 100, 1)
+        prior_ratio = 0 if prior_total_amt == 0 else round(prior_discount_amt / prior_total_amt * 100, 1)
+        ratio_delta = round(recent_ratio - prior_ratio, 1)
+        trend = "up" if ratio_delta > 0 else "down" if ratio_delta < 0 else "flat"
+
+        detail_parts = ["제휴할인 + 캠페인할인결제"]
+        if active_settlement_count:
+            detail_parts.append(f"정산 기준 {active_settlement_count}건")
+        if active_policy_count:
+            detail_parts.append(f"제휴 정책 {active_policy_count}건")
+
+        return {
+            "discount_ratio": {
+                "label": "할인 결제 비중",
+                "value": f"{recent_ratio:.1f}%",
+                "change": f"{ratio_delta:+.1f}%p",
+                "trend": trend,
+                "detail": " · ".join(detail_parts),
+            }
         }

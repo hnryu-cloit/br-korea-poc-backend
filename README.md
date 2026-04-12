@@ -92,7 +92,10 @@ br-korea-poc-backend/
 │       ├── 0001_create_raw_resource_tables.sql
 │       ├── 0002_create_core_views.sql
 │       ├── 0003_create_operational_tables.sql
-│       └── 0004_add_store_id_to_operational_tables.sql
+│       ├── 0004_add_store_id_to_operational_tables.sql
+│       ├── 0005_create_new_workbook_raw_tables.sql
+│       ├── 0006_create_campaign_raw_tables.sql
+│       └── 0007_create_settlement_and_telecom_raw_tables.sql
 ├── scripts/
 │   ├── migrate_db.py                   # SQL 마이그레이션 실행
 │   ├── load_resource_to_db.py          # resource 파일 → DB 적재
@@ -129,15 +132,29 @@ docker compose up -d postgres
 # 의존성 설치
 pip install -r requirements.txt
 
-# DB 마이그레이션
+# 1) DB 스키마 생성
 python scripts/migrate_db.py
 
-# resource 데이터 적재
+# 2) resource 데이터 적재
 python scripts/load_resource_to_db.py
 
-# 개발 서버 실행
+# 3) 적재 상태 확인
+python scripts/inspect_resource_db.py
+
+# 4) 개발 서버 실행
 uvicorn app.main:app --reload
 ```
+
+### 실행 순서
+
+1. `python scripts/migrate_db.py`
+   `db/migrations` 아래 SQL을 적용해 raw/core/운영 테이블과 뷰를 생성합니다.
+2. `python scripts/load_resource_to_db.py`
+   `db/manifests/resource_load_manifest.json` 기준으로 `resource/` 파일을 raw 테이블에 적재합니다.
+3. `python scripts/inspect_resource_db.py`
+   현재 DB에 적재된 raw/운영 테이블 row count와 상태를 확인합니다.
+4. `uvicorn app.main:app --reload`
+   FastAPI 개발 서버를 실행합니다.
 
 - Swagger UI: `http://localhost:8000/docs`
 - Redoc: `http://localhost:8000/redoc`
@@ -186,8 +203,13 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 
 원본 파일은 상위 `resource/` 디렉터리에 유지하며, 적재 대상·매핑은 `db/manifests/resource_load_manifest.json`에서 관리합니다.
 
+- `db/migrations`: 테이블/뷰 생성
+- `db/manifests/resource_load_manifest.json`: `resource` 파일과 raw 테이블 매핑
+- `scripts/load_resource_to_db.py`: manifest 기준 적재 실행
+- `scripts/inspect_resource_db.py`: 적재 결과 조회
+
 ```bash
-# 적재 실행
+# 이미 스키마가 생성된 상태에서 적재 실행
 python scripts/load_resource_to_db.py
 
 # 적재 상태 확인 (전체 테이블 row count)
@@ -202,17 +224,56 @@ python scripts/inspect_resource_db.py
 | `xlsx` | openpyxl 단일 시트 적재 |
 | `workbook_rows` | 멀티 시트 전체를 `raw_workbook_rows`에 JSON 행으로 보존 |
 
+### Resource Mapping
+
+| resource 파일/폴더 | manifest dataset | migration/raw 테이블 | 비고 |
+|---|---|---|---|
+| `resource/03. 결제 수단 코드/결제 할인 수단 코드 테이블.csv` | `pay_code_csv` | `raw_pay_cd` | 코드 마스터 적재 |
+| `resource/04. POC 대상 데이터_제공데이터/01. 점포 마스터/던킨+점포마스터_매핑용.xlsx` | `store_master` | `raw_store_master` | 점포 기준 정보 |
+| `resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/*.xlsx` | `daily_store_item_tmzon` | `raw_daily_store_item_tmzon` | 6개 파일 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/02. 매출/02. 일자별 시간대별 캠페인 매출 데이터/일자별+시간대별+캠페인+매출.xlsx` | `daily_store_cpi_tmzon` | `raw_daily_store_cpi_tmzon` | 캠페인 시간대 매출 |
+| `resource/04. POC 대상 데이터_제공데이터/02. 매출/03. 일자별 결제 수단별 매출 데이터/일자별+결제+수단별+매출.xlsx` | `daily_store_pay_way` | `raw_daily_store_pay_way` | 결제수단 매출 |
+| `resource/04. POC 대상 데이터_제공데이터/02. 매출/04. 일자별 상품별 매출/일자별+상품별+매출.xlsx` | `daily_store_item` | `raw_daily_store_item` | 상품 매출 |
+| `resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/*.xlsx` | `daily_store_online` | `raw_daily_store_online` | 온라인/오프라인 매출 |
+| `resource/04. POC 대상 데이터_제공데이터/04. 생산/생산 데이터 추출.xlsx` | `production_extract` | `raw_production_extract` | `Sheet1` direct load |
+| `resource/04. POC 대상 데이터_제공데이터/05. 주문/주문+데이터.xlsx` | `order_extract` | `raw_order_extract` | `Sheet1` direct load |
+| `resource/04. POC 대상 데이터_제공데이터/05. 주문/주문+데이터.xlsx` | `order_workbook_rows` | `raw_workbook_rows` | 보조 시트 포함 workbook 보존 |
+| `resource/04. POC 대상 데이터_제공데이터/06. 재고/재고+데이터+추출.xlsx` | `inventory_extract` | `raw_inventory_extract` | `Sheet1` direct load |
+| `resource/04. POC 대상 데이터_제공데이터/07. 정산 기준 정보/정산+기준정보+마스터+테이블+추출.xlsx` | `settlement_master_extract` | `raw_settlement_master` | `Sheet1` direct load |
+| `resource/04. POC 대상 데이터_제공데이터/07. 정산 기준 정보/정산+기준정보+마스터+테이블+추출.xlsx` | `settlement_master_workbook` | `raw_workbook_rows` | workbook 원본 보존 |
+| `resource/04. POC 대상 데이터_제공데이터/08. 통신사 제휴 할인 마스터/통신사+제휴+할인마스터.xlsx` | `telecom_discount_type` | `raw_telecom_discount_type` | `결제_할인 수단 목록` 시트 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/08. 통신사 제휴 할인 마스터/통신사+제휴+할인마스터.xlsx` | `telecom_discount_policy` | `raw_telecom_discount_policy` | `제휴사 결제_할인 목록` 시트 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/08. 통신사 제휴 할인 마스터/통신사+제휴+할인마스터.xlsx` | `telecom_discount_item` | `raw_telecom_discount_item` | `제휴사 결제_할인 연결 상품 목록` 시트 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/08. 통신사 제휴 할인 마스터/통신사+제휴+할인마스터.xlsx` | `telecom_discount_master_workbook` | `raw_workbook_rows` | 메타 시트 포함 workbook 보존 |
+| `resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_master` | `raw_campaign_master` | `CPI_MST` 시트 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_item_group` | `raw_campaign_item_group` | `CPI_ITEM_GRP_MNG` 시트 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_item` | `raw_campaign_item` | `CPI_ITEM_MNG` 시트 direct load |
+| `resource/04. POC 대상 데이터_제공데이터/00. 테이블 구조/*.xlsx` | - | - | 문서/참조용 파일, 적재 대상 아님 |
+| `resource/04. POC 대상 데이터_제공데이터/ERD_V0.2.png` | - | - | ERD 이미지, 적재 대상 아님 |
+| `resource/04. POC 대상 데이터_제공데이터/POC_TABLE_DDL.sql` | - | - | 참고용 DDL, 적재 대상 아님 |
+| `resource/04. POC 대상 데이터_제공데이터/03. 결제 수단 코드/*.csv` 중 중복본 | - | - | 중복 코드 파일, 현재 manifest 비대상 |
+
 ### 적재 대상 테이블
 
 | raw 테이블 | 현재 row 수 |
 |---|---|
-| `raw_pay_cd` | 506 |
-| `raw_store_master` | 66 |
-| `raw_daily_store_item_tmzon` | 5,591,560 |
-| `raw_daily_store_item` | 1,403,844 |
-| `raw_daily_store_online` | 364,948 |
-| `raw_daily_store_pay_way` | 141,930 |
-| `raw_daily_store_cpi_tmzon` | 1,106 |
+| `raw_pay_cd` | 253 |
+| `raw_store_master` | 33 |
+| `raw_daily_store_item_tmzon` | 2,795,780 |
+| `raw_daily_store_item` | 701,922 |
+| `raw_daily_store_online` | 182,474 |
+| `raw_daily_store_pay_way` | 70,965 |
+| `raw_daily_store_cpi_tmzon` | 553 |
+| `raw_production_extract` | 45,528 |
+| `raw_order_extract` | 481,821 |
+| `raw_inventory_extract` | 540,182 |
+| `raw_campaign_master` | 207 |
+| `raw_campaign_item_group` | 283 |
+| `raw_campaign_item` | 6,537 |
+| `raw_settlement_master` | 36 |
+| `raw_telecom_discount_type` | 20 |
+| `raw_telecom_discount_policy` | 53 |
+| `raw_telecom_discount_item` | 38 |
 | `raw_workbook_rows` | 1,074,750 |
 
 ### DB 계층 구조
@@ -245,9 +306,13 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 ## 현재 데이터 연결 상태
 
-- **매출·분석**: `core_daily_item_sales`, `core_hourly_item_sales`, `core_channel_sales`, `core_store_master` 뷰에 연결됩니다.
+- **매출·분석**: `core_daily_item_sales`, `core_hourly_item_sales`, `core_channel_sales`, `core_store_master` 뷰에 연결됩니다. `analytics/metrics`는 여기에 더해 `raw_daily_store_pay_way`, `raw_settlement_master`, `raw_telecom_discount_policy`를 사용해 할인 결제 비중을 계산합니다.
 - **주문·생산 이력**: `ordering_selections`, `production_registrations`, `audit_logs` 운영 테이블을 사용합니다.
-- **신규 workbook 데이터** (생산·주문·재고·캠페인): `raw_workbook_rows` 적재는 완료됐으나 서비스 계층이 아직 직접 읽지 않습니다. 정식 raw 테이블 모델링 및 repository 연결 작업이 남아 있습니다.
+- **신규 workbook 데이터**
+  - 생산·주문·재고·캠페인: 정식 raw 테이블로 direct load 되었고, 주문/생산/매출 repository가 우선 참조합니다.
+  - 정산 기준 정보: `raw_settlement_master` direct load와 `raw_workbook_rows` 보존 적재를 함께 사용하며, `sales/insights`의 결제·할인 인사이트 설명에 활용됩니다.
+  - 통신사 제휴 할인 마스터: 데이터 시트는 정식 raw 테이블로 direct load 하고, 메타 시트 보존을 위해 workbook 전체는 `raw_workbook_rows`에도 남깁니다. 활성 제휴 할인 맥락은 `sales/insights`, `signals`, `analytics/metrics`에 반영됩니다.
+  - 레거시 csv/xlsx 중복 적재본은 cleanup 이후 제거되었고, 현재 raw 테이블은 최신 manifest 기준 source만 유지합니다.
 
 ## 권한 모델
 

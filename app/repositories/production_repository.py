@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -87,7 +87,274 @@ class ProductionRepository:
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
 
+    def _table_columns(self, table_name: str) -> dict[str, str]:
+        if not self.engine:
+            return {}
+        try:
+            return {column["name"].lower(): column["name"] for column in inspect(self.engine).get_columns(table_name)}
+        except SQLAlchemyError:
+            return {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _pick_column(columns: dict[str, str], candidates: tuple[str, ...]) -> str | None:
+        for candidate in candidates:
+            column_name = columns.get(candidate.lower())
+            if column_name:
+                return column_name
+        return None
+
+    @staticmethod
+    def _safe_int(value: object) -> int:
+        if value in (None, ""):
+            return 0
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _safe_non_negative_int(value: object) -> int:
+        return max(0, ProductionRepository._safe_int(value))
+
+    @staticmethod
+    def _clamp_recommended_qty(current: int, forecast: int, candidate: int) -> int:
+        if forecast <= 0:
+            return 0
+        lower_bound = max(4, int(round(forecast * 0.2)))
+        upper_bound = max(8, int(round(forecast * 1.5)))
+        return max(lower_bound, min(candidate, upper_bound))
+
+    @staticmethod
+    def _format_basis_date(value: object) -> str:
+        basis = str(value).strip()
+        if len(basis) == 8 and basis.isdigit():
+            return f"{basis[:4]}-{basis[4:6]}-{basis[6:8]}"
+        return basis.replace("/", "-")[:10]
+
+    def _fetch_metric_map(
+        self,
+        relation: str,
+        date_candidates: tuple[str, ...],
+        item_name_candidates: tuple[str, ...],
+        item_code_candidates: tuple[str, ...],
+        metric_candidates: tuple[str, ...],
+    ) -> dict[str, dict[str, object]]:
+        columns = self._table_columns(relation)
+        date_column = self._pick_column(columns, date_candidates)
+        item_name_column = self._pick_column(columns, item_name_candidates)
+        item_code_column = self._pick_column(columns, item_code_candidates)
+        metric_column = self._pick_column(columns, metric_candidates)
+        if not self.engine or not date_column or not item_name_column or not metric_column:
+            return {}
+
+        item_name_expr = (
+            f"COALESCE(NULLIF(TRIM(CAST({item_name_column} AS TEXT)), ''), NULLIF(TRIM(CAST({item_code_column} AS TEXT)), ''))"
+            if item_code_column
+            else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
+        )
+        item_code_expr = (
+            f"COALESCE(NULLIF(TRIM(CAST({item_code_column} AS TEXT)), ''), NULLIF(TRIM(CAST({item_name_column} AS TEXT)), ''))"
+            if item_code_column
+            else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
+        )
+        metric_expr = f"COALESCE(NULLIF(TRIM(CAST({metric_column} AS TEXT)), '')::numeric, 0)"
+
+        try:
+            with self.engine.connect() as connection:
+                latest_date = connection.execute(
+                    text(
+                        f"""
+                        SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
+                        FROM {relation}
+                        WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
+                        ORDER BY date_value DESC
+                        LIMIT 1
+                        """
+                    )
+                ).scalar_one_or_none()
+                if not latest_date:
+                    return {}
+
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT
+                            {item_name_expr} AS item_name,
+                            {item_code_expr} AS item_code,
+                            {metric_expr} AS metric_value
+                        FROM {relation}
+                        WHERE CAST({date_column} AS TEXT) = :date_value
+                        """
+                    ),
+                    {"date_value": str(latest_date)},
+                ).mappings().all()
+        except SQLAlchemyError:
+            return {}
+
+        metric_map: dict[str, dict[str, object]] = {}
+        for row in rows:
+            item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
+            item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
+            key = item_code or item_name
+            if not key:
+                continue
+            bucket = metric_map.setdefault(
+                key,
+                {
+                    "item_cd": item_code or key,
+                    "item_nm": item_name or item_code or key,
+                    "qty": 0,
+                },
+            )
+            bucket["qty"] = int(bucket["qty"]) + self._safe_int(row["metric_value"])
+        return metric_map
+
+    def _build_new_items(
+        self,
+        production_map: dict[str, dict[str, object]],
+        secondary_map: dict[str, dict[str, object]],
+        stock_map: dict[str, dict[str, object]],
+        sale_map: dict[str, dict[str, object]],
+    ) -> list[dict]:
+        combined_keys = set(production_map) | set(secondary_map) | set(stock_map) | set(sale_map)
+        if not combined_keys:
+            return []
+
+        ranked_rows: list[dict] = []
+        for key in combined_keys:
+            production = production_map.get(key, {})
+            secondary = secondary_map.get(key, {})
+            stock = stock_map.get(key, {})
+            sale = sale_map.get(key, {})
+
+            item_cd = str(
+                production.get("item_cd")
+                or stock.get("item_cd")
+                or sale.get("item_cd")
+                or secondary.get("item_cd")
+                or key
+            )
+            item_nm = str(
+                production.get("item_nm")
+                or stock.get("item_nm")
+                or sale.get("item_nm")
+                or secondary.get("item_nm")
+                or key
+            )
+
+            stock_qty = self._safe_non_negative_int(stock.get("qty")) if stock else 0
+            production_qty = self._safe_non_negative_int(production.get("qty")) if production else 0
+            secondary_qty = self._safe_non_negative_int(secondary.get("qty")) if secondary else 0
+            sale_qty = self._safe_non_negative_int(sale.get("qty")) if sale else 0
+
+            current = stock_qty if stock else production_qty
+            if current <= 0 and not stock and production_qty > 0:
+                current = production_qty
+
+            forecast = sale_qty
+            if forecast <= 0 and production_qty > 0:
+                forecast = min(production_qty, max(4, current + max(4, current // 2)))
+            if forecast <= 0:
+                forecast = max(0, current // 2)
+            current = max(0, current)
+            forecast = max(0, forecast)
+
+            if forecast <= 0:
+                status = "safe"
+            elif current <= forecast:
+                status = "danger"
+            elif current <= int(round(forecast * 1.5)):
+                status = "warning"
+            else:
+                status = "safe"
+            if status == "safe":
+                recommended = 0
+            else:
+                gap = max(forecast - current, 0)
+                buffer_qty = max(4, int(round(forecast * 0.2)))
+                recommended = self._clamp_recommended_qty(current, forecast, gap + buffer_qty)
+
+            prod1_qty = production_qty if production else max(8, current + 8)
+            if prod1_qty <= 0:
+                prod1_qty = max(8, current + 8)
+            prod2_qty = secondary_qty if secondary else max(recommended, current)
+            if prod2_qty <= 0:
+                prod2_qty = max(recommended, current)
+            if status != "safe":
+                prod2_qty = max(prod2_qty, recommended)
+
+            risk_score = max(forecast - current, 0)
+            ranked_rows.append(
+                {
+                    "sku_id": item_cd,
+                    "name": item_nm,
+                    "current": current,
+                    "forecast": forecast,
+                    "status": status,
+                    "depletion_time": "-",
+                    "recommended": recommended,
+                    "prod1": f"08:00 / {prod1_qty}개",
+                    "prod2": f"14:00 / {prod2_qty}개",
+                    "_risk_score": risk_score,
+                }
+            )
+
+        ranked_rows.sort(key=lambda row: (-int(row["_risk_score"]), -int(row["forecast"]), str(row["name"])))
+
+        for index, row in enumerate(ranked_rows, start=1):
+            if row["status"] == "safe":
+                row["depletion_time"] = "-"
+            else:
+                hours_left = max(1, int(round(row["current"] / max(row["forecast"], 1))))
+                row["depletion_time"] = f"{min(23, 14 + min(5, hours_left)):02d}:{(10 + index * 7) % 60:02d}"
+            row.pop("_risk_score", None)
+
+        return ranked_rows[:4]
+
     async def list_items(self) -> list[dict]:
+        production_map: dict[str, dict[str, object]] = {}
+        secondary_map: dict[str, dict[str, object]] = {}
+        stock_map: dict[str, dict[str, object]] = {}
+        sale_map: dict[str, dict[str, object]] = {}
+
+        if self.engine and has_table(self.engine, "raw_production_extract"):
+            production_map = self._fetch_metric_map(
+                "raw_production_extract",
+                ("prod_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("prod_qty",),
+            )
+            secondary_map = self._fetch_metric_map(
+                "raw_production_extract",
+                ("prod_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("prod_qty_2", "reprod_qty", "prod_qty_3"),
+            )
+
+        if self.engine and has_table(self.engine, "raw_inventory_extract"):
+            stock_map = self._fetch_metric_map(
+                "raw_inventory_extract",
+                ("stock_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("stock_qty",),
+            )
+            sale_map = self._fetch_metric_map(
+                "raw_inventory_extract",
+                ("stock_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("sale_qty",),
+            )
+
+        items = self._build_new_items(production_map, secondary_map, stock_map, sale_map)
+        if items:
+            return items
+
         source_relation = None
         if self.engine and has_table(self.engine, "core_hourly_item_sales"):
             source_relation = "core_hourly_item_sales"
@@ -126,10 +393,19 @@ class ProductionRepository:
 
                     items = []
                     for index, row in enumerate(rows, start=1):
-                        current = max(8, int(round(float(row["sale_qty"]) / 6)))
+                        sale_qty = max(0, self._safe_int(row["sale_qty"]))
+                        current = max(0, int(round(sale_qty / 6)))
                         forecast = max(0, current - max(4, int(round(current * 0.75))))
                         status = "danger" if forecast <= 5 else "warning" if forecast <= 12 else "safe"
-                        recommended = 0 if status == "safe" else max(12, int(round(float(row["sale_qty"]) / 4)))
+                        recommended = (
+                            0
+                            if status == "safe"
+                            else self._clamp_recommended_qty(
+                                current,
+                                forecast,
+                                max(0, int(round(sale_qty / 4))),
+                            )
+                        )
                         items.append(
                             {
                                 "sku_id": str(row["item_cd"] or f"sku-{index}"),
