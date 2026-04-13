@@ -10,6 +10,7 @@ from app.repositories.bootstrap_repository import BootstrapRepository
 from app.repositories.data_catalog_repository import DataCatalogRepository
 from app.repositories.notifications_repository import NotificationsRepository
 from app.repositories.ordering_repository import OrderingRepository
+from app.repositories.hq_repository import HQRepository
 from app.repositories.production_repository import ProductionRepository
 from app.repositories.sales_repository import SalesRepository
 from app.repositories.signals_repository import SignalsRepository
@@ -22,6 +23,7 @@ from app.services.notifications_service import NotificationsService
 from app.services.ordering_service import OrderingService
 from app.services.production_service import ProductionService
 from app.services.home_service import HomeService
+from app.services.hq_service import HQService
 from app.services.sales_service import SalesService
 from app.services.signals_service import SignalsService
 
@@ -38,7 +40,7 @@ def get_data_catalog_service() -> DataCatalogService:
 
 
 def get_bootstrap_service() -> BootstrapService:
-    return BootstrapService(repository=BootstrapRepository())
+    return BootstrapService(repository=BootstrapRepository(engine=get_database_engine()))
 
 
 def get_analytics_service() -> AnalyticsService:
@@ -91,3 +93,10 @@ def get_sales_service() -> SalesService:
 
 def get_signals_service() -> SignalsService:
     return SignalsService(repository=SignalsRepository(engine=get_database_engine()))
+
+
+def get_hq_service() -> HQService:
+    return HQService(
+        repository=HQRepository(engine=get_database_engine()),
+        ordering_service=get_ordering_service(),
+    )
