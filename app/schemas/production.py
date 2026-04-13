@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -89,3 +89,34 @@ class ProductionRegistrationSummaryResponse(BaseModel):
     filtered_store_id: Optional[str] = None
     filtered_date_from: Optional[str] = None
     filtered_date_to: Optional[str] = None
+
+
+class ProductionSimulationRequest(BaseModel):
+    store_id: str
+    item_id: str
+    simulation_date: str  # YYYY-MM-DD
+    lead_time_hour: int = 1
+    margin_rate: float = 0.3
+
+
+class SimulationChartPoint(BaseModel):
+    time: str
+    actual_stock: float
+    ai_guided_stock: float
+
+
+class SimulationSummaryMetrics(BaseModel):
+    additional_sales_qty: float
+    additional_profit_amt: int
+    additional_waste_qty: float
+    additional_waste_cost: int
+    net_profit_change: int
+    performance_status: str
+    chance_loss_reduction: Optional[float] = None
+
+
+class ProductionSimulationResponse(BaseModel):
+    metadata: dict[str, Any]
+    summary_metrics: SimulationSummaryMetrics
+    time_series_data: list[SimulationChartPoint]
+    actions_timeline: list[str]

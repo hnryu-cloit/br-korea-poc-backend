@@ -10,6 +10,8 @@ from app.schemas.production import (
     ProductionRegistrationRequest,
     ProductionRegistrationSummaryResponse,
     ProductionRegistrationResponse,
+    ProductionSimulationRequest,
+    ProductionSimulationResponse,
 )
 from app.services.production_service import ProductionService
 
@@ -62,3 +64,11 @@ async def get_production_registration_summary(
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionRegistrationSummaryResponse:
     return await service.get_registration_summary(store_id=store_id, date_from=date_from, date_to=date_to)
+
+
+@router.post("/simulation", response_model=ProductionSimulationResponse)
+async def run_production_simulation(
+    payload: ProductionSimulationRequest,
+    service: ProductionService = Depends(get_production_service),
+) -> ProductionSimulationResponse:
+    return await service.run_simulation(payload)

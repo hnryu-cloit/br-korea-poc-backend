@@ -21,6 +21,7 @@ from app.services.data_catalog_service import DataCatalogService
 from app.services.notifications_service import NotificationsService
 from app.services.ordering_service import OrderingService
 from app.services.production_service import ProductionService
+from app.services.home_service import HomeService
 from app.services.sales_service import SalesService
 from app.services.signals_service import SignalsService
 
@@ -55,6 +56,14 @@ def get_production_service() -> ProductionService:
     return ProductionService(
         repository=ProductionRepository(engine=get_database_engine()),
         audit_service=get_audit_service(),
+        ai_client=_get_ai_client(),
+    )
+
+
+def get_home_service() -> HomeService:
+    return HomeService(
+        production_service=get_production_service(),
+        ordering_service=get_ordering_service(),
     )
 
 

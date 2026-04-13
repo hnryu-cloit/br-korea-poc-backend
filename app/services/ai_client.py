@@ -71,3 +71,29 @@ class AIServiceClient:
                 "is_holiday": is_holiday,
             },
         )
+
+    async def run_simulation(
+        self,
+        store_id: str,
+        item_id: str,
+        simulation_date: str,
+        lead_time_hour: int,
+        margin_rate: float,
+        inventory_data: list[dict],
+        production_data: list[dict],
+        sales_data: list[dict],
+    ) -> dict | None:
+        """AI 서비스에 생산 시뮬레이션을 요청합니다. 실패 시 None을 반환합니다."""
+        return await self._post(
+            "/api/production/simulation",
+            {
+                "store_id": store_id,
+                "item_id": item_id,
+                "simulation_date": simulation_date,
+                "lead_time_hour": lead_time_hour,
+                "margin_rate": margin_rate,
+                "inventory_data": inventory_data,
+                "production_data": production_data,
+                "sales_data": sales_data,
+            },
+        )

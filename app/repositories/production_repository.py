@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -424,6 +424,92 @@ class ProductionRepository:
             except SQLAlchemyError:
                 pass
         return PRODUCTION_ITEMS
+
+    async def fetch_simulation_data(
+        self,
+        store_id: str,
+        item_id: str,
+        simulation_date: str,
+        window_days: int = 30,
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """시뮬레이션용 raw 데이터를 조회합니다. (inventory_data, production_data, sales_data) 반환."""
+        if not self.engine:
+            return [], [], []
+
+        target_dt = datetime.strptime(simulation_date, "%Y-%m-%d")
+        date_from = (target_dt - timedelta(days=window_days)).strftime("%Y%m%d")
+
+        inventory_data: list[dict] = []
+        production_data: list[dict] = []
+        sales_data: list[dict] = []
+
+        try:
+            with self.engine.connect() as conn:
+                if has_table(self.engine, "raw_inventory_extract"):
+                    rows = conn.execute(
+                        text(
+                            """
+                            SELECT
+                                UPPER(COALESCE(masked_stor_cd::TEXT, '')) AS "MASKED_STOR_CD",
+                                UPPER(COALESCE(item_cd::TEXT, ''))        AS "ITEM_CD",
+                                COALESCE(item_nm::TEXT, '')               AS "ITEM_NM",
+                                COALESCE(stock_qty::NUMERIC, 0)           AS "STOCK_QTY",
+                                COALESCE(sale_qty::NUMERIC, 0)            AS "SALE_QTY",
+                                CAST(stock_dt AS TEXT)                    AS "STOCK_DT"
+                            FROM raw_inventory_extract
+                            WHERE CAST(stock_dt AS TEXT) >= :date_from
+                              AND (:store_id = '' OR masked_stor_cd::TEXT = :store_id)
+                            """
+                        ),
+                        {"date_from": date_from, "store_id": store_id},
+                    ).mappings().all()
+                    inventory_data = [dict(r) for r in rows]
+
+                if has_table(self.engine, "raw_production_extract"):
+                    rows = conn.execute(
+                        text(
+                            """
+                            SELECT
+                                UPPER(COALESCE(masked_stor_cd::TEXT, '')) AS "MASKED_STOR_CD",
+                                UPPER(COALESCE(item_cd::TEXT, ''))        AS "ITEM_CD",
+                                COALESCE(item_nm::TEXT, '')               AS "ITEM_NM",
+                                COALESCE(prod_qty::NUMERIC, 0)            AS "PROD_QTY",
+                                CAST(prod_dt AS TEXT)                     AS "PROD_DT",
+                                '1'                                       AS "PROD_DGRE",
+                                1500                                      AS "SALE_PRC",
+                                700                                       AS "ITEM_COST"
+                            FROM raw_production_extract
+                            WHERE CAST(prod_dt AS TEXT) >= :date_from
+                              AND (:store_id = '' OR masked_stor_cd::TEXT = :store_id)
+                            """
+                        ),
+                        {"date_from": date_from, "store_id": store_id},
+                    ).mappings().all()
+                    production_data = [dict(r) for r in rows]
+
+                if has_table(self.engine, "raw_daily_store_item_tmzon"):
+                    rows = conn.execute(
+                        text(
+                            """
+                            SELECT
+                                UPPER(COALESCE(masked_stor_cd::TEXT, '')) AS "MASKED_STOR_CD",
+                                UPPER(COALESCE(item_cd::TEXT, ''))        AS "ITEM_CD",
+                                COALESCE(item_nm::TEXT, '')               AS "ITEM_NM",
+                                COALESCE(sale_qty::NUMERIC, 0)            AS "SALE_QTY",
+                                CAST(sale_dt AS TEXT)                     AS "SALE_DT",
+                                CAST(tmzon_div AS TEXT)                   AS "TMZON_DIV"
+                            FROM raw_daily_store_item_tmzon
+                            WHERE CAST(sale_dt AS TEXT) >= :date_from
+                              AND (:store_id = '' OR masked_stor_cd::TEXT = :store_id)
+                            """
+                        ),
+                        {"date_from": date_from, "store_id": store_id},
+                    ).mappings().all()
+                    sales_data = [dict(r) for r in rows]
+        except SQLAlchemyError:
+            pass
+
+        return inventory_data, production_data, sales_data
 
     async def save_registration(self, payload: dict) -> dict:
         if self.engine and has_table(self.engine, "production_registrations"):

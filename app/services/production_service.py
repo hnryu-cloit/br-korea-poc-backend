@@ -13,14 +13,24 @@ from app.schemas.production import (
     ProductionRegistrationHistoryResponse,
     ProductionRegistrationSummaryResponse,
     ProductionRegistrationResponse,
+    ProductionSimulationRequest,
+    ProductionSimulationResponse,
+    SimulationChartPoint,
+    SimulationSummaryMetrics,
 )
 from app.services.audit_service import AuditService
 
 
 class ProductionService:
-    def __init__(self, repository: ProductionRepository, audit_service: Optional[AuditService] = None) -> None:
+    def __init__(
+        self,
+        repository: ProductionRepository,
+        audit_service: Optional[AuditService] = None,
+        ai_client=None,
+    ) -> None:
         self.repository = repository
         self.audit_service = audit_service
+        self.ai_client = ai_client
 
     async def get_overview(self) -> ProductionOverviewResponse:
         items = await self.repository.list_items()
@@ -102,6 +112,61 @@ class ProductionService:
             filtered_store_id=store_id,
             filtered_date_from=date_from,
             filtered_date_to=date_to,
+        )
+
+    async def run_simulation(self, payload: ProductionSimulationRequest) -> ProductionSimulationResponse:
+        inventory_data, production_data, sales_data = await self.repository.fetch_simulation_data(
+            store_id=payload.store_id,
+            item_id=payload.item_id,
+            simulation_date=payload.simulation_date,
+        )
+
+        if self.ai_client:
+            result = await self.ai_client.run_simulation(
+                store_id=payload.store_id,
+                item_id=payload.item_id,
+                simulation_date=payload.simulation_date,
+                lead_time_hour=payload.lead_time_hour,
+                margin_rate=payload.margin_rate,
+                inventory_data=inventory_data,
+                production_data=production_data,
+                sales_data=sales_data,
+            )
+            if result:
+                return ProductionSimulationResponse(**result)
+
+        return self._stub_simulation(payload)
+
+    @staticmethod
+    def _stub_simulation(payload: ProductionSimulationRequest) -> ProductionSimulationResponse:
+        return ProductionSimulationResponse(
+            metadata={
+                "store_id": payload.store_id,
+                "item_id": payload.item_id,
+                "date": payload.simulation_date,
+                "stub": True,
+            },
+            summary_metrics=SimulationSummaryMetrics(
+                additional_sales_qty=12.0,
+                additional_profit_amt=18000,
+                additional_waste_qty=2.0,
+                additional_waste_cost=1400,
+                net_profit_change=16600,
+                performance_status="POSITIVE",
+                chance_loss_reduction=4500.0,
+            ),
+            time_series_data=[
+                SimulationChartPoint(
+                    time=f"{h:02d}:00",
+                    actual_stock=max(0.0, 40.0 - h * 2.2),
+                    ai_guided_stock=max(0.0, 52.0 - h * 2.0),
+                )
+                for h in range(8, 24, 2)
+            ],
+            actions_timeline=[
+                "[10:00] AI 추천으로 20개 추가 생산",
+                "[14:00] AI 추천으로 15개 추가 생산",
+            ],
         )
 
     async def get_registration_summary(

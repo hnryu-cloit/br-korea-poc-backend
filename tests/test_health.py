@@ -149,6 +149,18 @@ def test_ordering_selection_summary_filters_by_date_range() -> None:
     assert payload["summary_status"] == "empty"
 
 
+def test_home_overview() -> None:
+    response = client.post("/api/home/overview", json={})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["priority_actions"]) == 3
+    assert "ai_reasoning" in payload["priority_actions"][0]
+    assert "confidence_score" in payload["priority_actions"][0]
+    assert "is_finished_good" in payload["priority_actions"][0]
+    ordering_card = next(card for card in payload["cards"] if card["domain"] == "ordering")
+    assert ordering_card["delivery_scheduled"] is True
+
+
 def test_production_overview() -> None:
     response = client.get("/api/production/overview")
     assert response.status_code == 200
