@@ -8,57 +8,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.infrastructure.db.utils import has_table
 
-PRODUCTION_ITEMS = [
-    {
-        "sku_id": "sku-1",
-        "name": "스트로베리 필드",
-        "current": 24,
-        "forecast": 3,
-        "status": "danger",
-        "depletion_time": "15:05",
-        "recommended": 40,
-        "prod1": "08:10 / 52개",
-        "prod2": "14:20 / 40개",
-    },
-    {
-        "sku_id": "sku-2",
-        "name": "올드패션",
-        "current": 18,
-        "forecast": 6,
-        "status": "danger",
-        "depletion_time": "15:22",
-        "recommended": 36,
-        "prod1": "08:00 / 48개",
-        "prod2": "14:10 / 36개",
-    },
-    {
-        "sku_id": "sku-3",
-        "name": "크림 필드",
-        "current": 12,
-        "forecast": 4,
-        "status": "danger",
-        "depletion_time": "15:18",
-        "recommended": 32,
-        "prod1": "08:30 / 44개",
-        "prod2": "14:30 / 32개",
-    },
-    {
-        "sku_id": "sku-4",
-        "name": "글레이즈드",
-        "current": 42,
-        "forecast": 22,
-        "status": "safe",
-        "depletion_time": "-",
-        "recommended": 0,
-        "prod1": "08:05 / 60개",
-        "prod2": "14:00 / 48개",
-    },
-]
-
 
 class ProductionRepository:
-    saved_registrations: list[dict] = []
-
     @staticmethod
     def _build_history_filters(store_id: str | None = None, date_from: str | None = None, date_to: str | None = None) -> tuple[str, dict]:
         clauses: list[str] = []
@@ -423,7 +374,7 @@ class ProductionRepository:
                         return items
             except SQLAlchemyError:
                 pass
-        return PRODUCTION_ITEMS
+        return []
 
     async def fetch_simulation_data(
         self,
@@ -507,7 +458,7 @@ class ProductionRepository:
                     ).mappings().all()
                     sales_data = [dict(r) for r in rows]
         except SQLAlchemyError:
-            pass
+            return [], [], []
 
         return inventory_data, production_data, sales_data
 
@@ -533,9 +484,8 @@ class ProductionRepository:
                     )
                     return payload
             except SQLAlchemyError:
-                pass
-        self.saved_registrations.append(payload)
-        return payload
+                return {**payload, "saved": False}
+        return {**payload, "saved": False}
 
     async def list_registration_history(
         self,
@@ -569,26 +519,8 @@ class ProductionRepository:
                     ).mappings().all()
                     return [dict(row) for row in rows]
             except SQLAlchemyError:
-                pass
-        return [
-            {
-                "sku_id": entry["sku_id"],
-                "qty": entry["qty"],
-                "registered_by": entry["registered_by"],
-                "feedback_type": "chance_loss_reduced",
-                "feedback_message": "재고 소진 전에 등록되어 찬스 로스 감소 효과를 기록했습니다.",
-                "registered_at": "2026-03-31 00:00:00",
-                "store_id": entry.get("store_id"),
-            }
-            for entry in reversed(
-                [
-                    entry
-                    for entry in self.saved_registrations
-                    if (store_id is None or entry.get("store_id") == store_id)
-                    and self._matches_date_range("2026-03-31 00:00:00", date_from=date_from, date_to=date_to)
-                ][-limit:]
-            )
-        ]
+                return []
+        return []
 
     async def get_registration_summary(
         self,
@@ -672,49 +604,28 @@ class ProductionRepository:
                         "filtered_date_to": date_to,
                     }
             except SQLAlchemyError:
-                pass
-
-        filtered_entries = [
-            entry
-            for entry in self.saved_registrations
-            if (store_id is None or entry.get("store_id") == store_id)
-            and self._matches_date_range("2026-03-31 00:00:00", date_from=date_from, date_to=date_to)
-        ]
-        latest_entries = list(reversed(filtered_entries))
-        latest = latest_entries[0] if latest_entries else None
-        recent_registered_by: list[str] = []
-        total_registered_qty = 0
-        affected_sku_ids: set[str] = set()
-        for entry in filtered_entries:
-            total_registered_qty += int(entry["qty"])
-            affected_sku_ids.add(str(entry["sku_id"]))
-        for entry in latest_entries:
-            actor = entry["registered_by"]
-            if actor not in recent_registered_by:
-                recent_registered_by.append(actor)
-            if len(recent_registered_by) >= 5:
-                break
-        return {
-            "total": len(filtered_entries),
-            "latest": (
-                {
-                    "sku_id": latest["sku_id"],
-                    "qty": latest["qty"],
-                    "registered_by": latest["registered_by"],
-                    "feedback_type": "chance_loss_reduced",
-                    "feedback_message": "재고 소진 전에 등록되어 찬스 로스 감소 효과를 기록했습니다.",
-                    "registered_at": "2026-03-31 00:00:00",
-                    "store_id": latest.get("store_id"),
+                return {
+                    "total": 0,
+                    "latest": None,
+                    "total_registered_qty": 0,
+                    "recent_registered_by": [],
+                    "recent_registration_count_7d": 0,
+                    "recent_registered_qty_7d": 0,
+                    "affected_sku_count": 0,
+                    "summary_status": "empty",
+                    "filtered_store_id": store_id,
+                    "filtered_date_from": date_from,
+                    "filtered_date_to": date_to,
                 }
-                if latest
-                else None
-            ),
-            "total_registered_qty": total_registered_qty,
-            "recent_registered_by": recent_registered_by,
-            "recent_registration_count_7d": len(filtered_entries),
-            "recent_registered_qty_7d": total_registered_qty,
-            "affected_sku_count": len(affected_sku_ids),
-            "summary_status": "active" if filtered_entries else "empty",
+        return {
+            "total": 0,
+            "latest": None,
+            "total_registered_qty": 0,
+            "recent_registered_by": [],
+            "recent_registration_count_7d": 0,
+            "recent_registered_qty_7d": 0,
+            "affected_sku_count": 0,
+            "summary_status": "empty",
             "filtered_store_id": store_id,
             "filtered_date_from": date_from,
             "filtered_date_to": date_to,

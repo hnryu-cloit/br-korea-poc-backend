@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, AliasChoices
 
 
 class ProductionItem(BaseModel):
@@ -118,5 +118,16 @@ class SimulationSummaryMetrics(BaseModel):
 class ProductionSimulationResponse(BaseModel):
     metadata: dict[str, Any]
     summary_metrics: SimulationSummaryMetrics
-    time_series_data: list[SimulationChartPoint]
-    actions_timeline: list[str]
+    time_series_data: list[SimulationChartPoint] = Field(
+        validation_alias=AliasChoices("time_series_data", "chart_data")
+    )
+    actions_timeline: list[str] = Field(
+        validation_alias=AliasChoices("actions_timeline", "action_timeline")
+    )
+
+
+# AI 계약과의 호환성을 위한 별칭
+SimulationRequest = ProductionSimulationRequest
+SimulationReportResponse = ProductionSimulationResponse
+SimulationSummary = SimulationSummaryMetrics
+ChartDataPoint = SimulationChartPoint

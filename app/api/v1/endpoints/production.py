@@ -16,6 +16,7 @@ from app.schemas.production import (
 from app.services.production_service import ProductionService
 
 router = APIRouter(prefix="/production", tags=["production"])
+v1_router = APIRouter(prefix="/v1/production", tags=["production"])
 
 
 @router.get("/overview", response_model=ProductionOverviewResponse)
@@ -67,6 +68,7 @@ async def get_production_registration_summary(
 
 
 @router.post("/simulation", response_model=ProductionSimulationResponse)
+@v1_router.post("/simulation", response_model=ProductionSimulationResponse)
 async def run_production_simulation(
     payload: ProductionSimulationRequest,
     service: ProductionService = Depends(get_production_service),

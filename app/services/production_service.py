@@ -135,38 +135,81 @@ class ProductionService:
             if result:
                 return ProductionSimulationResponse(**result)
 
-        return self._stub_simulation(payload)
+        return self._build_repository_simulation(
+            payload=payload,
+            inventory_data=inventory_data,
+            production_data=production_data,
+            sales_data=sales_data,
+        )
 
     @staticmethod
-    def _stub_simulation(payload: ProductionSimulationRequest) -> ProductionSimulationResponse:
+    def _build_repository_simulation(
+        payload: ProductionSimulationRequest,
+        inventory_data: list[dict],
+        production_data: list[dict],
+        sales_data: list[dict],
+    ) -> ProductionSimulationResponse:
+        inventory_rows = [
+            row for row in inventory_data
+            if str(row.get("ITEM_CD") or "") == payload.item_id
+        ]
+        production_rows = [
+            row for row in production_data
+            if str(row.get("ITEM_CD") or "") == payload.item_id
+        ]
+        sales_rows = [
+            row for row in sales_data
+            if str(row.get("ITEM_CD") or "") == payload.item_id
+        ]
+
+        current_stock = sum(int(float(row.get("STOCK_QTY") or 0)) for row in inventory_rows)
+        sales_qty = sum(int(float(row.get("SALE_QTY") or 0)) for row in sales_rows)
+        production_qty = sum(int(float(row.get("PROD_QTY") or 0)) for row in production_rows)
+        actual_end_stock = max(current_stock - sales_qty, 0)
+        ai_guided_end_stock = max(current_stock + production_qty - sales_qty, 0)
+        additional_sales_qty = max(min(production_qty, sales_qty) - max(current_stock - sales_qty, 0), 0)
+        additional_profit_amt = int(round(additional_sales_qty * 1500 * payload.margin_rate))
+        additional_waste_qty = float(max(ai_guided_end_stock - actual_end_stock, 0))
+        additional_waste_cost = int(round(additional_waste_qty * 700))
+        net_profit_change = additional_profit_amt - additional_waste_cost
+
+        timeline = []
+        if production_qty > 0:
+            timeline.append(f"[생산 데이터] 누적 생산 {production_qty}개 반영")
+        if sales_qty > 0:
+            timeline.append(f"[판매 데이터] 누적 판매 {sales_qty}개 반영")
+
+        chart_points = []
+        for hour in ("08:00", "12:00", "16:00", "20:00"):
+            chart_points.append(
+                SimulationChartPoint(
+                    time=hour,
+                    actual_stock=float(actual_end_stock),
+                    ai_guided_stock=float(ai_guided_end_stock),
+                )
+            )
+
         return ProductionSimulationResponse(
             metadata={
                 "store_id": payload.store_id,
                 "item_id": payload.item_id,
                 "date": payload.simulation_date,
-                "stub": True,
+                "source": "repository",
+                "inventory_rows": len(inventory_rows),
+                "production_rows": len(production_rows),
+                "sales_rows": len(sales_rows),
             },
             summary_metrics=SimulationSummaryMetrics(
-                additional_sales_qty=12.0,
-                additional_profit_amt=18000,
-                additional_waste_qty=2.0,
-                additional_waste_cost=1400,
-                net_profit_change=16600,
-                performance_status="POSITIVE",
-                chance_loss_reduction=4500.0,
+                additional_sales_qty=float(additional_sales_qty),
+                additional_profit_amt=additional_profit_amt,
+                additional_waste_qty=additional_waste_qty,
+                additional_waste_cost=additional_waste_cost,
+                net_profit_change=net_profit_change,
+                performance_status="POSITIVE" if net_profit_change >= 0 else "NEGATIVE",
+                chance_loss_reduction=float(max(additional_profit_amt, 0)),
             ),
-            time_series_data=[
-                SimulationChartPoint(
-                    time=f"{h:02d}:00",
-                    actual_stock=max(0.0, 40.0 - h * 2.2),
-                    ai_guided_stock=max(0.0, 52.0 - h * 2.0),
-                )
-                for h in range(8, 24, 2)
-            ],
-            actions_timeline=[
-                "[10:00] AI 추천으로 20개 추가 생산",
-                "[14:00] AI 추천으로 15개 추가 생산",
-            ],
+            time_series_data=chart_points,
+            actions_timeline=timeline,
         )
 
     async def get_registration_summary(
