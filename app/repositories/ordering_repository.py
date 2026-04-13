@@ -8,55 +8,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.infrastructure.db.utils import has_table
 
-ORDER_OPTIONS = [
-    {
-        "id": "opt-a",
-        "label": "지난주 같은 요일",
-        "basis": "3월 24일(월) 기준",
-        "description": "가장 최근 데이터 기준이에요. 오늘 날씨와 비슷해 무난한 선택입니다.",
-        "recommended": True,
-        "items": [
-            {"name": "스트로베리 필드", "qty": 120, "note": "캠페인으로 8% 더 팔림"},
-            {"name": "글레이즈드", "qty": 96, "note": None},
-            {"name": "올드패션", "qty": 80, "note": None},
-            {"name": "초코 트위스트", "qty": 72, "note": None},
-        ],
-        "notes": ["지난주 캠페인으로 도넛 주문이 좀 많았어요", "오후 배달은 조금 줄었어요"],
-    },
-    {
-        "id": "opt-b",
-        "label": "2주 전 같은 요일",
-        "basis": "3월 17일(월) 기준",
-        "description": "행사나 이벤트 영향이 없는 평상시 기준이에요. 넉넉하지 않지만 안전해요.",
-        "recommended": False,
-        "items": [
-            {"name": "스트로베리 필드", "qty": 108, "note": None},
-            {"name": "글레이즈드", "qty": 88, "note": None},
-            {"name": "올드패션", "qty": 76, "note": None},
-            {"name": "초코 트위스트", "qty": 68, "note": None},
-        ],
-        "notes": ["행사 없었던 날 기준이라 안정적이에요", "재고가 남을 위험이 가장 낮아요"],
-    },
-    {
-        "id": "opt-c",
-        "label": "지난달 같은 요일",
-        "basis": "2월 24일(월) 기준",
-        "description": "한 달 전 같은 요일 기준이에요. 배달 주문이 지금보다 많았던 시기예요.",
-        "recommended": False,
-        "items": [
-            {"name": "스트로베리 필드", "qty": 132, "note": None},
-            {"name": "글레이즈드", "qty": 104, "note": None},
-            {"name": "올드패션", "qty": 88, "note": None},
-            {"name": "초코 트위스트", "qty": 80, "note": None},
-        ],
-        "notes": ["배달 주문이 지금보다 12% 더 많았어요", "커피 같이 구매가 많았어요"],
-    },
-]
-
 
 class OrderingRepository:
-    saved_selections: list[dict] = []
-
     @staticmethod
     def _build_history_filters(store_id: str | None = None, date_from: str | None = None, date_to: str | None = None) -> tuple[str, dict]:
         clauses: list[str] = []
@@ -266,7 +219,7 @@ class OrderingRepository:
             )
             if options:
                 return options
-        return ORDER_OPTIONS
+        return []
 
     async def get_notification_context(self, notification_id: int) -> dict:
         return {
@@ -292,10 +245,8 @@ class OrderingRepository:
                     ).mappings().one()
                     return dict(row)
             except SQLAlchemyError:
-                pass
-        payload = {**payload}
-        self.saved_selections.append(payload)
-        return {**payload, "saved": True}
+                return {**payload, "saved": False}
+        return {**payload, "saved": False}
 
     async def list_selection_history(
         self,
@@ -328,25 +279,8 @@ class OrderingRepository:
                     ).mappings().all()
                     return [dict(row) for row in rows]
             except SQLAlchemyError:
-                pass
-        return [
-            {
-                "option_id": entry["option_id"],
-                "reason": entry.get("reason"),
-                "actor": entry["actor"],
-                "saved": True,
-                "selected_at": "2026-03-31 00:00:00",
-                "store_id": entry.get("store_id"),
-            }
-            for entry in reversed(
-                [
-                    entry
-                    for entry in self.saved_selections
-                    if (store_id is None or entry.get("store_id") == store_id)
-                    and self._matches_date_range("2026-03-31 00:00:00", date_from=date_from, date_to=date_to)
-                ][-limit:]
-            )
-        ]
+                return []
+        return []
 
     async def get_selection_summary(
         self,
@@ -438,52 +372,26 @@ class OrderingRepository:
                         "filtered_date_to": date_to,
                     }
             except SQLAlchemyError:
-                pass
-
-        filtered_entries = [
-            entry
-            for entry in self.saved_selections
-            if (store_id is None or entry.get("store_id") == store_id)
-            and self._matches_date_range("2026-03-31 00:00:00", date_from=date_from, date_to=date_to)
-        ]
-        latest_entries = list(reversed(filtered_entries))
-        latest = latest_entries[0] if latest_entries else None
-        recent_actor_roles: list[str] = []
-        for entry in latest_entries:
-            actor = entry["actor"]
-            if actor not in recent_actor_roles:
-                recent_actor_roles.append(actor)
-            if len(recent_actor_roles) >= 5:
-                break
-        option_counts: dict[str, int] = {}
-        for entry in filtered_entries:
-            option_id = str(entry["option_id"])
-            option_counts[option_id] = option_counts.get(option_id, 0) + 1
-        return {
-            "total": len(filtered_entries),
-            "latest": (
-                {
-                    "option_id": latest["option_id"],
-                    "reason": latest.get("reason"),
-                    "actor": latest["actor"],
-                    "saved": True,
-                    "selected_at": "2026-03-31 00:00:00",
-                    "store_id": latest.get("store_id"),
+                return {
+                    "total": 0,
+                    "latest": None,
+                    "recommended_selected": False,
+                    "recent_actor_roles": [],
+                    "recent_selection_count_7d": 0,
+                    "option_counts": {},
+                    "summary_status": "empty",
+                    "filtered_store_id": store_id,
+                    "filtered_date_from": date_from,
+                    "filtered_date_to": date_to,
                 }
-                if latest
-                else None
-            ),
-            "recommended_selected": bool(latest and latest["option_id"] == "opt-a"),
-            "recent_actor_roles": recent_actor_roles,
-            "recent_selection_count_7d": len(filtered_entries),
-            "option_counts": option_counts,
-            "summary_status": (
-                "recommended_selected"
-                if latest and latest["option_id"] == "opt-a"
-                else "custom_selected"
-                if latest
-                else "empty"
-            ),
+        return {
+            "total": 0,
+            "latest": None,
+            "recommended_selected": False,
+            "recent_actor_roles": [],
+            "recent_selection_count_7d": 0,
+            "option_counts": {},
+            "summary_status": "empty",
             "filtered_store_id": store_id,
             "filtered_date_from": date_from,
             "filtered_date_to": date_to,

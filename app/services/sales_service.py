@@ -13,18 +13,6 @@ _DATA_LOOKUP_KEYWORDS = ["조회", "건수", "수치", "비율", "얼마", "몇"
 _SENSITIVE_KEYWORDS = ["이익", "이익률", "원가", "손익", "마진", "타점포", "점포 성과"]
 _HQ_ROLES = {"hq_operator", "hq_planner"}
 
-_STUB_COMPARISON = SalesComparison(
-    store="강남역점",
-    peer_group="유사 상권 10개 점포 평균",
-    summary="강남역점은 배달 비중과 앱 전환율이 비교군보다 낮고, 오전 매장 방문 매출은 더 높습니다.",
-    metrics=[
-        {"label": "배달 매출 비중", "store_value": "22%", "peer_value": "29%"},
-        {"label": "앱 쿠폰 사용률", "store_value": "22%", "peer_value": "31%"},
-        {"label": "오전 매장 방문 매출", "store_value": "58%", "peer_value": "49%"},
-    ],
-)
-
-
 class SalesService:
     def __init__(
         self,
@@ -65,7 +53,7 @@ class SalesService:
             return response
 
         ai_result: Optional[dict] = None
-        processing_route = "stub_repository"
+        processing_route = "repository"
         if self.ai_client:
             ai_result = await self.ai_client.query_sales(payload.prompt)
             processing_route = "ai_proxy"
@@ -75,12 +63,8 @@ class SalesService:
         else:
             response = await self.repository.get_query_response(payload.prompt)
 
-        comparison = None
-        if any(keyword in payload.prompt for keyword in _COMPARISON_KEYWORDS):
-            comparison = _STUB_COMPARISON
-
         result = SalesQueryResponse(
-            comparison=comparison,
+            comparison=None,
             query_type=query_type,
             processing_route=processing_route,
             **response,
@@ -93,7 +77,7 @@ class SalesService:
                 route=processing_route,
                 outcome="success",
                 message="매출 질의를 처리했습니다.",
-                metadata={"prompt": payload.prompt, "query_type": query_type, "comparison": comparison is not None},
+                metadata={"prompt": payload.prompt, "query_type": query_type, "comparison": False},
             )
         return result
 

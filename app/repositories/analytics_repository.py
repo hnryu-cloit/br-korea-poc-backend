@@ -6,15 +6,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.infrastructure.db.utils import has_table
 
-_STUB = [
-    {"label": "이번 주 총 매출", "value": "₩4,382,000", "change": "+6.2%", "trend": "up", "detail": "지난주 대비"},
-    {"label": "배달 건수", "value": "312건", "change": "-14.3%", "trend": "down", "detail": "지난주 대비"},
-    {"label": "홀 방문 고객", "value": "487명", "change": "+3.1%", "trend": "up", "detail": "지난주 대비"},
-    {"label": "앱 주문 비중", "value": "28%", "change": "+0%", "trend": "flat", "detail": "지난주 대비"},
-    {"label": "커피 동반 구매율", "value": "62%", "change": "+8.4%", "trend": "up", "detail": "지난주 대비"},
-    {"label": "평균 객단가", "value": "₩8,940", "change": "+2.7%", "trend": "up", "detail": "지난주 대비"},
-]
-
 
 class AnalyticsRepository:
     def __init__(self, engine: Engine | None = None) -> None:
@@ -22,26 +13,38 @@ class AnalyticsRepository:
 
     async def get_metrics(self) -> list[dict]:
         if not self.engine:
-            return _STUB
+            return []
+
+        items: list[dict] = []
         try:
             channel_metrics = self._get_channel_metrics()
-            sales_metrics = self._get_sales_metrics()
-            discount_metrics = self._get_discount_metrics()
-            if channel_metrics and sales_metrics:
-                items = [
-                    sales_metrics["total_sales"],
+        except SQLAlchemyError:
+            channel_metrics = None
+        if channel_metrics:
+            items.extend(
+                [
                     channel_metrics["delivery_orders"],
                     channel_metrics["hall_visits"],
                     channel_metrics["app_order_ratio"],
-                    sales_metrics["coffee_attach_ratio"],
                     channel_metrics["average_ticket"],
                 ]
-                if discount_metrics:
-                    items.append(discount_metrics["discount_ratio"])
-                return items
+            )
+
+        try:
+            sales_metrics = self._get_sales_metrics()
         except SQLAlchemyError:
-            pass
-        return _STUB
+            sales_metrics = None
+        if sales_metrics:
+            items.extend([sales_metrics["total_sales"], sales_metrics["coffee_attach_ratio"]])
+
+        try:
+            discount_metrics = self._get_discount_metrics()
+        except SQLAlchemyError:
+            discount_metrics = None
+        if discount_metrics:
+            items.append(discount_metrics["discount_ratio"])
+
+        return items
 
     def _get_channel_metrics(self) -> dict | None:
         if not has_table(self.engine, "core_channel_sales"):
