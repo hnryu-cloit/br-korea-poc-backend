@@ -30,6 +30,7 @@ br-korea-poc-backend/
 │   │       │   ├── channels.py         # GET /api/channels/drafts
 │   │       │   ├── data_catalog.py     # GET /api/data/catalog, /api/data/preview/{table}
 │   │       │   ├── health.py           # GET /api/health
+│   │       │   ├── home.py             # POST /api/home/overview
 │   │       │   ├── hq.py               # GET /api/hq/coaching, /api/hq/inspection
 │   │       │   ├── notifications.py    # GET /api/notifications
 │   │       │   ├── ordering.py         # 주문 옵션/선택/이력/요약
@@ -66,6 +67,7 @@ br-korea-poc-backend/
 │   │   ├── data_catalog.py
 │   │   ├── db_schemas.py               # raw/core 테이블 Pydantic 모델
 │   │   ├── notifications.py
+│   │   ├── home.py
 │   │   ├── ordering.py
 │   │   ├── production.py
 │   │   ├── review.py
@@ -79,6 +81,7 @@ br-korea-poc-backend/
 │   │   ├── bootstrap_service.py
 │   │   ├── data_catalog_service.py
 │   │   ├── notifications_service.py
+│   │   ├── home_service.py
 │   │   ├── ordering_service.py
 │   │   ├── planning_service.py
 │   │   ├── production_service.py
@@ -102,7 +105,8 @@ br-korea-poc-backend/
 │   ├── inspect_resource_db.py          # 적재 상태 조회
 │   └── test_ai_client_integration.py   # AI 클라이언트 통합 테스트
 ├── tests/
-│   └── test_health.py
+│   ├── test_health.py
+│   └── test_system_integration.py      # backend ↔ AI contract/system integration
 ├── Dockerfile
 ├── docker-compose.yml                  # PostgreSQL 컨테이너 (포트 5435)
 ├── environment.yml
@@ -116,7 +120,7 @@ br-korea-poc-backend/
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc` | PostgreSQL 연결 URL |
-| `AI_SERVICE_URL` | (빈 값) | AI 서비스 URL (미설정 시 stub 사용) |
+| `AI_SERVICE_URL` | (빈 값) | AI 서비스 URL (미설정 시 backend repository 계산 사용) |
 | `AI_SERVICE_TOKEN` | (빈 값) | AI 서비스 인증 토큰 |
 | `CORS_ORIGINS` | `http://localhost:5173` | 허용 Origin (쉼표 구분) |
 | `APP_ENV` | `local` | 실행 환경 |
@@ -173,6 +177,7 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 | `GET /health` | 서버 헬스체크 |
 | `GET /api/health` | API 라우터 헬스체크 |
 | `GET /api/bootstrap` | 앱 초기화 데이터 |
+| `POST /api/home/overview` | 홈 대시보드 요약 |
 | `GET /api/data/catalog` | raw/core 테이블 목록 |
 | `GET /api/data/preview/{table_name}` | 테이블 미리보기 |
 | `GET /api/analytics/metrics` | 상단 운영 지표 |
@@ -196,8 +201,20 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 | `GET /api/channels/drafts` | 채널 초안 |
 | `GET /api/review/checklist` | 리뷰 체크리스트 |
 | `POST /api/simulation/preview` | 시뮬레이션 미리보기 |
+| `POST /api/production/simulation` | 생산 시뮬레이션 리포트 |
+| `POST /api/v1/production/simulation` | 생산 시뮬레이션 리포트 alias |
 | `GET /api/hq/coaching` | 본사 주문 코칭 |
 | `GET /api/hq/inspection` | 본사 생산 점검 |
+
+### 홈 대시보드 응답 메모
+
+- `priority_actions[].ai_reasoning`: AI 추천 상세 근거
+- `priority_actions[].confidence_score`: AI 신뢰도 점수
+- `priority_actions[].is_finished_good`: 본사 납품 완제품 여부
+- `cards[].delivery_scheduled`: 주문 관리 카드의 배송 예정 여부
+- 생산 시뮬레이션은 `/api/production/simulation`과 `/api/v1/production/simulation`을 모두 지원합니다.
+- `tests/test_system_integration.py`는 backend 홈 응답 구조와 AI FastAPI 시뮬레이션 계약을 인메모리로 검증합니다.
+- HQ 코칭/점검 API는 `core_store_master`, `ordering_selections`, `production_registrations`를 기반으로 매장별 최신 운영 데이터를 조합해 응답합니다.
 
 ## 데이터 적재 파이프라인
 
@@ -329,4 +346,4 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 ## AI 서비스 연동
 
-`AI_SERVICE_URL`이 설정돼 있으면 `SalesService`가 `AIServiceClient`를 통해 AI 서비스로 질의를 프록시합니다. 미설정 시 repository stub 응답을 반환합니다.
+`AI_SERVICE_URL`이 설정돼 있으면 `SalesService`가 `AIServiceClient`를 통해 AI 서비스로 질의를 프록시합니다. 미설정 시에도 backend repository가 적재 데이터 기준으로 응답을 계산합니다.
