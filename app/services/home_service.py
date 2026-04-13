@@ -27,6 +27,7 @@ class HomeService:
             date_to=payload.business_date,
         )
         ordering_options = await self.ordering_service.list_options(notification_entry=False)
+        sales_status = self._build_sales_status(ordering_summary=ordering_summary, production_danger_count=production.danger_count)
 
         priority_actions = self._build_priority_actions(production=production, ordering_summary=ordering_summary)
         stats = self._build_stats(
@@ -39,6 +40,7 @@ class HomeService:
             ordering_summary=ordering_summary,
             ordering_deadline_minutes=ordering_options.deadline_minutes,
             ordering_option_count=len(ordering_options.options),
+            sales_status=sales_status,
         )
 
         return HomeOverviewResponse(
@@ -70,9 +72,10 @@ class HomeService:
                     focus_section=danger_item.sku_id,
                     related_sku_id=danger_item.sku_id,
                     ai_reasoning=(
-                        f"{danger_item.name} 판매 속도가 평소보다 빨라 {danger_item.depletion_time} 전에 소진될 가능성이 높습니다."
+                        f"{danger_item.name} 현재 재고 {danger_item.current}개와 예측 재고 {danger_item.forecast}개 차이로 "
+                        f"{danger_item.depletion_time} 전 소진 위험이 계산되었습니다."
                     ),
-                    confidence_score=0.92,
+                    confidence_score=self._calculate_confidence_score(danger_item.current, danger_item.forecast),
                     is_finished_good=False,
                 )
             )
@@ -91,8 +94,11 @@ class HomeService:
                 cta_label="주문 검토하기",
                 cta_path="/ordering",
                 focus_section="summary",
-                ai_reasoning="주문 마감 전 추천안 검토 이력이 충분하지 않아 누락 방지 확인이 필요합니다.",
-                confidence_score=0.88,
+                ai_reasoning=(
+                    f"최근 선택 {ordering_summary.total}건, 최근 7일 선택 {ordering_summary.recent_selection_count_7d}건을 기준으로 "
+                    "마감 전 검토 필요도를 계산했습니다."
+                ),
+                confidence_score=self._calculate_ordering_confidence(ordering_summary.total),
                 is_finished_good=False,
             )
         )
@@ -111,8 +117,10 @@ class HomeService:
                 cta_path="/production",
                 focus_section=warning_item.sku_id if warning_item else None,
                 related_sku_id=warning_item.sku_id if warning_item else None,
-                ai_reasoning="해당 품목은 본사 납품 완제품으로 분류되어 매장 생산 리드타임 계산 대상에서 제외됩니다.",
-                confidence_score=0.97,
+                ai_reasoning=(
+                    "매장 생산 대상이 아닌 품목 상태로 분류되어 생산 CTA를 비활성화했습니다."
+                ),
+                confidence_score=0.99,
                 is_finished_good=True,
             )
         )
@@ -124,7 +132,7 @@ class HomeService:
         return [
             HomeStatItem(key="production_risk_count", label="품절 위험 SKU", value=f"{danger_count}개", tone="danger"),
             HomeStatItem(key="ordering_deadline_minutes", label="주문 마감까지", value=f"{ordering_deadline_minutes}분", tone="primary"),
-            HomeStatItem(key="today_profit_estimate", label="오늘 순이익 추정", value="+342,000원", tone="success"),
+            HomeStatItem(key="today_profit_estimate", label="오늘 운영 상태", value=("위험 있음" if danger_count else "안정"), tone="success" if danger_count == 0 else "default"),
             HomeStatItem(key="alert_count", label="알림 상태", value=f"긴급 {alert_count}건", tone="default"),
         ]
 
@@ -134,6 +142,7 @@ class HomeService:
         ordering_summary,
         ordering_deadline_minutes: int,
         ordering_option_count: int,
+        sales_status: dict[str, str],
     ) -> list[HomeSummaryCard]:
         danger_items = [item for item in production.items if item.status in {"danger", "warning"}][:2]
         production_highlights = [
@@ -166,32 +175,61 @@ class HomeService:
             ],
             metrics=[
                 HomeCardMetric(label="주문 마감", value=f"{ordering_deadline_minutes}분 남음", tone="primary"),
-                HomeCardMetric(label="추천 기준", value="전일 / 전주 / 패턴", tone="default"),
+                HomeCardMetric(label="추천 기준", value=f"옵션 {ordering_option_count}개", tone="default"),
             ],
             cta_label="주문 검토하기",
             cta_path="/ordering",
-            prompts=["추천 주문량은?", "어제와 비교하면?", "날씨 영향은?"],
+            prompts=["추천 주문량은?", "최근 선택 현황은?", "마감 전 확인 항목은?"],
             status_label="검토 필요" if not ordering_summary.recommended_selected else "선택 완료",
             deadline_minutes=ordering_deadline_minutes,
-            delivery_scheduled=True,
+            delivery_scheduled=ordering_summary.total > 0,
         )
 
         sales_card = HomeSummaryCard(
             domain="sales",
             title="손익 분석",
-            description="순이익 및 손익분기점 분석",
+            description="현재 운영 데이터 기반 상태 요약",
             highlights=[
-                "어제 대비 매출 15% 증가",
-                "손익분기점을 초과 달성 중이며 객단가가 안정적으로 유지됩니다.",
+                sales_status["headline"],
+                sales_status["detail"],
             ],
             metrics=[
-                HomeCardMetric(label="오늘 순이익", value="+342,000원", tone="success"),
-                HomeCardMetric(label="손익분기점", value="초과 달성", tone="success"),
+                HomeCardMetric(label="위험 SKU", value=f"{production.danger_count}개", tone="danger" if production.danger_count else "success"),
+                HomeCardMetric(label="주문 선택", value=f"{ordering_summary.total}건", tone="default"),
             ],
             cta_label="손익분석 상세보기",
             cta_path="/sales",
-            prompts=["오늘 순이익은?", "손익분기점은?", "어제와 비교하면?"],
-            status_label="권장 확인",
+            prompts=["최근 매출 인사이트는?", "위험 요인은?", "운영 상태는?"],
+            status_label=sales_status["status_label"],
         )
 
         return [production_card, ordering_card, sales_card]
+
+    @staticmethod
+    def _calculate_confidence_score(current: int, forecast: int) -> float:
+        denominator = max(current + forecast, 1)
+        return round(min(0.99, 0.55 + (abs(current - forecast) / denominator) * 0.4), 2)
+
+    @staticmethod
+    def _calculate_ordering_confidence(total_orders: int) -> float:
+        return round(min(0.99, 0.5 + min(total_orders, 10) * 0.04), 2)
+
+    @staticmethod
+    def _build_sales_status(ordering_summary, production_danger_count: int) -> dict[str, str]:
+        if production_danger_count > 0:
+            return {
+                "headline": f"생산 위험 SKU {production_danger_count}개가 운영 상태에 직접 영향을 주고 있습니다.",
+                "detail": f"주문 선택 {ordering_summary.total}건, 최근 7일 선택 {ordering_summary.recent_selection_count_7d}건 기준으로 추가 확인이 필요합니다.",
+                "status_label": "주의",
+            }
+        if ordering_summary.total > 0:
+            return {
+                "headline": "주문 선택 이력이 존재하며 생산 위험 SKU는 없습니다.",
+                "detail": f"최근 선택 {ordering_summary.total}건이 기록되어 현재 운영 상태는 안정 범위입니다.",
+                "status_label": "안정",
+            }
+        return {
+            "headline": "운영 데이터가 제한적입니다.",
+            "detail": "주문 선택 또는 생산 위험 데이터가 충분하지 않아 상세 손익 판단은 제한됩니다.",
+            "status_label": "데이터 확인",
+        }
