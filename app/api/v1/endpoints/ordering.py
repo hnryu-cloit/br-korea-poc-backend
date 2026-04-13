@@ -60,6 +60,32 @@ async def list_order_selection_history(
     return await service.list_selection_history(limit=limit, store_id=store_id, date_from=date_from, date_to=date_to)
 
 
+@router.get("/deadline")
+async def get_ordering_deadline(
+    store_id: Optional[str] = Query(default=None),
+    service: OrderingService = Depends(get_ordering_service),
+) -> dict:
+    """주문 마감까지 남은 시간 정보를 반환합니다."""
+    from datetime import datetime
+    try:
+        import pytz
+        KST = pytz.timezone("Asia/Seoul")
+        now = datetime.now(KST)
+    except ImportError:
+        now = datetime.utcnow()
+
+    deadline = now.replace(hour=14, minute=0, second=0, microsecond=0)
+    delta = int((deadline - now).total_seconds() / 60)
+    sid = store_id or "gangnam"
+    return {
+        "store_id": sid,
+        "deadline": "14:00",
+        "minutes_remaining": max(0, delta),
+        "is_urgent": 0 <= delta <= 20,
+        "is_passed": delta < 0,
+    }
+
+
 @router.get("/selections/summary", response_model=OrderSelectionSummaryResponse)
 async def get_order_selection_summary(
     store_id: Optional[str] = Query(default=None),

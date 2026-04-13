@@ -72,6 +72,31 @@ class AIServiceClient:
             },
         )
 
+    async def _get(self, path: str, params: dict | None = None) -> dict | None:
+        url = f"{self._base_url}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, params=params, headers=self._headers)
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as exc:
+            logger.warning("AI 서비스 오류 (HTTP %s): %s", exc.response.status_code, url)
+            return None
+        except httpx.RequestError as exc:
+            logger.warning("AI 서비스 연결 실패: %s", exc)
+            return None
+
+    async def get_production_push_alerts(self, store_id: str) -> list[dict]:
+        """AI 서비스에서 생산 PUSH 알림 페이로드 목록을 조회합니다."""
+        result = await self._get("/api/production/alerts/push", params={"store_id": store_id})
+        if result is None:
+            return []
+        return result.get("alerts", [])
+
+    async def get_ordering_deadline_alert(self, store_id: str) -> dict | None:
+        """AI 서비스에서 주문 마감 알림 정보를 조회합니다."""
+        return await self._get("/api/ordering/deadline-alerts", params={"store_id": store_id})
+
     async def run_simulation(
         self,
         store_id: str,
