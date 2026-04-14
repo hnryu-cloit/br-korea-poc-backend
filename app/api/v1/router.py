@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     sales,
     signals,
     simulation,
+    home,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -33,3 +34,4 @@ api_router.include_router(notifications.router)
 api_router.include_router(analytics.router)
 api_router.include_router(hq.router)
 api_router.include_router(signals.router)
+api_router.include_router(home.router)

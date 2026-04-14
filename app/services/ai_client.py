@@ -32,42 +32,51 @@ class AIServiceClient:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
 
-    async def query_sales(self, prompt: str) -> dict | None:
+    async def query_sales(self, payload: dict) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
-        return await self._post("/sales/query", {"prompt": prompt})
+        return await self._post("/api/sales/query", payload)
 
-    async def predict_production(
+    async def run_production_simulation(
         self,
-        sku: str,
-        current_stock: int,
-        history: list[dict],
-        pattern_4w: list[float],
+        payload: dict,
+        inventory_data: list[dict],
+        production_data: list[dict],
+        sales_data: list[dict],
+        store_production_data: list[dict],
     ) -> dict | None:
-        """AI 서비스에 생산 위험 예측을 요청합니다. 실패 시 None을 반환합니다."""
+        """AI 서비스에 생산 가이드 시뮬레이션을 요청합니다. 실패 시 None을 반환합니다."""
         return await self._post(
-            "/management/production/predict",
+            "/api/production/simulation",
             {
-                "sku": sku,
-                "current_stock": current_stock,
-                "history": history,
-                "pattern_4w": pattern_4w,
+                "payload": payload,
+                "inventory_data": inventory_data,
+                "production_data": production_data,
+                "sales_data": sales_data,
+                "store_production_data": store_production_data,
+            },
+        )
+
+    async def get_home_dashboard(
+        self,
+        inventory_data: list[dict],
+        production_data: list[dict],
+        sales_data: list[dict],
+        store_production_data: list[dict],
+    ) -> dict | None:
+        """AI 서비스에 홈 대시보드 통합 분석을 요청합니다. 실패 시 None을 반환합니다."""
+        return await self._post(
+            "/api/home/overview",
+            {
+                "inventory_data": inventory_data,
+                "production_data": production_data,
+                "sales_data": sales_data,
+                "store_production_data": store_production_data,
             },
         )
 
     async def recommend_ordering(
         self,
-        store_id: str,
-        current_date: str,
-        is_campaign: bool = False,
-        is_holiday: bool = False,
+        payload: dict,
     ) -> dict | None:
         """AI 서비스에 주문 추천을 요청합니다. 실패 시 None을 반환합니다."""
-        return await self._post(
-            "/management/ordering/recommend",
-            {
-                "store_id": store_id,
-                "current_date": current_date,
-                "is_campaign": is_campaign,
-                "is_holiday": is_holiday,
-            },
-        )
+        return await self._post("/api/ordering/recommend", payload)

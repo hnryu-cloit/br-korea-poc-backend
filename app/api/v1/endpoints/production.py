@@ -62,3 +62,22 @@ async def get_production_registration_summary(
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionRegistrationSummaryResponse:
     return await service.get_registration_summary(store_id=store_id, date_from=date_from, date_to=date_to)
+
+
+@router.get("/dashboard")
+async def get_production_dashboard(
+    store_id: str,
+    target_date: str,
+    service: ProductionService = Depends(get_production_service),
+) -> dict:
+    """
+    [FE 연동] 매장별 생산 관리 대시보드 화면 데이터 반환
+    """
+    return await service.get_dashboard_summary(store_id=store_id, target_date=target_date)
+
+@router.post("/simulation")
+async def run_production_simulation(
+    payload: dict,
+    service: ProductionService = Depends(get_production_service),
+) -> dict:
+    return await service.run_simulation(payload)

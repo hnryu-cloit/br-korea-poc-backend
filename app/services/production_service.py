@@ -15,11 +15,17 @@ from app.schemas.production import (
     ProductionRegistrationResponse,
 )
 from app.services.audit_service import AuditService
-
+from app.services.ai_client import AIServiceClient
 
 class ProductionService:
-    def __init__(self, repository: ProductionRepository, audit_service: Optional[AuditService] = None) -> None:
+    def __init__(
+        self, 
+        repository: ProductionRepository, 
+        ai_client: Optional[AIServiceClient] = None,
+        audit_service: Optional[AuditService] = None
+    ) -> None:
         self.repository = repository
+        self.ai_client = ai_client
         self.audit_service = audit_service
 
     async def get_overview(self) -> ProductionOverviewResponse:
@@ -129,3 +135,51 @@ class ProductionService:
             filtered_date_from=summary.get("filtered_date_from"),
             filtered_date_to=summary.get("filtered_date_to"),
         )
+
+    async def _get_raw_simulation_data(self, store_id: str, target_date: str) -> dict:
+        """AI 서버로 보낼 시연용 데이터를 추출합니다. 
+        현재 백엔드 DB 연동 전이므로, 빈 배열을 반환하여 AI 서버의 기본 Mock 로직을 타게 합니다."""
+        return {
+            "inventory_data": [],
+            "production_data": [],
+            "sales_data": [],
+            "store_production_data": []
+        }
+
+    async def get_dashboard_summary(self, store_id: str, target_date: str) -> dict:
+        """AI 서버로부터 매장 대시보드 요약 정보를 가져옵니다."""
+        if not self.ai_client:
+            raise ValueError("AI_SERVICE_URL이 설정되지 않았습니다.")
+
+        raw_data = await self._get_raw_simulation_data(store_id=store_id, target_date=target_date)
+
+        result = await self.ai_client.get_home_dashboard(
+            inventory_data=raw_data["inventory_data"],
+            production_data=raw_data["production_data"],
+            sales_data=raw_data["sales_data"],
+            store_production_data=raw_data["store_production_data"]
+        )
+        return result
+
+    async def get_home_overview(self, store_id: str, target_date: str) -> dict:
+        """프론트엔드 홈 화면을 위한 통합 대시보드 조회"""
+        return await self.get_dashboard_summary(store_id, target_date)
+
+    async def run_simulation(self, payload: dict) -> dict:
+        """AI 서버에 생산 시뮬레이션을 요청합니다."""
+        if not self.ai_client:
+            raise ValueError("AI_SERVICE_URL이 설정되지 않았습니다.")
+
+        store_id = payload.get("store_id")
+        simulation_date = payload.get("simulation_date")
+
+        raw_data = await self._get_raw_simulation_data(store_id=store_id, target_date=simulation_date)
+
+        result = await self.ai_client.run_production_simulation(
+            payload=payload,
+            inventory_data=raw_data["inventory_data"],
+            production_data=raw_data["production_data"],
+            sales_data=raw_data["sales_data"],
+            store_production_data=raw_data["store_production_data"]
+        )
+        return result
