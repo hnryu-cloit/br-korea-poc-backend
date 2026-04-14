@@ -33,9 +33,35 @@ class AIServiceClient:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
 
-    async def query_sales(self, prompt: str) -> dict | None:
+    async def query_sales(self, prompt: str, store_id: str = "gangnam") -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
-        return await self._post("/sales/query", {"prompt": prompt})
+        result = await self._post("/sales/query", {"store_id": store_id, "query": prompt})
+        if result is None:
+            return None
+
+        if "text" in result and "actions" in result:
+            return result
+
+        answer = result.get("answer") or {}
+        return {
+            "text": answer.get("text", ""),
+            "evidence": answer.get("evidence", []),
+            "actions": answer.get("actions", []),
+            "store_context": "",
+            "data_source": "ai",
+            "comparison_basis": result.get("source_data_period", ""),
+            "calculation_date": "",
+            "comparison": None,
+            "blocked": False,
+            "masked_fields": [],
+            "confidence_score": 1.0,
+            "semantic_logic": None,
+            "sources": [],
+            "visual_data": {
+                "channel_analysis": result.get("channel_analysis"),
+                "profit_simulation": result.get("profit_simulation"),
+            },
+        }
 
     async def predict_production(
         self,

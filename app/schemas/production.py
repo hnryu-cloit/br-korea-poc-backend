@@ -37,6 +37,9 @@ class ProductionOverviewResponse(BaseModel):
     refresh_interval_minutes: int
     summary_stats: list[ProductionSummaryStat]
     alerts: list[ProductionOverviewAlert]
+    production_lead_time_minutes: int
+    danger_count: int
+    items: list[ProductionItem]
 
 
 class ProductionSkuDecision(BaseModel):
@@ -81,6 +84,23 @@ class Pagination(BaseModel):
 class GetProductionSkuListResponse(BaseModel):
     items: list[ProductionSkuItem]
     pagination: Pagination
+
+
+class ProductionSkuDetailResponse(BaseModel):
+    sku_id: str
+    sku_name: str
+    current_stock: int
+    forecast_stock_1h: int
+    recommended_qty: int
+    chance_loss_saving_pct: int
+    chance_loss_basis_text: str
+    predicted_stockout_time: Optional[str] = None
+    can_produce: Optional[bool] = None
+    sales_velocity: Optional[float] = None
+    tags: list[str] = Field(default_factory=list)
+    alert_message: Optional[str] = None
+    material_alert: Optional[bool] = False
+    material_alert_message: Optional[str] = None
 
 
 class ProductionAlertItem(BaseModel):

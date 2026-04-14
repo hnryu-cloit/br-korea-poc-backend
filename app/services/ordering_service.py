@@ -8,6 +8,7 @@ from app.schemas.ordering import (
     OrderingAlertsResponse,
     OrderingContextResponse,
     OrderingDeadlineAlert,
+    OrderOption,
     OrderSelectionHistoryItem,
     OrderSelectionHistoryResponse,
     OrderSelectionSummaryResponse,
@@ -29,8 +30,7 @@ class OrderingService:
         return OrderingOptionsResponse(
             deadline_minutes=20,
             notification_entry=notification_entry,
-            focus_option_id="opt-a" if notification_entry else None,
-            options=options,
+            options=[OrderOption(**o) for o in options],
         )
 
     async def get_notification_context(self, notification_id: int) -> OrderingContextResponse:
@@ -46,10 +46,10 @@ class OrderingService:
                 OrderingDeadlineAlert(
                     notification_id=2,
                     title=f"주문 마감 {before_minutes}분 전입니다",
-                    message=f"{focus_option['label']} 옵션을 우선 확인해 주세요. 추천 주문 수량 3개 옵션이 준비되었습니다.",
+                    message=f"{focus_option['title']} 옵션을 우선 확인해 주세요. 추천 주문 수량 3개 옵션이 준비되었습니다.",
                     deadline_minutes=before_minutes,
                     target_path="/ordering",
-                    focus_option_id=focus_option["id"],
+                    focus_option_id=focus_option["option_id"],
                     target_roles=["store_owner"],
                 )
             )
@@ -64,13 +64,18 @@ class OrderingService:
             await self.audit_service.record(
                 domain="ordering",
                 event_type="order_selection_saved",
-                actor_role=payload.actor,
+                actor_role=payload.actor_role,
                 route="api",
                 outcome="success",
                 message=f"{payload.option_id} 주문 선택을 저장했습니다.",
                 metadata={"reason_provided": bool(payload.reason), "option_id": payload.option_id},
             )
-        return OrderSelectionResponse(**({"saved": True, **saved} if "saved" not in saved else saved))
+        return OrderSelectionResponse(
+            selection_id=f"sel-{payload.option_id}-{datetime.now().strftime('%H%M%S')}",
+            option_id=payload.option_id,
+            reason=payload.reason,
+            saved=saved.get("saved", True),
+        )
 
     async def list_selection_history(
         self,

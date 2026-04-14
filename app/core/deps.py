@@ -57,7 +57,6 @@ def get_ordering_service() -> OrderingService:
 def get_production_service() -> ProductionService:
     return ProductionService(
         repository=ProductionRepository(engine=get_database_engine()),
-        ai_client=_get_ai_client(),
         audit_service=get_audit_service(),
         ai_client=_get_ai_client(),
     )

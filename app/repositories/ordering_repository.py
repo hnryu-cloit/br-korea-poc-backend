@@ -162,8 +162,8 @@ class OrderingRepository:
 
                     items = [
                         {
-                            "name": bucket["name"],
-                            "qty": int(bucket["qty"]),
+                            "sku_name": bucket["name"],
+                            "quantity": int(bucket["qty"]),
                             "note": "추천 상위 SKU" if row_index == 0 and idx == 0 else None,
                         }
                         for row_index, bucket in enumerate(
@@ -171,15 +171,18 @@ class OrderingRepository:
                         )
                     ][:4]
                     if items:
+                        raw_notes = notes_map[idx]
                         options.append(
                             {
-                                "id": f"opt-{chr(97 + idx)}",
-                                "label": labels[idx],
+                                "option_id": f"opt-{chr(97 + idx)}",
+                                "title": labels[idx],
                                 "basis": self._format_basis_date(date_value),
                                 "description": descriptions[idx],
                                 "recommended": idx == 0,
+                                "reasoning_text": raw_notes[0] if raw_notes else "",
+                                "reasoning_metrics": [],
+                                "special_factors": raw_notes[1:],
                                 "items": items,
-                                "notes": notes_map[idx],
                             }
                         )
                 return options
@@ -230,6 +233,7 @@ class OrderingRepository:
         }
 
     async def save_selection(self, payload: dict) -> dict:
+        actor_role = payload.get("actor_role", "store_owner")
         if self.engine and has_table(self.engine, "ordering_selections"):
             try:
                 with self.engine.begin() as connection:
@@ -237,8 +241,8 @@ class OrderingRepository:
                         text(
                             """
                             INSERT INTO ordering_selections(option_id, reason, actor, saved, store_id)
-                            VALUES (:option_id, :reason, :actor, TRUE, :store_id)
-                            RETURNING option_id, reason, actor, saved, store_id
+                            VALUES (:option_id, :reason, :actor_role, TRUE, :store_id)
+                            RETURNING option_id, reason, actor AS actor_role, saved, store_id
                             """
                         ),
                         payload,
@@ -265,10 +269,8 @@ class OrderingRepository:
                             SELECT
                                 option_id,
                                 reason,
-                                actor,
-                                saved,
-                                TO_CHAR(selected_at, 'YYYY-MM-DD HH24:MI:SS') AS selected_at,
-                                store_id
+                                actor AS actor_role,
+                                TO_CHAR(selected_at, 'YYYY-MM-DD HH24:MI:SS') AS selected_at
                             FROM ordering_selections
                             {filter_clause}
                             ORDER BY selected_at DESC
@@ -307,10 +309,8 @@ class OrderingRepository:
                             SELECT
                                 option_id,
                                 reason,
-                                actor,
-                                saved,
-                                TO_CHAR(selected_at, 'YYYY-MM-DD HH24:MI:SS') AS selected_at,
-                                store_id
+                                actor AS actor_role,
+                                TO_CHAR(selected_at, 'YYYY-MM-DD HH24:MI:SS') AS selected_at
                             FROM ordering_selections
                             {filter_clause}
                             ORDER BY selected_at DESC

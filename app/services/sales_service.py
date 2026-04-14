@@ -53,13 +53,13 @@ class SalesService:
             return response
 
         ai_result: Optional[dict] = None
-        processing_route = "repository"
+        processing_route = "stub_repository"
         if self.ai_client:
             ai_result = await self.ai_client.query_sales(payload.prompt)
-            processing_route = "ai_proxy"
 
         if ai_result is not None:
             response = ai_result
+            processing_route = "ai_proxy"
         else:
             response = await self.repository.get_query_response(payload.prompt)
 
@@ -88,6 +88,11 @@ class SalesService:
         date_to: str | None = None,
     ) -> SalesInsightsResponse:
         payload = await self.repository.get_insights(store_id=store_id, date_from=date_from, date_to=date_to)
+        for key in ("peak_hours", "channel_mix", "payment_mix", "menu_mix", "campaign_seasonality"):
+            section = payload.get(key)
+            if not section:
+                continue
+            section["status"] = "active" if section.get("status") == "active" else "review"
         return SalesInsightsResponse(**payload)
 
     def _classify_query(self, prompt: str) -> str:
