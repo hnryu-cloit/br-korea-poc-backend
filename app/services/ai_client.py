@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 import httpx
+from fastapi.encoders import jsonable_encoder
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class AIServiceClient:
         url = f"{self._base_url}{path}"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=body, headers=self._headers)
+                response = await client.post(url, json=jsonable_encoder(body), headers=self._headers)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as exc:

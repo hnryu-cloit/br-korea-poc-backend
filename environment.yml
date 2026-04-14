@@ -11,7 +11,8 @@ dependencies:
       - pydantic==2.9.2
       - pydantic-settings==2.5.2
       - sqlalchemy
-      - psycopg2-binary
+      - psycopg[binary]
+      - openpyxl
       - httpx
       - python-dotenv
       - pytest
