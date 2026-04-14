@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import get_production_service
 from app.schemas.production import (
@@ -13,6 +13,7 @@ from app.schemas.production import (
     ProductionSimulationRequest,
     ProductionSimulationResponse,
     GetProductionSkuListResponse,
+    ProductionSkuDetailResponse,
 )
 from app.services.production_service import ProductionService
 
@@ -28,12 +29,26 @@ async def get_production_overview(
 
 
 @router.get("/skus", response_model=GetProductionSkuListResponse)
+@router.get("/items", response_model=GetProductionSkuListResponse)
 async def get_production_sku_list(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    store_id: Optional[str] = Query(default=None),
     service: ProductionService = Depends(get_production_service),
 ) -> GetProductionSkuListResponse:
-    return await service.get_sku_list(page=page, page_size=page_size)
+    return await service.get_sku_list(page=page, page_size=page_size, store_id=store_id)
+
+
+@router.get("/items/{sku_id}", response_model=ProductionSkuDetailResponse)
+async def get_production_sku_detail(
+    sku_id: str,
+    store_id: Optional[str] = Query(default=None),
+    service: ProductionService = Depends(get_production_service),
+) -> ProductionSkuDetailResponse:
+    try:
+        return await service.get_sku_detail(sku_id=sku_id, store_id=store_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/alerts", response_model=ProductionAlertsResponse)
