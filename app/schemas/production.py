@@ -15,11 +15,72 @@ class ProductionItem(BaseModel):
     prod2: str
 
 
+class ProductionSummaryStat(BaseModel):
+    key: str
+    label: str
+    value: str
+    tone: str
+
+
+class ProductionOverviewAlert(BaseModel):
+    id: str
+    type: str
+    severity: str
+    title: str
+    description: str
+    sku_id: Optional[str] = None
+    ingredient_id: Optional[str] = None
+
+
 class ProductionOverviewResponse(BaseModel):
     updated_at: str
-    production_lead_time_minutes: int
-    danger_count: int
-    items: list[ProductionItem]
+    refresh_interval_minutes: int
+    summary_stats: list[ProductionSummaryStat]
+    alerts: list[ProductionOverviewAlert]
+
+
+class ProductionSkuDecision(BaseModel):
+    risk_level_label: str
+    sales_velocity: float
+    tags: list[str]
+    alert_message: str
+    can_produce: bool
+    predicted_stockout_time: Optional[str] = None
+    suggested_production_qty: int
+    chance_loss_prevented_amount: Optional[int] = None
+
+
+class ProductionSkuItem(BaseModel):
+    sku_id: str
+    sku_name: str
+    current_stock: int
+    forecast_stock_1h: int
+    avg_first_production_qty_4w: int
+    avg_first_production_time_4w: str
+    avg_second_production_qty_4w: int
+    avg_second_production_time_4w: str
+    status: str
+    chance_loss_saving_pct: int
+    speed_alert: Optional[bool] = False
+    speed_alert_message: Optional[str] = None
+    material_alert: Optional[bool] = False
+    material_alert_message: Optional[str] = None
+    depletion_eta_minutes: Optional[int] = None
+    recommended_production_qty: int
+    chance_loss_basis_text: str
+    decision: ProductionSkuDecision
+
+
+class Pagination(BaseModel):
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+
+
+class GetProductionSkuListResponse(BaseModel):
+    items: list[ProductionSkuItem]
+    pagination: Pagination
 
 
 class ProductionAlertItem(BaseModel):

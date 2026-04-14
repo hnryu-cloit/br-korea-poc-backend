@@ -10,6 +10,7 @@ from app.schemas.production import (
     ProductionRegistrationRequest,
     ProductionRegistrationSummaryResponse,
     ProductionRegistrationResponse,
+    GetProductionSkuListResponse,
 )
 from app.services.production_service import ProductionService
 
@@ -21,6 +22,15 @@ async def get_production_overview(
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionOverviewResponse:
     return await service.get_overview()
+
+
+@router.get("/skus", response_model=GetProductionSkuListResponse)
+async def get_production_sku_list(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    service: ProductionService = Depends(get_production_service),
+) -> GetProductionSkuListResponse:
+    return await service.get_sku_list(page=page, page_size=page_size)
 
 
 @router.get("/alerts", response_model=ProductionAlertsResponse)
