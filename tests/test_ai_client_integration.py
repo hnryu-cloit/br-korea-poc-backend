@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 import pytest_asyncio
 import respx
@@ -27,13 +29,14 @@ def client() -> AIServiceClient:
 @respx.mock
 async def test_query_sales_success(client: AIServiceClient) -> None:
     stub = {
-        "text": "배달 매출이 14% 감소했습니다.",
-        "evidence": ["배달앱 노출 하락"],
-        "actions": ["광고 입찰가 조정"],
-        "confidence_score": 0.9,
-        "semantic_logic": None,
-        "sources": [],
-        "visual_data": None,
+        "answer": {
+            "text": "배달 매출이 14% 감소했습니다.",
+            "evidence": ["배달앱 노출 하락"],
+            "actions": ["광고 입찰가 조정"],
+        },
+        "source_data_period": "최근 1개월",
+        "channel_analysis": {},
+        "profit_simulation": {},
     }
     respx.post(f"{AI_BASE_URL}/sales/query").mock(
         return_value=httpx.Response(200, json=stub)
@@ -42,8 +45,8 @@ async def test_query_sales_success(client: AIServiceClient) -> None:
     result = await client.query_sales("배달 매출 분석해줘")
 
     assert result is not None
-    assert result["text"] == stub["text"]
-    assert result["evidence"] == stub["evidence"]
+    assert result["text"] == stub["answer"]["text"]
+    assert result["evidence"] == stub["answer"]["evidence"]
 
 
 @pytest.mark.asyncio
@@ -69,7 +72,12 @@ async def test_query_sales_returns_none_on_connection_error(client: AIServiceCli
 @pytest.mark.asyncio
 @respx.mock
 async def test_query_sales_sends_bearer_token(client: AIServiceClient) -> None:
-    stub = {"text": "ok", "evidence": [], "actions": [], "confidence_score": 1.0, "semantic_logic": None, "sources": [], "visual_data": None}
+    stub = {
+        "answer": {"text": "ok", "evidence": [], "actions": []},
+        "source_data_period": "최근 1개월",
+        "channel_analysis": {},
+        "profit_simulation": {},
+    }
     route = respx.post(f"{AI_BASE_URL}/sales/query").mock(
         return_value=httpx.Response(200, json=stub)
     )
@@ -78,6 +86,7 @@ async def test_query_sales_sends_bearer_token(client: AIServiceClient) -> None:
 
     request = route.calls.last.request
     assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+    assert json.loads(request.content)["query"] == "테스트"
 
 
 # ── predict_production ────────────────────────────────────────────────────────

@@ -12,10 +12,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc"
     EXTERNAL_API_KEY: str = "stub-key"
 
-    AI_SERVICE_URL: str = ""
+    AI_SERVICE_URL: str = "http://localhost:6001"
     AI_SERVICE_TOKEN: str = ""
 
-    CORS_ORIGINS: str = "http://localhost:5173"
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:6003"
 
     @property
     def backend_root(self) -> Path:

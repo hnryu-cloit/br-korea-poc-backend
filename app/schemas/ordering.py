@@ -3,26 +3,39 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class OrderItem(BaseModel):
-    name: str
-    qty: int
+class OrderingOptionItemLine(BaseModel):
+    sku_id: Optional[str] = None
+    sku_name: str
+    quantity: int
     note: Optional[str] = None
 
 
+class OrderingOptionMetric(BaseModel):
+    key: str
+    value: str
+
+
 class OrderOption(BaseModel):
-    id: str
-    label: str
+    option_id: str
+    title: str
     basis: str
     description: str
     recommended: bool
-    items: list[OrderItem]
-    notes: list[str]
+    reasoning_text: str
+    reasoning_metrics: list[OrderingOptionMetric]
+    special_factors: list[str]
+    items: list[OrderingOptionItemLine]
 
 
 class OrderingOptionsResponse(BaseModel):
     deadline_minutes: int
+    deadline_at: Optional[str] = None
     notification_entry: bool = False
-    focus_option_id: Optional[str] = None
+    purpose_text: str = "주문 누락을 방지하고 최적 수량을 선택하세요."
+    caution_text: str = "최종 주문 결정은 점주 권한입니다. 추천 옵션은 보조 자료로만 활용해주세요."
+    weather_summary: Optional[str] = None
+    trend_summary: Optional[str] = None
+    business_date: Optional[str] = None
     options: list[OrderOption]
 
 
@@ -51,25 +64,24 @@ class OrderingAlertsResponse(BaseModel):
 class OrderSelectionRequest(BaseModel):
     option_id: str
     reason: Optional[str] = None
-    actor: str = "store_owner"
+    actor_role: str = "store_owner"
     store_id: Optional[str] = None
 
 
 class OrderSelectionResponse(BaseModel):
+    selection_id: Optional[str] = None
     option_id: str
     reason: Optional[str] = None
-    actor: str
     saved: bool
-    store_id: Optional[str] = None
 
 
 class OrderSelectionHistoryItem(BaseModel):
+    selection_id: Optional[str] = None
     option_id: str
+    option_title: Optional[str] = None
+    actor_role: str
     reason: Optional[str] = None
-    actor: str
-    saved: bool
     selected_at: str
-    store_id: Optional[str] = None
 
 
 class OrderSelectionHistoryResponse(BaseModel):

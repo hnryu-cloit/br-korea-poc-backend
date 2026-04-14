@@ -1,0 +1,3 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+
+ALTER TABLE raw_store_master ADD COLUMN IF NOT EXISTS embedding vector(768);
