@@ -245,6 +245,3 @@ CREATE TABLE IF NOT EXISTS raw_workbook_rows (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingestion_files_run_id ON ingestion_files(run_id);
-CREATE INDEX IF NOT EXISTS idx_raw_daily_store_item_tmzon_sale_dt ON raw_daily_store_item_tmzon(sale_dt);
-CREATE INDEX IF NOT EXISTS idx_raw_daily_store_item_sale_dt ON raw_daily_store_item(sale_dt);
-CREATE INDEX IF NOT EXISTS idx_raw_daily_store_online_sale_dt ON raw_daily_store_online(sale_dt);
