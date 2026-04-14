@@ -1,20 +1,86 @@
 services:
-  postgres:
-    image: postgres:16
-    container_name: br-korea-poc-postgres
-    environment:
-      POSTGRES_DB: br_korea_poc
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+  db:
+    image: ankane/pgvector:latest
+    container_name: br-korea-db
     ports:
       - "5435:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: br_korea_poc
     volumes:
-      - br_korea_poc_postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d br_korea_poc"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+    container_name: br-korea-migrate
+    command: ["python", "scripts/migrate_db.py"]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+    depends_on:
+      db:
+        condition: service_healthy
+
+  load:
+    build:
+      context: .
+    container_name: br-korea-load
+    command: ["python", "scripts/load_resource_to_db.py"]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+    volumes:
+      - ./resource:/resource:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  ai:
+    build:
+      context: ../br-korea-poc-ai
+    container_name: br-korea-ai
+    ports:
+      - "6001:6001"
+    env_file:
+      - ../br-korea-poc-ai/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/br_korea_poc
+      - APP_PORT=6001
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: .
+    container_name: br-korea-backend
+    ports:
+      - "6002:6002"
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+      - AI_SERVICE_URL=http://ai:6001
+    depends_on:
+      load:
+        condition: service_completed_successfully
+      ai:
+        condition: service_started
+
+  front:
+    build:
+      context: ../br-korea-poc-front
+    container_name: br-korea-front
+    ports:
+      - "6003:6003"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:6002
+    depends_on:
+      backend:
+        condition: service_started
 
 volumes:
-  br_korea_poc_postgres_data:
+  postgres_data:

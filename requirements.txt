@@ -8,3 +8,4 @@ openpyxl
 httpx
 python-dotenv
 pytest
+openpyxl
