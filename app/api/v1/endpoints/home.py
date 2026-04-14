@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends
+from app.core.deps import get_production_service
+from app.services.production_service import ProductionService
 
 from app.core.deps import get_home_service
 from app.schemas.home import HomeOverviewRequest, HomeOverviewResponse
