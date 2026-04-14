@@ -13,6 +13,12 @@ from app.schemas.production import (
     ProductionRegistrationHistoryResponse,
     ProductionRegistrationSummaryResponse,
     ProductionRegistrationResponse,
+    ProductionSummaryStat,
+    ProductionOverviewAlert,
+    GetProductionSkuListResponse,
+    ProductionSkuItem,
+    ProductionSkuDecision,
+    Pagination,
 )
 from app.services.audit_service import AuditService
 from app.services.ai_client import AIServiceClient
@@ -30,13 +36,109 @@ class ProductionService:
 
     async def get_overview(self) -> ProductionOverviewResponse:
         items = await self.repository.list_items()
+        
         danger_count = sum(1 for item in items if item["status"] == "danger")
+        warning_count = sum(1 for item in items if item["status"] == "warning")
+        safe_count = sum(1 for item in items if item["status"] == "safe")
+        
+        summary_stats = [
+            ProductionSummaryStat(key="danger_count", label="품절 위험", value=f"{danger_count}개", tone="danger"),
+            ProductionSummaryStat(key="warning_count", label="주의 필요", value=f"{warning_count}개", tone="primary"),
+            ProductionSummaryStat(key="safe_count", label="안전 재고", value=f"{safe_count}개", tone="success"),
+            ProductionSummaryStat(key="chance_loss_saving_total", label="찬스 로스 절감", value="23%", tone="default"),
+        ]
+        
+        alerts = []
+        for item in items:
+            if item["status"] == "danger":
+                alerts.append(
+                    ProductionOverviewAlert(
+                        id=f"alert-{item['sku_id']}",
+                        type="inventory_risk",
+                        severity="high",
+                        title=f"긴급: {item['name']} 재고 소진 임박",
+                        description=f"현재 {item['current']}개, 1시간 후 {item['forecast']}개 예상. 지금 생산하면 찬스 로스 감소 가능",
+                        sku_id=item["sku_id"],
+                    )
+                )
+            elif item["status"] == "warning":
+                 alerts.append(
+                    ProductionOverviewAlert(
+                        id=f"alert-{item['sku_id']}",
+                        type="speed_risk",
+                        severity="medium",
+                        title=f"{item['name']} 소진 속도 상승",
+                        description=f"평소보다 빠른 판매 속도 감지. 추가 생산 검토를 권장합니다.",
+                        sku_id=item["sku_id"],
+                    )
+                )
+
         return ProductionOverviewResponse(
-            updated_at="14:03",
-            production_lead_time_minutes=60,
-            danger_count=danger_count,
-            items=items,
+            updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+            refresh_interval_minutes=5,
+            summary_stats=summary_stats,
+            alerts=alerts,
         )
+
+    async def get_sku_list(self, page: int = 1, page_size: int = 20) -> GetProductionSkuListResponse:
+        raw_items = await self.repository.list_items()
+        
+        items = []
+        for raw in raw_items:
+            # Parse prod1/prod2 strings like "08:10 / 52개"
+            def parse_prod(s: str):
+                parts = s.split(" / ")
+                time = parts[0] if len(parts) > 0 else "00:00"
+                qty = int(parts[1].replace("개", "")) if len(parts) > 1 else 0
+                return time, qty
+            
+            p1_time, p1_qty = parse_prod(raw["prod1"])
+            p2_time, p2_qty = parse_prod(raw["prod2"])
+            
+            # Map risk level for decision
+            risk_label = "정상"
+            if raw["status"] == "danger":
+                risk_label = "즉시생산"
+            elif raw["status"] == "warning":
+                risk_label = "주의"
+            
+            decision = ProductionSkuDecision(
+                risk_level_label=risk_label,
+                sales_velocity=1.1 if raw["status"] != "safe" else 0.9,
+                tags=["속도↑"] if raw["status"] != "safe" else [],
+                alert_message="추가 생산이 권장됩니다." if raw["status"] != "safe" else "현재 재고가 안정적입니다.",
+                can_produce=True,
+                predicted_stockout_time=raw["depletion_time"] if raw["depletion_time"] != "-" else None,
+                suggested_production_qty=raw["recommended"],
+                chance_loss_prevented_amount=raw["recommended"] * 1200 if raw["recommended"] > 0 else None,
+            )
+            
+            item = ProductionSkuItem(
+                sku_id=raw["sku_id"],
+                sku_name=raw["name"],
+                current_stock=raw["current"],
+                forecast_stock_1h=raw["forecast"],
+                avg_first_production_qty_4w=p1_qty,
+                avg_first_production_time_4w=p1_time,
+                avg_second_production_qty_4w=p2_qty,
+                avg_second_production_time_4w=p2_time,
+                status=raw["status"],
+                chance_loss_saving_pct=15 if raw["status"] == "danger" else 5 if raw["status"] == "warning" else 0,
+                recommended_production_qty=raw["recommended"],
+                chance_loss_basis_text="1시간 후 재고 예측 및 4주 평균 손실률 기준",
+                decision=decision,
+                depletion_eta_minutes=60 if raw["status"] != "safe" else None,
+            )
+            items.append(item)
+            
+        pagination = Pagination(
+            page=page,
+            page_size=page_size,
+            total_items=len(items),
+            total_pages=1,
+        )
+        
+        return GetProductionSkuListResponse(items=items, pagination=pagination)
 
     async def get_alerts(self) -> ProductionAlertsResponse:
         items = await self.repository.list_items()
