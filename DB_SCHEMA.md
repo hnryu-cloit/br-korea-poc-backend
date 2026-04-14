@@ -109,12 +109,12 @@
 
 | 원본 workbook | 현재 적재 테이블 | 현재 앱 직접 사용 여부 | 비고 |
 |----------|--------|------|------|
-| `04. 생산/생산 데이터 추출.xlsx` | `raw_production_extract` | 아니오 | 생산 workbook 직접 적재 |
-| `05. 주문/주문+데이터.xlsx` | `raw_order_extract` | 아니오 | 주문 workbook 직접 적재 |
-| `06. 재고/재고+데이터+추출.xlsx` | `raw_inventory_extract` | 아니오 | 재고 workbook 직접 적재 |
-| `07. 정산 기준 정보/*.xlsx` | `raw_settlement_master`, `raw_workbook_rows` | 아니오 | 정산 기준 direct load + 원본 보존 |
-| `08. 통신사 제휴 할인 마스터/*.xlsx` | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | 아니오 | 데이터 시트 direct load + 메타 시트 보존 |
-| `09. 캠페인 마스터/캠페인+마스터.xlsx` | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | 아니오 | 캠페인 workbook 3개 raw 테이블로 직접 적재 |
+| `04. 생산/생산 데이터 추출.xlsx` | `raw_production_extract` | 예 (`production_repository`) | 생산 현황/SKU 목록 계산에 우선 참조 |
+| `05. 주문/주문+데이터.xlsx` | `raw_order_extract` | 예 (`ordering_repository`) | 주문 옵션 계산에 우선 참조 |
+| `06. 재고/재고+데이터+추출.xlsx` | `raw_inventory_extract` | 예 (`production_repository`) | 재고 추정에 우선 참조 |
+| `07. 정산 기준 정보/*.xlsx` | `raw_settlement_master`, `raw_workbook_rows` | 예 (`sales_repository`, `signals_repository`) | 결제·할인 인사이트 및 시그널 컨텍스트에 사용 |
+| `08. 통신사 제휴 할인 마스터/*.xlsx` | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | 예 (`sales_repository`, `signals_repository`) | 활성 제휴 할인 맥락, 인사이트, 시그널에 사용 |
+| `09. 캠페인 마스터/캠페인+마스터.xlsx` | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | 예 (`sales_repository`) | 캠페인 시즌성 보정 인사이트에 사용 |
 
 resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 
@@ -398,7 +398,7 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 
 | API | 주요 참조 대상 | 설명 |
 |------|------|------|
-| `GET /api/ordering/options` | `core_daily_item_sales` 우선, 없으면 `raw_daily_store_item` | 최근 판매량 기준으로 주문 옵션의 상품/수량을 계산한다. |
+| `GET /api/ordering/options` | `raw_order_extract` 우선, 없으면 `core_daily_item_sales`, 최후 `raw_daily_store_item` | 주문 workbook 기반 상품/수량을 우선 계산한다. |
 | `POST /api/ordering/selections` | `ordering_selections` | 점주의 최종 주문 선택을 저장한다. |
 | `GET /api/ordering/selections/history` | `ordering_selections` | 저장된 주문 선택 이력을 조회한다. |
 | `GET /api/ordering/selections/summary` | `ordering_selections` | 최근 주문 선택 상태와 요약 지표를 계산한다. |
@@ -409,7 +409,8 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 
 | API | 주요 참조 대상 | 설명 |
 |------|------|------|
-| `GET /api/production/overview` | `core_hourly_item_sales` 우선, 없으면 `raw_daily_store_item_tmzon` | 최신 일자 판매 데이터를 기준으로 생산 대상 품목을 계산한다. |
+| `GET /api/production/overview` | `raw_production_extract` + `raw_inventory_extract` 우선, 없으면 `core_hourly_item_sales`, 최후 `raw_daily_store_item_tmzon` | 생산/재고 workbook 데이터를 우선 참조해 생산 대상 품목을 계산한다. |
+| `GET /api/production/items`, `GET /api/production/skus` | `raw_production_extract` + `raw_inventory_extract` 우선, 없으면 `core_hourly_item_sales` | SKU별 재고·예측·권장 수량 목록을 반환한다. |
 | `GET /api/production/alerts` | `core_hourly_item_sales` / `raw_daily_store_item_tmzon` 기반 계산 | 생산 위험 SKU를 서비스 로직으로 도출한다. |
 | `POST /api/production/registrations` | `production_registrations` | 생산 등록과 피드백 결과를 저장한다. |
 | `GET /api/production/registrations/history` | `production_registrations` | 생산 등록 이력을 조회한다. |
@@ -421,7 +422,7 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 |------|------|------|
 | `GET /api/sales/prompts` | DB 직접 참조 없음 | 추천 질문 목록은 현재 코드상 정적 데이터다. |
 | `POST /api/sales/query` | `core_channel_sales` 우선, 없으면 `raw_daily_store_online` | 배달/온라인 관련 질의는 채널 매출 데이터를 우선 사용한다. 그 외 질의는 스텁 응답 또는 서비스 로직을 사용한다. |
-| `GET /api/sales/insights` | `core_hourly_item_sales`, `core_channel_sales`, `raw_daily_store_pay_way`, `core_daily_item_sales` | 피크타임, 채널 믹스, 결제 믹스, 메뉴 믹스 인사이트를 각각 다른 소스에서 계산한다. |
+| `GET /api/sales/insights` | `core_hourly_item_sales`, `core_channel_sales`, `raw_daily_store_pay_way`, `core_daily_item_sales`, `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item`, `raw_settlement_master`, `raw_telecom_discount_policy` | 피크타임, 채널 믹스, 결제 믹스, 메뉴 믹스, 캠페인 시즌성 인사이트를 각각 다른 소스에서 계산한다. |
 
 ### 감사 로그 / 시스템 현황 API
 

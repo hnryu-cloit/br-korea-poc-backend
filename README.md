@@ -1,6 +1,6 @@
 # br-korea-poc-backend
 
-BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다.
+BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
 ## Tech Stack
 
@@ -30,7 +30,7 @@ br-korea-poc-backend/
 │   │       │   ├── channels.py         # GET /api/channels/drafts
 │   │       │   ├── data_catalog.py     # GET /api/data/catalog, /api/data/preview/{table}
 │   │       │   ├── health.py           # GET /api/health
-│   │       │   ├── home.py             # POST /api/home/overview
+│   │       │   ├── home.py             # GET /api/home/overview
 │   │       │   ├── hq.py               # GET /api/hq/coaching, /api/hq/inspection
 │   │       │   ├── notifications.py    # GET /api/notifications
 │   │       │   ├── ordering.py         # 주문 옵션/선택/이력/요약
@@ -120,11 +120,11 @@ br-korea-poc-backend/
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc` | PostgreSQL 연결 URL |
-| `AI_SERVICE_URL` | (빈 값) | AI 서비스 URL (미설정 시 backend repository 계산 사용) |
+| `AI_SERVICE_URL` | `http://localhost:6001` | AI 서비스 URL (미설정 시 repository/fallback 계산 사용) |
 | `AI_SERVICE_TOKEN` | (빈 값) | AI 서비스 인증 토큰 |
-| `CORS_ORIGINS` | `http://localhost:5173` | 허용 Origin (쉼표 구분) |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:6003` | 허용 Origin (쉼표 구분) |
 | `APP_ENV` | `local` | 실행 환경 |
-| `APP_PORT` | `8000` | 개발 서버 포트 |
+| `APP_PORT` | `8000` | 내부 기본 포트 |
 
 ## 실행
 
@@ -146,7 +146,7 @@ python scripts/load_resource_to_db.py
 python scripts/inspect_resource_db.py
 
 # 4) 개발 서버 실행
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 6002
 ```
 
 ### 실행 순서
@@ -160,8 +160,8 @@ uvicorn app.main:app --reload
 4. `uvicorn app.main:app --reload`
    FastAPI 개발 서버를 실행합니다.
 
-- Swagger UI: `http://localhost:8000/docs`
-- Redoc: `http://localhost:8000/redoc`
+- Swagger UI: `http://localhost:6002/docs`
+- Redoc: `http://localhost:6002/redoc`
 
 ### Docker 빌드 (단독 컨테이너)
 
@@ -177,7 +177,7 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 | `GET /health` | 서버 헬스체크 |
 | `GET /api/health` | API 라우터 헬스체크 |
 | `GET /api/bootstrap` | 앱 초기화 데이터 |
-| `POST /api/home/overview` | 홈 대시보드 요약 |
+| `GET /api/home/overview` | 홈 대시보드 요약 |
 | `GET /api/data/catalog` | raw/core 테이블 목록 |
 | `GET /api/data/preview/{table_name}` | 테이블 미리보기 |
 | `GET /api/analytics/metrics` | 상단 운영 지표 |
@@ -191,6 +191,9 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 | `GET /api/ordering/selections/history` | 주문 선택 이력 |
 | `GET /api/ordering/selections/summary` | 주문 요약 |
 | `GET /api/production/overview` | 생산 현황 |
+| `GET /api/production/items` | 생산 SKU 목록 (front 계약 기준) |
+| `GET /api/production/items/{sku_id}` | 생산 SKU 상세 (front 계약 기준) |
+| `GET /api/production/skus` | 생산 SKU 목록 legacy alias |
 | `GET /api/production/alerts` | 생산 알림 |
 | `POST /api/production/registrations` | 생산 등록 |
 | `GET /api/production/registrations/history` | 생산 등록 이력 |
@@ -215,6 +218,32 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 - 생산 시뮬레이션은 `/api/production/simulation`과 `/api/v1/production/simulation`을 모두 지원합니다.
 - `tests/test_system_integration.py`는 backend 홈 응답 구조와 AI FastAPI 시뮬레이션 계약을 인메모리로 검증합니다.
 - HQ 코칭/점검 API는 `core_store_master`, `ordering_selections`, `production_registrations`를 기반으로 매장별 최신 운영 데이터를 조합해 응답합니다.
+
+## Front 기준 계약 메모
+
+백엔드는 프론트가 기대하는 경로와 응답 shape를 기준으로 유지합니다.
+
+### Production
+
+- `GET /api/production/overview`
+  - 주요 필드: `updated_at`, `refresh_interval_minutes`, `summary_stats`, `alerts`
+- `GET /api/production/items`
+  - query: `page`, `page_size`, `store_id`
+- `GET /api/production/items/{sku_id}`
+  - query: `store_id`
+- `POST /api/production/registrations`
+
+`overview` 응답에는 내부 호환을 위해 `production_lead_time_minutes`, `danger_count`, `items`도 함께 유지합니다.
+
+### Sales
+
+- `POST /api/sales/query`는 프론트 응답 기준으로 `text`, `evidence`, `actions`, `processing_route`, `blocked` 등을 반환합니다.
+- AI 서비스 응답이 다른 shape여도 `services/ai_client.py`에서 프론트 계약으로 변환합니다.
+- fallback 처리 경로명은 프론트 표시 규칙에 맞춰 `stub_repository`를 사용합니다.
+
+### Audit
+
+- `/api/audit/logs`는 프론트 현재 동작 기준으로 기본 접근을 허용합니다.
 
 ## 데이터 적재 파이프라인
 
@@ -274,20 +303,20 @@ python scripts/inspect_resource_db.py
 
 | raw 테이블 | 현재 row 수 |
 |---|---|
-| `raw_pay_cd` | 253 |
-| `raw_store_master` | 33 |
-| `raw_daily_store_item_tmzon` | 2,795,780 |
-| `raw_daily_store_item` | 701,922 |
-| `raw_daily_store_online` | 182,474 |
-| `raw_daily_store_pay_way` | 70,965 |
-| `raw_daily_store_cpi_tmzon` | 553 |
+| `raw_pay_cd` | 506 |
+| `raw_store_master` | 66 |
+| `raw_daily_store_item_tmzon` | 5,591,560 |
+| `raw_daily_store_item` | 1,403,844 |
+| `raw_daily_store_online` | 364,948 |
+| `raw_daily_store_pay_way` | 141,930 |
+| `raw_daily_store_cpi_tmzon` | 1,106 |
 | `raw_production_extract` | 45,528 |
 | `raw_order_extract` | 481,821 |
 | `raw_inventory_extract` | 540,182 |
 | `raw_campaign_master` | 207 |
 | `raw_campaign_item_group` | 283 |
 | `raw_campaign_item` | 6,537 |
-| `raw_settlement_master` | 36 |
+| `raw_settlement_master` | 37 |
 | `raw_telecom_discount_type` | 20 |
 | `raw_telecom_discount_policy` | 53 |
 | `raw_telecom_discount_item` | 38 |
