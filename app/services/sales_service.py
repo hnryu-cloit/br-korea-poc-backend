@@ -85,8 +85,9 @@ class SalesService:
         existing_masked = response.pop("masked_fields", []) if isinstance(response, dict) else []
         merged_masked = pii_masked_fields + [f for f in existing_masked if f not in pii_masked_fields]
 
+        comparison_val = response.pop("comparison", None) if isinstance(response, dict) else None
         result = SalesQueryResponse(
-            comparison=None,
+            comparison=comparison_val,
             query_type=query_type,
             processing_route=processing_route,
             masked_fields=merged_masked,
