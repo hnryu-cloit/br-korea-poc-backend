@@ -170,18 +170,29 @@ class OrderingRepository:
                     if not aggregated:
                         continue
 
+                    sorted_items = sorted(
+                        aggregated.values(),
+                        key=lambda bucket: (-int(bucket["qty"]), str(bucket["name"])),
+                    )
                     items = [
                         {
                             "sku_name": bucket["name"],
                             "quantity": int(bucket["qty"]),
                             "note": "추천 상위 SKU" if row_index == 0 and idx == 0 else None,
                         }
-                        for row_index, bucket in enumerate(
-                            sorted(aggregated.values(), key=lambda bucket: (-int(bucket["qty"]), str(bucket["name"])))
-                        )
+                        for row_index, bucket in enumerate(sorted_items)
                     ][:4]
                     if items:
                         raw_notes = notes_map[idx]
+                        total_qty = sum(int(b["qty"]) for b in aggregated.values())
+                        top_item = sorted_items[0] if sorted_items else None
+                        reasoning_metrics: list[dict] = [
+                            {"key": "기준일", "value": self._format_basis_date(date_value)},
+                            {"key": "총 주문량", "value": f"{total_qty}개"},
+                            {"key": "품목 수", "value": f"{len(aggregated)}개 SKU"},
+                        ]
+                        if top_item:
+                            reasoning_metrics.append({"key": "주요 품목", "value": str(top_item["name"])})
                         options.append(
                             {
                                 "option_id": f"opt-{chr(97 + idx)}",
@@ -190,7 +201,7 @@ class OrderingRepository:
                                 "description": descriptions[idx],
                                 "recommended": idx == 0,
                                 "reasoning_text": raw_notes[0] if raw_notes else "",
-                                "reasoning_metrics": [],
+                                "reasoning_metrics": reasoning_metrics,
                                 "special_factors": raw_notes[1:],
                                 "items": items,
                             }
