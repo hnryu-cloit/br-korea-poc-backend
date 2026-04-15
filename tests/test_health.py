@@ -155,7 +155,7 @@ def test_ordering_selection_summary_filters_by_date_range() -> None:
 
 
 def test_home_overview() -> None:
-    response = client.post("/api/home/overview", json={})
+    response = client.get("/api/home/overview")
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload["priority_actions"], list)
@@ -475,3 +475,114 @@ async def test_repository_and_service_empty_fallbacks_without_engine() -> None:
     assert coaching_response.store_orders == []
     assert coaching_response.coaching_tips == []
     assert inspection_response.items == []
+
+
+# ── 역할 기반 접근 제어 테스트 ────────────────────────────────────────────
+
+def test_hq_coaching_forbidden_for_store_role() -> None:
+    response = client.get("/api/hq/coaching", headers={"X-User-Role": "store_owner"})
+    assert response.status_code == 403
+
+
+def test_hq_inspection_forbidden_for_store_role() -> None:
+    response = client.get("/api/hq/inspection", headers={"X-User-Role": "store_owner"})
+    assert response.status_code == 403
+
+
+def test_hq_coaching_allowed_for_hq_admin() -> None:
+    response = client.get("/api/hq/coaching", headers={"X-User-Role": "hq_admin"})
+    assert response.status_code == 200
+
+
+def test_hq_inspection_allowed_for_hq_operator() -> None:
+    response = client.get("/api/hq/inspection", headers={"X-User-Role": "hq_operator"})
+    assert response.status_code == 200
+
+
+def test_audit_logs_forbidden_without_valid_role() -> None:
+    # 알 수 없는 역할은 audit/logs 접근 불가
+    response = client.get("/api/audit/logs", headers={"X-User-Role": "unknown_role"})
+    assert response.status_code == 403
+
+
+def test_audit_logs_allowed_for_hq_admin() -> None:
+    response = client.get("/api/audit/logs", headers={"X-User-Role": "hq_admin"})
+    assert response.status_code == 200
+
+
+# ── 민감 질의 차단 회귀 테스트 ───────────────────────────────────────────
+
+def test_sales_query_blocks_sensitive_fields_for_store_role() -> None:
+    # store_owner 역할은 순이익·원가 질의가 차단됨
+    response = client.post(
+        "/api/sales/query",
+        json={"prompt": "전 매장 순이익과 원가율을 알려줘"},
+        headers={"X-User-Role": "store_owner"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["blocked"] is True
+    assert payload["processing_route"] == "policy_block"
+
+
+def test_sales_query_not_blocked_for_general_question() -> None:
+    response = client.post(
+        "/api/sales/query",
+        json={"prompt": "이번 주 배달 건수 현황을 알려줘"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["blocked"] is False
+
+
+# ── 주문 마감 시간 계산 테스트 ────────────────────────────────────────────
+
+def test_ordering_deadline_returns_expected_shape() -> None:
+    response = client.get("/api/ordering/deadline?store_id=gangnam")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["store_id"] == "gangnam"
+    assert payload["deadline"] == "14:00"
+    assert "minutes_remaining" in payload
+    assert isinstance(payload["minutes_remaining"], int)
+    assert isinstance(payload["is_urgent"], bool)
+    assert isinstance(payload["is_passed"], bool)
+
+
+def test_ordering_deadline_without_store_id() -> None:
+    response = client.get("/api/ordering/deadline")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["store_id"] == "default"
+    assert payload["minutes_remaining"] >= 0
+
+
+# ── 생산 등록 폼 테스트 ───────────────────────────────────────────────────
+
+def test_production_registration_form_returns_items() -> None:
+    response = client.get("/api/production/registrations/form")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+    assert "generated_at" in payload
+    assert isinstance(payload["items"], list)
+    if payload["items"]:
+        item = payload["items"][0]
+        assert "sku_id" in item
+        assert "recommended_qty" in item
+        assert "current_stock" in item
+        assert "forecast_stock_1h" in item
+
+
+def test_production_registration_form_with_store_id() -> None:
+    response = client.get("/api/production/registrations/form?store_id=gangnam")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "items" in payload
+
+
+# ── 공통 예외 처리 테스트 ─────────────────────────────────────────────────
+
+def test_unknown_route_returns_404() -> None:
+    response = client.get("/api/nonexistent-endpoint")
+    assert response.status_code == 404

@@ -298,7 +298,7 @@ def ai_client() -> TestClient:
 def test_home_overview_matches_frontend_contract() -> None:
     client = TestClient(backend_app)
 
-    response = client.post("/api/home/overview", json={})
+    response = client.get("/api/home/overview")
 
     assert response.status_code == 200
     payload = response.json()
