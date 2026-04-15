@@ -98,4 +98,10 @@ async def run_production_simulation(
     payload: ProductionSimulationRequest,
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionSimulationResponse:
-    return await service.run_simulation(payload)
+    try:
+        return await service.run_simulation(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"시뮬레이션 실행 오류: {str(exc)}",
+        ) from exc

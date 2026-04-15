@@ -387,14 +387,14 @@ class ProductionRepository:
         if not self.engine:
             return [], [], []
 
-        target_dt = datetime.strptime(simulation_date, "%Y-%m-%d")
-        date_from = (target_dt - timedelta(days=window_days)).strftime("%Y%m%d")
-
         inventory_data: list[dict] = []
         production_data: list[dict] = []
         sales_data: list[dict] = []
 
         try:
+            target_dt = datetime.strptime(simulation_date, "%Y-%m-%d")
+            date_from = (target_dt - timedelta(days=window_days)).strftime("%Y%m%d")
+
             with self.engine.connect() as conn:
                 if has_table(self.engine, "raw_inventory_extract"):
                     rows = conn.execute(
@@ -457,7 +457,7 @@ class ProductionRepository:
                         {"date_from": date_from, "store_id": store_id},
                     ).mappings().all()
                     sales_data = [dict(r) for r in rows]
-        except SQLAlchemyError:
+        except (SQLAlchemyError, ValueError):
             return [], [], []
 
         return inventory_data, production_data, sales_data
