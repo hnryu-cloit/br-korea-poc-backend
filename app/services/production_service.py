@@ -16,6 +16,8 @@ from app.schemas.production import (
     ProductionRegistrationHistoryResponse,
     ProductionRegistrationSummaryResponse,
     ProductionRegistrationResponse,
+    ProductionRegistrationFormItem,
+    ProductionRegistrationFormResponse,
     ProductionSimulationRequest,
     ProductionSimulationResponse,
     SimulationChartPoint,
@@ -191,6 +193,33 @@ class ProductionService:
             alert_message=target.alert_message,
             material_alert=target.material_alert,
             material_alert_message=target.material_alert_message,
+        )
+
+    async def get_registration_form(self, store_id: str | None = None) -> ProductionRegistrationFormResponse:
+        items = await self._get_sku_items()
+        history = await self.repository.list_registration_history(limit=50, store_id=store_id)
+        last_reg_map: dict[str, dict] = {}
+        for entry in history:
+            sku_id = entry.get("sku_id", "")
+            if sku_id not in last_reg_map:
+                last_reg_map[sku_id] = entry
+
+        form_items = [
+            ProductionRegistrationFormItem(
+                sku_id=item.sku_id,
+                sku_name=item.sku_name,
+                recommended_qty=item.recommended_production_qty,
+                current_stock=item.current_stock,
+                forecast_stock_1h=item.forecast_stock_1h,
+                basis_text=item.chance_loss_basis_text,
+                last_registered_at=last_reg_map[item.sku_id]["registered_at"] if item.sku_id in last_reg_map else None,
+                last_registered_qty=last_reg_map[item.sku_id]["qty"] if item.sku_id in last_reg_map else None,
+            )
+            for item in items
+        ]
+        return ProductionRegistrationFormResponse(
+            items=form_items,
+            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
 
     async def get_alerts(self) -> ProductionAlertsResponse:

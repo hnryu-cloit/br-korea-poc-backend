@@ -10,6 +10,7 @@ from app.schemas.production import (
     ProductionRegistrationRequest,
     ProductionRegistrationSummaryResponse,
     ProductionRegistrationResponse,
+    ProductionRegistrationFormResponse,
     ProductionSimulationRequest,
     ProductionSimulationResponse,
     GetProductionSkuListResponse,
@@ -49,6 +50,14 @@ async def get_production_sku_detail(
         return await service.get_sku_detail(sku_id=sku_id, store_id=store_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/registrations/form", response_model=ProductionRegistrationFormResponse)
+async def get_production_registration_form(
+    store_id: Optional[str] = Query(default=None),
+    service: ProductionService = Depends(get_production_service),
+) -> ProductionRegistrationFormResponse:
+    return await service.get_registration_form(store_id=store_id)
 
 
 @router.get("/alerts", response_model=ProductionAlertsResponse)

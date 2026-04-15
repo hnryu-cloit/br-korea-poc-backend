@@ -72,6 +72,11 @@ class ProductionSkuItem(BaseModel):
     recommended_production_qty: int
     chance_loss_basis_text: str
     decision: ProductionSkuDecision
+    predicted_stockout_time: Optional[str] = None
+    can_produce: Optional[bool] = True
+    sales_velocity: Optional[float] = None
+    tags: Optional[list[str]] = Field(default_factory=list)
+    alert_message: Optional[str] = None
 
 
 class Pagination(BaseModel):
@@ -205,6 +210,22 @@ class ProductionSimulationResponse(BaseModel):
     actions_timeline: list[str] = Field(
         validation_alias=AliasChoices("actions_timeline", "action_timeline")
     )
+
+
+class ProductionRegistrationFormItem(BaseModel):
+    sku_id: str
+    sku_name: str
+    recommended_qty: int
+    current_stock: int
+    forecast_stock_1h: int
+    basis_text: str
+    last_registered_at: Optional[str] = None
+    last_registered_qty: Optional[int] = None
+
+
+class ProductionRegistrationFormResponse(BaseModel):
+    items: list[ProductionRegistrationFormItem]
+    generated_at: str
 
 
 # AI 계약과의 호환성을 위한 별칭
