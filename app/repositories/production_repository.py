@@ -87,6 +87,18 @@ class ProductionRepository:
             return f"{basis[:4]}-{basis[4:6]}-{basis[6:8]}"
         return basis.replace("/", "-")[:10]
 
+    @staticmethod
+    def _parse_date_str(value: str) -> "date | None":
+        """YYYYMMDD 또는 YYYY-MM-DD 형식 텍스트를 date 객체로 변환."""
+        from datetime import date as date_type
+        s = value.strip()
+        for fmt in ("%Y%m%d", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
+
     def _fetch_metric_map(
         self,
         relation: str,
@@ -95,7 +107,14 @@ class ProductionRepository:
         item_code_candidates: tuple[str, ...],
         metric_candidates: tuple[str, ...],
         store_id: str | None = None,
+        window_days: int = 0,
     ) -> dict[str, dict[str, object]]:
+        """품목별 지표 집계를 반환.
+
+        window_days=0이면 최신 날짜 단일 기준 합산,
+        window_days>0이면 최신 날짜 기준 window_days일 동안 발생한
+        날짜별 합산을 생산 발생일 수로 나눈 일평균을 반환한다.
+        """
         columns = self._table_columns(relation)
         date_column = self._pick_column(columns, date_candidates)
         item_name_column = self._pick_column(columns, item_name_candidates)
@@ -148,40 +167,100 @@ class ProductionRepository:
                     logger.debug("_fetch_metric_map 최신 날짜 없음: relation=%s store_id=%s", relation, store_id)
                     return {}
 
-                rows = connection.execute(
-                    text(
-                        f"""
-                        SELECT
-                            {item_name_expr} AS item_name,
-                            {item_code_expr} AS item_code,
-                            {metric_expr} AS metric_value
-                        FROM {relation}
-                        WHERE CAST({date_column} AS TEXT) = :date_value
-                        {store_filter}
-                        """
-                    ),
-                    {"date_value": str(latest_date), **params_row},
-                ).mappings().all()
+                if window_days > 0:
+                    # 4주 평균 모드: window 내 날짜별 합계 → 생산 발생일 기준 평균
+                    latest_dt = self._parse_date_str(str(latest_date))
+                    if not latest_dt:
+                        logger.warning(
+                            "_fetch_metric_map: 날짜 파싱 실패 latest_date=%s relation=%s",
+                            latest_date, relation,
+                        )
+                        return {}
+                    min_date_str = (latest_dt - timedelta(days=window_days - 1)).strftime("%Y%m%d")
+                    max_date_str = latest_dt.strftime("%Y%m%d")
+
+                    rows = connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                {item_name_expr} AS item_name,
+                                {item_code_expr} AS item_code,
+                                CAST({date_column} AS TEXT) AS date_val,
+                                {metric_expr} AS metric_value
+                            FROM {relation}
+                            WHERE CAST({date_column} AS TEXT) BETWEEN :min_date AND :max_date
+                            {store_filter}
+                            """
+                        ),
+                        {"min_date": min_date_str, "max_date": max_date_str, **params_row},
+                    ).mappings().all()
+                else:
+                    rows = connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                {item_name_expr} AS item_name,
+                                {item_code_expr} AS item_code,
+                                {metric_expr} AS metric_value
+                            FROM {relation}
+                            WHERE CAST({date_column} AS TEXT) = :date_value
+                            {store_filter}
+                            """
+                        ),
+                        {"date_value": str(latest_date), **params_row},
+                    ).mappings().all()
         except SQLAlchemyError as exc:
             logger.warning("_fetch_metric_map 쿼리 실패: relation=%s store_id=%s error=%s", relation, store_id, exc)
             return {}
 
         metric_map: dict[str, dict[str, object]] = {}
-        for row in rows:
-            item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
-            item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
-            key = item_code or item_name
-            if not key:
-                continue
-            bucket = metric_map.setdefault(
-                key,
-                {
+
+        if window_days > 0:
+            # 1. 날짜별 합산
+            daily_sums: dict[str, dict[str, object]] = {}
+            for row in rows:
+                item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
+                item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
+                key = item_code or item_name
+                if not key:
+                    continue
+                date_val = str(row.get("date_val", ""))
+                bucket = daily_sums.setdefault(key, {
                     "item_cd": item_code or key,
                     "item_nm": item_name or item_code or key,
-                    "qty": 0,
-                },
-            )
-            bucket["qty"] = int(bucket["qty"]) + self._safe_int(row["metric_value"])
+                    "dates": set(),
+                    "total_qty": 0,
+                })
+                bucket["item_cd"] = item_code or bucket["item_cd"]
+                bucket["item_nm"] = item_name or bucket["item_nm"]
+                bucket["dates"].add(date_val)  # type: ignore[union-attr]
+                bucket["total_qty"] = int(bucket["total_qty"]) + self._safe_int(row["metric_value"])
+
+            # 2. 발생일 기준 일평균
+            for key, bucket in daily_sums.items():
+                n_days = max(1, len(bucket["dates"]))  # type: ignore[arg-type]
+                metric_map[key] = {
+                    "item_cd": bucket["item_cd"],
+                    "item_nm": bucket["item_nm"],
+                    "qty": int(round(int(bucket["total_qty"]) / n_days)),
+                }
+        else:
+            for row in rows:
+                item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
+                item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
+                key = item_code or item_name
+                if not key:
+                    continue
+                bucket = metric_map.setdefault(
+                    key,
+                    {
+                        "item_cd": item_code or key,
+                        "item_nm": item_name or item_code or key,
+                        "qty": 0,
+                    },
+                )
+                bucket["qty"] = int(bucket["qty"]) + self._safe_int(row["metric_value"])
+
         return metric_map
 
     def _build_new_items(
@@ -258,6 +337,7 @@ class ProductionRepository:
             if status != "safe":
                 prod2_qty = max(prod2_qty, recommended)
 
+            # raw_production_extract에 시각 컬럼이 없으므로 운영 기본 계획 시간(1차 08:00 / 2차 14:00) 사용
             risk_score = max(forecast - current, 0)
             ranked_rows.append(
                 {
@@ -276,12 +356,16 @@ class ProductionRepository:
 
         ranked_rows.sort(key=lambda row: (-int(row["_risk_score"]), -int(row["forecast"]), str(row["name"])))
 
+        now = datetime.now()
         for index, row in enumerate(ranked_rows, start=1):
-            if row["status"] == "safe":
+            if row["status"] == "safe" or row["forecast"] <= 0:
                 row["depletion_time"] = "-"
             else:
-                hours_left = max(1, int(round(row["current"] / max(row["forecast"], 1))))
-                row["depletion_time"] = f"{min(23, 14 + min(5, hours_left)):02d}:{(10 + index * 7) % 60:02d}"
+                # 실시간 기반: 현재고 / (일일판매량 / 8운영시간) = 소진까지 남은 시간
+                hourly_rate = row["forecast"] / 8.0
+                hours_until = min(23.0, row["current"] / max(hourly_rate, 0.1))
+                depletion_dt = now + timedelta(hours=hours_until)
+                row["depletion_time"] = depletion_dt.strftime("%H:%M")
             row.pop("_risk_score", None)
 
         return ranked_rows[:4]
@@ -293,6 +377,7 @@ class ProductionRepository:
         sale_map: dict[str, dict[str, object]] = {}
 
         if self.engine and has_table(self.engine, "raw_production_extract"):
+            # 4주(28일) 발생일 기준 일평균 수량 집계
             production_map = self._fetch_metric_map(
                 "raw_production_extract",
                 ("prod_dt",),
@@ -300,6 +385,7 @@ class ProductionRepository:
                 ("item_cd", "item_code", "sku_id"),
                 ("prod_qty",),
                 store_id=store_id,
+                window_days=28,
             )
             secondary_map = self._fetch_metric_map(
                 "raw_production_extract",
@@ -308,6 +394,7 @@ class ProductionRepository:
                 ("item_cd", "item_code", "sku_id"),
                 ("prod_qty_2", "reprod_qty", "prod_qty_3"),
                 store_id=store_id,
+                window_days=28,
             )
         else:
             logger.warning("list_items: raw_production_extract 테이블 없음 (engine=%s)", bool(self.engine))
