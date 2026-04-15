@@ -1,5 +1,7 @@
+import warnings
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -26,7 +28,6 @@ class Settings(BaseSettings):
         return self.backend_root.parent
 
     @property
-    @property
     def resource_root(self) -> Path:
         return (self.project_root / "resource").resolve()
 
@@ -41,6 +42,20 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+
+    @model_validator(mode="after")
+    def _validate_settings(self) -> "Settings":
+        if self.AI_SERVICE_URL and not self.AI_SERVICE_URL.startswith(("http://", "https://")):
+            warnings.warn(
+                f"AI_SERVICE_URL 형식이 올바르지 않을 수 있습니다: {self.AI_SERVICE_URL}",
+                stacklevel=2,
+            )
+        if self.APP_ENV == "production" and not self.AI_SERVICE_TOKEN:
+            warnings.warn(
+                "운영 환경에서 AI_SERVICE_TOKEN이 설정되지 않았습니다.",
+                stacklevel=2,
+            )
+        return self
 
     class Config:
         env_file = ".env"
