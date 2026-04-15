@@ -48,6 +48,19 @@ class ProductionService:
         self.ai_client = ai_client
 
     @staticmethod
+    def _calc_chance_loss_pct(current: int, forecast: int, status: str) -> int:
+        """실데이터(현재고·예상판매량) 기반 찬스 로스 절감율 산출 (A-10)."""
+        if status == "safe" or forecast <= 0:
+            return 0
+        if status == "danger":
+            deficit_ratio = max(0.0, (forecast - current) / forecast)
+            return min(30, max(10, int(round(deficit_ratio * 30))))
+        # warning: buffer(1.5×forecast) 대비 부족분
+        buffer = forecast * 1.5
+        buffer_deficit_ratio = max(0.0, (buffer - current) / max(buffer, 1))
+        return min(10, max(3, int(round(buffer_deficit_ratio * 10))))
+
+    @staticmethod
     def _decision_for_row(raw: dict) -> ProductionSkuDecision:
         risk_label = "정상"
         if raw["status"] == "danger":
@@ -55,11 +68,29 @@ class ProductionService:
         elif raw["status"] == "warning":
             risk_label = "주의"
 
+        current = int(raw.get("current", 0))
+        forecast = int(raw.get("forecast", 0))
+
+        # 실데이터 기반 판매 속도: 예상판매량 / 현재고 비율
+        if current > 0 and forecast > 0:
+            velocity = round(min(3.0, max(0.5, forecast / current)), 1)
+        else:
+            velocity = 1.2 if raw["status"] != "safe" else 0.9
+
+        # 실데이터 수치를 포함한 알림 메시지
+        if raw["status"] == "danger":
+            hours = max(1, int(round(current / max(forecast / 8.0, 0.1))))
+            alert_msg = f"현재 재고 {current}개, 약 {hours}시간 이내 소진 예상. 즉시 생산이 필요합니다."
+        elif raw["status"] == "warning":
+            alert_msg = f"현재 재고 {current}개, 예상 판매량 {forecast}개. 생산 준비가 필요합니다."
+        else:
+            alert_msg = "현재 재고가 안정적입니다."
+
         return ProductionSkuDecision(
             risk_level_label=risk_label,
-            sales_velocity=1.1 if raw["status"] != "safe" else 0.9,
+            sales_velocity=velocity,
             tags=["속도↑"] if raw["status"] != "safe" else [],
-            alert_message="추가 생산이 권장됩니다." if raw["status"] != "safe" else "현재 재고가 안정적입니다.",
+            alert_message=alert_msg,
             can_produce=True,
             predicted_stockout_time=raw["depletion_time"] if raw["depletion_time"] != "-" else None,
             suggested_production_qty=raw["recommended"],
@@ -88,9 +119,9 @@ class ProductionService:
             avg_second_production_qty_4w=p2_qty,
             avg_second_production_time_4w=p2_time,
             status=raw["status"],
-            chance_loss_saving_pct=15 if raw["status"] == "danger" else 5 if raw["status"] == "warning" else 0,
+            chance_loss_saving_pct=cls._calc_chance_loss_pct(raw["current"], raw["forecast"], raw["status"]),
             recommended_production_qty=raw["recommended"],
-            chance_loss_basis_text="1시간 후 재고 예측 및 4주 평균 손실률 기준",
+            chance_loss_basis_text="1시간 후 재고 예측 및 4주(28일) 생산 발생일 평균 기준",
             decision=decision,
             depletion_eta_minutes=60 if raw["status"] != "safe" else None,
             tags=decision.tags,
@@ -181,15 +212,14 @@ class ProductionService:
             for item in sku_items
             if item.status in {"danger", "warning"}
         ]
-        # TODO: 임시 하드코딩 — 실데이터 status 분류 정비 후 제거
         return ProductionOverviewResponse(
             updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
-            refresh_interval_minutes=5,
+            refresh_interval_minutes=3 if danger_count >= 1 else (5 if warning_count >= 1 else 10),
             summary_stats=[
-                ProductionSummaryStat(key="danger_count", label="품절 위험", value="1개", tone="danger"),
-                ProductionSummaryStat(key="warning_count", label="주의 필요", value="2개", tone="primary"),
-                ProductionSummaryStat(key="safe_count", label="안전 재고", value="1개", tone="success"),
-                ProductionSummaryStat(key="chance_loss_saving_total", label="찬스 로스 절감", value="23%", tone="default"),
+                ProductionSummaryStat(key="danger_count", label="품절 위험", value=f"{danger_count}개", tone="danger"),
+                ProductionSummaryStat(key="warning_count", label="주의 필요", value=f"{warning_count}개", tone="primary"),
+                ProductionSummaryStat(key="safe_count", label="안전 재고", value=f"{safe_count}개", tone="success"),
+                ProductionSummaryStat(key="chance_loss_saving_total", label="찬스 로스 절감", value=f"{int(round(sum(item.chance_loss_saving_pct for item in sku_items) / len(sku_items)) if sku_items else 0)}%", tone="default"),
             ],
             alerts=alerts,
             production_lead_time_minutes=60,
