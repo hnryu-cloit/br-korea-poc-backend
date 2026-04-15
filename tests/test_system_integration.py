@@ -112,8 +112,51 @@ def _install_ai_import_stubs() -> None:
         sys.modules["PIL"] = pil_module
         sys.modules["PIL.Image"] = pil_image_module
 
+    if "api.config" not in sys.modules:
+        api_config = types.ModuleType("api.config")
+
+        class _DummySettings:
+            def __init__(self, **kwargs: object) -> None:
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+            APP_NAME: str = "br-korea-poc-ai-stub"
+            AI_SERVICE_TOKEN: str = AI_TOKEN
+
+        api_config.Settings = _DummySettings  # type: ignore[attr-defined]
+        api_config.get_settings = lambda: _DummySettings()  # type: ignore[attr-defined]
+        sys.modules["api.config"] = api_config
+
+    if "api.main" not in sys.modules:
+        api_main = types.ModuleType("api.main")
+        from fastapi import FastAPI
+        api_main.app = FastAPI()  # type: ignore[attr-defined]
+        sys.modules["api.main"] = api_main
+
+    if "schemas.management" not in sys.modules:
+        schemas_management = types.ModuleType("schemas.management")
+
+        class _DummyResponse:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+        schemas_management.OrderingRecommendResponse = _DummyResponse  # type: ignore[attr-defined]
+        schemas_management.ProductionPredictResponse = _DummyResponse  # type: ignore[attr-defined]
+        sys.modules["schemas.management"] = schemas_management
+
+    if "schemas.contracts" not in sys.modules:
+        schemas_contracts = types.ModuleType("schemas.contracts")
+
+        class _DummyResponse:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+        schemas_contracts.ChartDataPoint = _DummyResponse  # type: ignore[attr-defined]
+        schemas_contracts.SimulationReportResponse = _DummyResponse  # type: ignore[attr-defined]
+        sys.modules["schemas.contracts"] = schemas_contracts
+
     if "api.dependencies" not in sys.modules:
         api_dependencies = types.ModuleType("api.dependencies")
+        from api.config import Settings as AISettings
 
         def _dummy_gemini_client() -> object:
             return object()
