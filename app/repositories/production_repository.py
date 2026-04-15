@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import inspect, text
@@ -7,6 +8,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.infrastructure.db.utils import has_table
+
+logger = logging.getLogger(__name__)
 
 
 class ProductionRepository:
@@ -91,13 +94,19 @@ class ProductionRepository:
         item_name_candidates: tuple[str, ...],
         item_code_candidates: tuple[str, ...],
         metric_candidates: tuple[str, ...],
+        store_id: str | None = None,
     ) -> dict[str, dict[str, object]]:
         columns = self._table_columns(relation)
         date_column = self._pick_column(columns, date_candidates)
         item_name_column = self._pick_column(columns, item_name_candidates)
         item_code_column = self._pick_column(columns, item_code_candidates)
         metric_column = self._pick_column(columns, metric_candidates)
+        store_column = self._pick_column(columns, ("masked_stor_cd", "store_id", "stor_cd"))
         if not self.engine or not date_column or not item_name_column or not metric_column:
+            logger.debug(
+                "_fetch_metric_map 컬럼 해석 실패: relation=%s date=%s name=%s metric=%s",
+                relation, date_column, item_name_column, metric_column,
+            )
             return {}
 
         item_name_expr = (
@@ -112,6 +121,14 @@ class ProductionRepository:
         )
         metric_expr = f"COALESCE(NULLIF(TRIM(CAST({metric_column} AS TEXT)), '')::numeric, 0)"
 
+        store_filter = (
+            f"AND CAST({store_column} AS TEXT) = :store_id"
+            if store_id and store_column
+            else ""
+        )
+        params_date: dict = {"store_id": store_id} if store_id else {}
+        params_row: dict = {"store_id": store_id} if store_id else {}
+
         try:
             with self.engine.connect() as connection:
                 latest_date = connection.execute(
@@ -120,12 +137,15 @@ class ProductionRepository:
                         SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
                         FROM {relation}
                         WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
+                        {store_filter}
                         ORDER BY date_value DESC
                         LIMIT 1
                         """
-                    )
+                    ),
+                    params_date,
                 ).scalar_one_or_none()
                 if not latest_date:
+                    logger.debug("_fetch_metric_map 최신 날짜 없음: relation=%s store_id=%s", relation, store_id)
                     return {}
 
                 rows = connection.execute(
@@ -137,11 +157,13 @@ class ProductionRepository:
                             {metric_expr} AS metric_value
                         FROM {relation}
                         WHERE CAST({date_column} AS TEXT) = :date_value
+                        {store_filter}
                         """
                     ),
-                    {"date_value": str(latest_date)},
+                    {"date_value": str(latest_date), **params_row},
                 ).mappings().all()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            logger.warning("_fetch_metric_map 쿼리 실패: relation=%s store_id=%s error=%s", relation, store_id, exc)
             return {}
 
         metric_map: dict[str, dict[str, object]] = {}
@@ -264,7 +286,7 @@ class ProductionRepository:
 
         return ranked_rows[:4]
 
-    async def list_items(self) -> list[dict]:
+    async def list_items(self, store_id: str | None = None) -> list[dict]:
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
         stock_map: dict[str, dict[str, object]] = {}
@@ -277,6 +299,7 @@ class ProductionRepository:
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
                 ("prod_qty",),
+                store_id=store_id,
             )
             secondary_map = self._fetch_metric_map(
                 "raw_production_extract",
@@ -284,7 +307,10 @@ class ProductionRepository:
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
                 ("prod_qty_2", "reprod_qty", "prod_qty_3"),
+                store_id=store_id,
             )
+        else:
+            logger.warning("list_items: raw_production_extract 테이블 없음 (engine=%s)", bool(self.engine))
 
         if self.engine and has_table(self.engine, "raw_inventory_extract"):
             stock_map = self._fetch_metric_map(
@@ -293,6 +319,7 @@ class ProductionRepository:
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
                 ("stock_qty",),
+                store_id=store_id,
             )
             sale_map = self._fetch_metric_map(
                 "raw_inventory_extract",
@@ -300,12 +327,17 @@ class ProductionRepository:
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
                 ("sale_qty",),
+                store_id=store_id,
             )
+        else:
+            logger.warning("list_items: raw_inventory_extract 테이블 없음 (engine=%s)", bool(self.engine))
 
         items = self._build_new_items(production_map, secondary_map, stock_map, sale_map)
         if items:
+            logger.debug("list_items: raw 테이블 기준 %d건 반환 (store_id=%s)", len(items), store_id)
             return items
 
+        logger.info("list_items: raw 테이블 데이터 없음, fallback 진행 (store_id=%s)", store_id)
         source_relation = None
         if self.engine and has_table(self.engine, "core_hourly_item_sales"):
             source_relation = "core_hourly_item_sales"
@@ -313,6 +345,14 @@ class ProductionRepository:
             source_relation = "raw_daily_store_item_tmzon"
 
         if self.engine and source_relation:
+            store_col_check = self._table_columns(source_relation)
+            store_col = self._pick_column(store_col_check, ("masked_stor_cd", "store_id", "stor_cd"))
+            store_where = (
+                f"AND CAST({store_col} AS TEXT) = :store_id"
+                if store_id and store_col
+                else ""
+            )
+            fallback_params: dict = {"store_id": store_id} if store_id else {}
             try:
                 with self.engine.connect() as connection:
                     rows = connection.execute(
@@ -321,6 +361,7 @@ class ProductionRepository:
                             WITH latest_day AS (
                                 SELECT MAX(sale_dt) AS sale_dt
                                 FROM {source_relation}
+                                WHERE sale_dt IS NOT NULL {store_where}
                             ),
                             ranked AS (
                                 SELECT
@@ -332,6 +373,7 @@ class ProductionRepository:
                                     ) AS row_num
                                 FROM {source_relation}
                                 WHERE sale_dt = (SELECT sale_dt FROM latest_day)
+                                {store_where}
                                 GROUP BY item_cd, item_nm
                             )
                             SELECT item_cd, item_nm, sale_qty
@@ -339,7 +381,8 @@ class ProductionRepository:
                             WHERE row_num <= 4
                             ORDER BY sale_qty DESC, item_nm
                             """
-                        )
+                        ),
+                        fallback_params,
                     ).mappings()
 
                     items = []
@@ -371,9 +414,11 @@ class ProductionRepository:
                             }
                         )
                     if items:
+                        logger.debug("list_items: fallback %s 기준 %d건 반환 (store_id=%s)", source_relation, len(items), store_id)
                         return items
-            except SQLAlchemyError:
-                pass
+            except SQLAlchemyError as exc:
+                logger.warning("list_items: fallback 쿼리 실패 relation=%s store_id=%s error=%s", source_relation, store_id, exc)
+        logger.warning("list_items: 모든 데이터 소스에서 데이터 없음 (store_id=%s)", store_id)
         return []
 
     async def fetch_simulation_data(

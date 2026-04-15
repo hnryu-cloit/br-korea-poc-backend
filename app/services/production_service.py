@@ -28,8 +28,13 @@ from app.schemas.production import (
     ProductionSkuDecision,
     Pagination,
 )
+import logging
+
 from app.services.audit_service import AuditService
 from app.services.ai_client import AIServiceClient
+
+logger = logging.getLogger(__name__)
+
 
 class ProductionService:
     def __init__(
@@ -97,12 +102,59 @@ class ProductionService:
             material_alert_message=None,
         )
 
-    async def _get_sku_items(self) -> list[ProductionSkuItem]:
-        raw_items = await self.repository.list_items()
-        return [self._sku_item_from_row(raw) for raw in raw_items]
+    async def _get_sku_items(self, store_id: str | None = None) -> list[ProductionSkuItem]:
+        raw_items = await self.repository.list_items(store_id=store_id)
+        items = [self._sku_item_from_row(raw) for raw in raw_items]
+        return await self._enrich_items_with_ai(items)
 
-    async def get_overview(self) -> ProductionOverviewResponse:
-        raw_items = await self.repository.list_items()
+    async def _enrich_items_with_ai(self, items: list[ProductionSkuItem]) -> list[ProductionSkuItem]:
+        """AI 예측 결과로 각 SKU 항목의 sales_velocity·alert_message·predicted_stockout_time·chance_loss를 보강합니다."""
+        if not self.ai_client or not items:
+            return items
+
+        enriched: list[ProductionSkuItem] = []
+        for item in items:
+            history = [
+                {"stock": item.current_stock, "sales": item.forecast_stock_1h, "production": 0}
+            ]
+            pattern_4w: list[float] = []
+
+            try:
+                result = await self.ai_client.predict_production(
+                    sku=item.sku_id,
+                    current_stock=item.current_stock,
+                    history=history,
+                    pattern_4w=pattern_4w,
+                )
+            except Exception as exc:
+                logger.warning("AI 예측 호출 실패 (sku=%s): %s", item.sku_id, exc)
+                result = None
+
+            if not result:
+                enriched.append(item)
+                continue
+
+            updates: dict = {}
+            if result.get("alert_message"):
+                updates["alert_message"] = result["alert_message"]
+            stockout = result.get("stockout_expected_at") or result.get("predicted_stockout_time")
+            if stockout:
+                updates["predicted_stockout_time"] = stockout
+                if item.decision:
+                    updates["decision"] = item.decision.model_copy(
+                        update={"predicted_stockout_time": stockout}
+                    )
+            if result.get("risk_detected") is True:
+                updates["sales_velocity"] = max(float(item.sales_velocity or 1.0), 1.2)
+                confidence = float(result.get("confidence") or 0.7)
+                updates["chance_loss_saving_pct"] = max(item.chance_loss_saving_pct, int(round(confidence * 20)))
+
+            enriched.append(item.model_copy(update=updates) if updates else item)
+
+        return enriched
+
+    async def get_overview(self, store_id: str | None = None) -> ProductionOverviewResponse:
+        raw_items = await self.repository.list_items(store_id=store_id)
         sku_items = [self._sku_item_from_row(raw) for raw in raw_items]
         danger_count = sum(1 for item in sku_items if item.status == "danger")
         warning_count = sum(1 for item in sku_items if item.status == "warning")
@@ -155,8 +207,7 @@ class ProductionService:
         page_size: int = 20,
         store_id: str | None = None,
     ) -> GetProductionSkuListResponse:
-        items = await self._get_sku_items()
-        del store_id
+        items = await self._get_sku_items(store_id=store_id)
 
         start = max(0, (page - 1) * page_size)
         end = start + page_size
@@ -172,9 +223,13 @@ class ProductionService:
         return GetProductionSkuListResponse(items=paged_items, pagination=pagination)
 
     async def get_sku_detail(self, sku_id: str, store_id: str | None = None) -> ProductionSkuDetailResponse:
-        items = await self._get_sku_items()
+        items = await self._get_sku_items(store_id=store_id)
         target = next((item for item in items if item.sku_id == sku_id), None)
-        del store_id
+        if target is None and store_id is not None:
+            # store_id 필터로 매칭 결과가 없으면 전체 조회로 재시도
+            logger.info("get_sku_detail: store_id=%s 로 sku_id=%s 없음, 전체 조회로 재시도", store_id, sku_id)
+            items = await self._get_sku_items(store_id=None)
+            target = next((item for item in items if item.sku_id == sku_id), None)
         if target is None:
             raise ValueError(f"sku not found: {sku_id}")
 

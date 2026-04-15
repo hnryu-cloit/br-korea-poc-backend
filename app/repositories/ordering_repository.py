@@ -101,6 +101,11 @@ class OrderingRepository:
             else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
         )
         quantity_expr = f"COALESCE(NULLIF(TRIM(CAST({quantity_column} AS TEXT)), '')::numeric, 0)"
+        store_filter_sql = ""
+        filter_params: dict[str, object] = {}
+        if store_id and store_column:
+            store_filter_sql = f" AND CAST({store_column} AS TEXT) = :store_id"
+            filter_params["store_id"] = store_id
 
         labels = ["지난주 같은 요일", "2주 전 같은 요일", "지난달 같은 요일"]
         descriptions = [
@@ -122,12 +127,12 @@ class OrderingRepository:
                         SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
                         FROM {relation}
                         WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
-                          AND (:store_id IS NULL OR {store_column if store_column else 'NULL'} IS NULL OR CAST({store_column if store_column else date_column} AS TEXT) = :store_id)
+                          {store_filter_sql}
                         ORDER BY date_value DESC
                         LIMIT 6
                         """
                     ),
-                    {"store_id": store_id},
+                    filter_params,
                 ).scalars().all()
                 options: list[dict] = []
                 for idx, date_value in enumerate(dates[:3]):
@@ -140,10 +145,10 @@ class OrderingRepository:
                                 {quantity_expr} AS quantity
                             FROM {relation}
                             WHERE CAST({date_column} AS TEXT) = :date_value
-                              AND (:store_id IS NULL OR {store_column if store_column else 'NULL'} IS NULL OR CAST({store_column if store_column else date_column} AS TEXT) = :store_id)
+                              {store_filter_sql}
                             """
                         ),
-                        {"date_value": str(date_value), "store_id": store_id},
+                        {"date_value": str(date_value), **filter_params},
                     ).mappings().all()
 
                     aggregated: dict[str, dict[str, object]] = {}

@@ -24,9 +24,10 @@ v1_router = APIRouter(prefix="/v1/production", tags=["production"])
 
 @router.get("/overview", response_model=ProductionOverviewResponse)
 async def get_production_overview(
+    store_id: Optional[str] = Query(default=None),
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionOverviewResponse:
-    return await service.get_overview()
+    return await service.get_overview(store_id=store_id)
 
 
 @router.get("/skus", response_model=GetProductionSkuListResponse)
