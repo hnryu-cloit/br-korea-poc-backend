@@ -80,6 +80,7 @@ class OrderSelectionHistoryItem(BaseModel):
     option_id: str
     option_title: Optional[str] = None
     actor_role: str
+    store_id: Optional[str] = None
     reason: Optional[str] = None
     selected_at: str
 

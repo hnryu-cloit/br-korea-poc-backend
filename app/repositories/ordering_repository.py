@@ -283,6 +283,7 @@ class OrderingRepository:
                                 option_id,
                                 reason,
                                 actor AS actor_role,
+                                store_id,
                                 TO_CHAR(selected_at, 'YYYY-MM-DD HH24:MI:SS') AS selected_at
                             FROM ordering_selections
                             {filter_clause}
@@ -323,6 +324,7 @@ class OrderingRepository:
                                 option_id,
                                 reason,
                                 actor AS actor_role,
+                                store_id,
                                 TO_CHAR(selected_at, 'YYYY-MM-DD HH24:MI:SS') AS selected_at
                             FROM ordering_selections
                             {filter_clause}
