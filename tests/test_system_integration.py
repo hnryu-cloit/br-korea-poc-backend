@@ -205,7 +205,7 @@ from api.config import get_settings as ai_get_settings
 from api.dependencies import get_ordering_service as ai_get_ordering_service
 from api.dependencies import get_production_service as ai_get_production_service
 from api.main import app as ai_app
-from api.schemas import OrderingRecommendResponse, ProductionPredictResponse
+from schemas.management import OrderingRecommendResponse, ProductionPredictResponse
 from schemas.contracts import ChartDataPoint, SimulationReportResponse as AIContractSimulationReportResponse
 
 
