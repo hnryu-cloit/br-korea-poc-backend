@@ -20,25 +20,28 @@ router = APIRouter(prefix="/ordering", tags=["ordering"])
 @router.get("/options", response_model=OrderingOptionsResponse)
 async def list_order_options(
     notification_entry: bool = Query(default=False),
+    store_id: Optional[str] = Query(default=None),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingOptionsResponse:
-    return await service.list_options(notification_entry=notification_entry)
+    return await service.list_options(notification_entry=notification_entry, store_id=store_id)
 
 
 @router.get("/context/{notification_id}", response_model=OrderingContextResponse)
 async def get_ordering_context(
     notification_id: int,
+    store_id: Optional[str] = Query(default=None),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingContextResponse:
-    return await service.get_notification_context(notification_id)
+    return await service.get_notification_context(notification_id, store_id=store_id)
 
 
 @router.get("/alerts", response_model=OrderingAlertsResponse)
 async def list_ordering_alerts(
     before_minutes: int = Query(default=20, ge=1, le=120),
+    store_id: Optional[str] = Query(default=None),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingAlertsResponse:
-    return await service.list_deadline_alerts(before_minutes=before_minutes)
+    return await service.list_deadline_alerts(before_minutes=before_minutes, store_id=store_id)
 
 
 @router.post("/selections", response_model=OrderSelectionResponse)
@@ -66,7 +69,7 @@ async def get_ordering_deadline(
     service: OrderingService = Depends(get_ordering_service),
 ) -> dict:
     """주문 마감까지 남은 시간 정보를 반환합니다."""
-    return service.get_deadline(store_id=store_id)
+    return await service.get_deadline(store_id=store_id)
 
 
 @router.get("/selections/summary", response_model=OrderSelectionSummaryResponse)

@@ -79,8 +79,10 @@ class OrderingRepository:
         item_name_candidates: tuple[str, ...],
         item_code_candidates: tuple[str, ...],
         quantity_candidates: tuple[str, ...],
+        store_id: str | None = None,
     ) -> list[dict]:
         columns = self._table_columns(relation)
+        store_column = self._pick_column(columns, ("masked_stor_cd", "store_id", "stor_cd"))
         date_column = self._pick_column(columns, date_candidates)
         item_name_column = self._pick_column(columns, item_name_candidates)
         item_code_column = self._pick_column(columns, item_code_candidates)
@@ -120,10 +122,12 @@ class OrderingRepository:
                         SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
                         FROM {relation}
                         WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
+                          AND (:store_id IS NULL OR {store_column if store_column else 'NULL'} IS NULL OR CAST({store_column if store_column else date_column} AS TEXT) = :store_id)
                         ORDER BY date_value DESC
                         LIMIT 6
                         """
-                    )
+                    ),
+                    {"store_id": store_id},
                 ).scalars().all()
                 options: list[dict] = []
                 for idx, date_value in enumerate(dates[:3]):
@@ -136,9 +140,10 @@ class OrderingRepository:
                                 {quantity_expr} AS quantity
                             FROM {relation}
                             WHERE CAST({date_column} AS TEXT) = :date_value
+                              AND (:store_id IS NULL OR {store_column if store_column else 'NULL'} IS NULL OR CAST({store_column if store_column else date_column} AS TEXT) = :store_id)
                             """
                         ),
-                        {"date_value": str(date_value)},
+                        {"date_value": str(date_value), "store_id": store_id},
                     ).mappings().all()
 
                     aggregated: dict[str, dict[str, object]] = {}
@@ -189,7 +194,7 @@ class OrderingRepository:
         except SQLAlchemyError:
             return []
 
-    async def list_options(self) -> list[dict]:
+    async def list_options(self, store_id: str | None = None) -> list[dict]:
         if self.engine and has_table(self.engine, "raw_order_extract"):
             options = self._build_options_from_relation(
                 "raw_order_extract",
@@ -197,6 +202,7 @@ class OrderingRepository:
                 ("item_nm", "item_name", "product_nm"),
                 ("item_cd", "item_code", "sku_id"),
                 ("ord_rec_qty", "ord_qty", "confrm_qty"),
+                store_id=store_id,
             )
             if options:
                 return options
@@ -208,6 +214,7 @@ class OrderingRepository:
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
                 ("sale_qty",),
+                store_id=store_id,
             )
             if options:
                 return options
@@ -219,6 +226,7 @@ class OrderingRepository:
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
                 ("sale_qty",),
+                store_id=store_id,
             )
             if options:
                 return options

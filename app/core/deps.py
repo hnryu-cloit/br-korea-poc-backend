@@ -51,6 +51,7 @@ def get_ordering_service() -> OrderingService:
     return OrderingService(
         repository=OrderingRepository(engine=get_database_engine()),
         audit_service=get_audit_service(),
+        ai_client=_get_ai_client(),
     )
 
 
