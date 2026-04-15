@@ -497,6 +497,24 @@ class SalesRepository:
                 ],
             }
 
+        # C-05: 전년 동월 매출 비교
+        if self.engine and any(kw in prompt for kw in ("전년", "작년", "동월", "지난해")):
+            yoy = self._query_yoy_comparison()
+            if yoy:
+                return yoy
+
+        # C-08: 상품별 매출 비교
+        if self.engine and any(kw in prompt for kw in ("상품", "제품", "품목")):
+            item = self._query_item_ranking()
+            if item:
+                return item
+
+        # C-10: 점포 간 평균 매출 비교
+        if self.engine and any(kw in prompt for kw in ("점포", "가맹점", "평균 매출")):
+            store = self._query_store_context()
+            if store:
+                return store
+
         if self.engine and source_relation:
             try:
                 with self.engine.connect() as connection:
@@ -544,6 +562,11 @@ class SalesRepository:
                                     "배달과 픽업 채널을 분리해 재분석",
                                 ],
                             }
+                    # C-09: 채널별 매출 상세 분석
+                    elif any(kw in prompt for kw in ("채널", "쿠팡", "배민", "해피오더")):
+                        channel = self._query_channel_breakdown(connection, source_relation)
+                        if channel:
+                            return channel
             except SQLAlchemyError:
                 pass
         return QUERY_RESPONSES.get(
@@ -993,4 +1016,214 @@ class SalesRepository:
                 "저성과 상품은 피크타임보다 비피크 시간대 테스트로 노출해 주세요.",
             ],
             "status": "active",
+        }
+
+    def _query_yoy_comparison(self) -> dict | None:
+        """전년 동월 대비 이번 달 매출 비교 (C-05)"""
+        relation, amt_col = None, None
+        if has_table(self.engine, "core_daily_item_sales"):
+            relation, amt_col = "core_daily_item_sales", "net_sale_amt"
+        elif has_table(self.engine, "raw_daily_store_item"):
+            relation, amt_col = "raw_daily_store_item", "sale_amt"
+        if not relation:
+            return None
+        try:
+            with self.engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT
+                            SUBSTRING(CAST(sale_dt AS TEXT), 1, 4) AS yr,
+                            SUBSTRING(CAST(sale_dt AS TEXT), 5, 2) AS mo,
+                            SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)) AS total_amt
+                        FROM {relation}
+                        WHERE sale_dt IS NOT NULL
+                        GROUP BY yr, mo
+                        ORDER BY yr DESC, mo DESC
+                        LIMIT 24
+                        """
+                    )
+                ).mappings().all()
+        except SQLAlchemyError:
+            return None
+
+        if not rows:
+            return None
+
+        by_ym: dict[tuple[str, str], float] = {}
+        for row in rows:
+            yr, mo = str(row["yr"]).strip(), str(row["mo"]).strip()
+            if len(yr) == 4 and len(mo) == 2:
+                by_ym[(yr, mo)] = float(row["total_amt"] or 0)
+
+        sorted_ym = sorted(by_ym.keys(), reverse=True)
+        if not sorted_ym:
+            return None
+
+        latest_yr, latest_mo = sorted_ym[0]
+        prev_yr = str(int(latest_yr) - 1)
+        current_amt = by_ym.get((latest_yr, latest_mo), 0)
+        prior_amt = by_ym.get((prev_yr, latest_mo), 0)
+
+        if prior_amt > 0:
+            change_pct = round((current_amt - prior_amt) / prior_amt * 100, 1)
+            direction = "증가" if change_pct > 0 else "감소"
+            return {
+                "text": (
+                    f"{latest_yr}년 {int(latest_mo)}월 매출은 전년 동월({prev_yr}년 {int(latest_mo)}월) 대비 "
+                    f"{abs(change_pct)}% {direction}했습니다."
+                ),
+                "evidence": [
+                    f"{latest_yr}년 {int(latest_mo)}월 매출: {int(current_amt):,}원",
+                    f"{prev_yr}년 {int(latest_mo)}월 매출: {int(prior_amt):,}원",
+                    f"전년 동월 대비 {change_pct:+.1f}%",
+                ],
+                "actions": [
+                    "월별 매출 추이를 인사이트 탭에서 추가 확인해 주세요.",
+                    "전년 동기 대비 성장 요인을 채널 믹스와 함께 점검해 주세요.",
+                ],
+            }
+        return {
+            "text": f"{latest_yr}년 {int(latest_mo)}월 매출 데이터를 확인했습니다. 전년 동월 비교 데이터가 부족합니다.",
+            "evidence": [
+                f"{latest_yr}년 {int(latest_mo)}월 누적 매출: {int(current_amt):,}원",
+                "전년 동월 데이터 없음",
+            ],
+            "actions": ["인사이트 탭에서 최신 기간별 매출 추이를 확인해 주세요."],
+        }
+
+    def _query_item_ranking(self) -> dict | None:
+        """상품별 매출 순위 조회 (C-08)"""
+        relation, amt_col = None, None
+        if has_table(self.engine, "core_daily_item_sales"):
+            relation, amt_col = "core_daily_item_sales", "net_sale_amt"
+        elif has_table(self.engine, "raw_daily_store_item"):
+            relation, amt_col = "raw_daily_store_item", "sale_amt"
+        if not relation:
+            return None
+        try:
+            with self.engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타') AS item_nm,
+                            SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)) AS total_amt,
+                            SUM(CAST(COALESCE(NULLIF(CAST(sale_qty AS TEXT), ''), '0') AS NUMERIC)) AS total_qty
+                        FROM {relation}
+                        GROUP BY item_nm
+                        ORDER BY total_amt DESC, total_qty DESC
+                        LIMIT 5
+                        """
+                    )
+                ).mappings().all()
+        except SQLAlchemyError:
+            return None
+
+        if not rows:
+            return None
+
+        top_item = str(rows[0]["item_nm"])
+        evidence = [
+            f"{str(row['item_nm'])}: {int(float(row['total_amt'] or 0)):,}원 / {int(float(row['total_qty'] or 0)):,}개"
+            for row in rows[:4]
+        ]
+        return {
+            "text": (
+                f"상품별 매출 분석 결과, {top_item}이(가) 전체 기간 기준 가장 높은 매출을 기록했습니다. "
+                "상위 4개 상품 내역을 아래에 정리했습니다."
+            ),
+            "evidence": evidence,
+            "actions": [
+                "상위 상품과 음료 묶음 판매를 강화해 객단가를 높여 주세요.",
+                "하위 상품은 비피크 시간대 특가 테스트를 검토해 주세요.",
+            ],
+        }
+
+    def _query_store_context(self) -> dict | None:
+        """비교 대상 매장 수 조회 (C-10)"""
+        if not has_table(self.engine, "raw_store_master"):
+            return None
+        try:
+            with self.engine.connect() as connection:
+                store_count = connection.execute(
+                    text("SELECT COUNT(*) AS store_count FROM raw_store_master")
+                ).scalar_one()
+        except SQLAlchemyError:
+            return None
+
+        count = int(store_count or 0)
+        if count == 0:
+            return None
+        return {
+            "text": (
+                f"현재 비교 가능한 매장은 {count}개입니다. "
+                "점포 간 평균 매출 비교는 채널·상품 믹스 데이터를 함께 활용합니다."
+            ),
+            "evidence": [
+                f"비교 대상 매장: {count}개 (raw_store_master 기준)",
+                "채널별·상품별 비교는 인사이트 섹션에서 확인 가능",
+            ],
+            "actions": [
+                "인사이트 탭에서 채널 믹스와 메뉴 믹스를 확인해 주세요.",
+                "매장 간 상세 비교가 필요하면 본사 계정으로 재시도해 주세요.",
+            ],
+        }
+
+    def _query_channel_breakdown(self, connection, source_relation: str) -> dict | None:
+        """채널별 매출 상세 분석 (C-09)"""
+        try:
+            rows = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
+                        SUM(sale_amt) AS sale_amt,
+                        SUM(ord_cnt) AS ord_cnt
+                    FROM {source_relation}
+                    GROUP BY channel_div
+                    ORDER BY sale_amt DESC
+                    LIMIT 5
+                    """
+                )
+            ).mappings().all()
+        except SQLAlchemyError:
+            return None
+
+        if not rows:
+            return None
+
+        total_amt = sum(float(row["sale_amt"] or 0) for row in rows)
+        evidence = [
+            f"{str(row['channel_div'])}: {int(float(row['sale_amt'] or 0)):,}원 ({int(float(row['ord_cnt'] or 0)):,}건)"
+            for row in rows[:3]
+        ]
+        top_channel = str(rows[0]["channel_div"])
+        return {
+            "text": (
+                f"채널별 매출 분석 결과, {top_channel} 채널 비중이 가장 높습니다. "
+                "채널 전환 기회와 집중 시간대를 함께 확인하는 것이 좋습니다."
+            ),
+            "evidence": evidence,
+            "actions": [
+                "온라인 강세 시간대에 배달/픽업 전용 구성을 노출해 주세요.",
+                "오프라인 집중 시간대에는 회전율 중심 진열 운영을 유지해 주세요.",
+                "채널 인사이트 섹션에서 시간대별 온/오프라인 비중을 확인해 주세요.",
+            ],
+            "comparison": {
+                "store": "현재 매장",
+                "peer_group": "채널 평균",
+                "summary": f"전체 채널 매출 기준 {top_channel} 비중이 최상위입니다.",
+                "metrics": [
+                    {
+                        "label": str(row["channel_div"]),
+                        "store_value": (
+                            f"{round(float(row['sale_amt'] or 0) / total_amt * 100, 1):.1f}%"
+                            if total_amt > 0 else "0%"
+                        ),
+                        "peer_value": "-",
+                    }
+                    for row in rows[:3]
+                ],
+            },
         }
