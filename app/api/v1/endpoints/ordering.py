@@ -66,24 +66,7 @@ async def get_ordering_deadline(
     service: OrderingService = Depends(get_ordering_service),
 ) -> dict:
     """주문 마감까지 남은 시간 정보를 반환합니다."""
-    from datetime import datetime
-    try:
-        import pytz
-        KST = pytz.timezone("Asia/Seoul")
-        now = datetime.now(KST)
-    except ImportError:
-        now = datetime.utcnow()
-
-    deadline = now.replace(hour=14, minute=0, second=0, microsecond=0)
-    delta = int((deadline - now).total_seconds() / 60)
-    sid = store_id or "gangnam"
-    return {
-        "store_id": sid,
-        "deadline": "14:00",
-        "minutes_remaining": max(0, delta),
-        "is_urgent": 0 <= delta <= 20,
-        "is_passed": delta < 0,
-    }
+    return service.get_deadline(store_id=store_id)
 
 
 @router.get("/selections/summary", response_model=OrderSelectionSummaryResponse)

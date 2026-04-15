@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from app.repositories.ordering_repository import OrderingRepository
@@ -18,6 +18,30 @@ from app.schemas.ordering import (
 )
 from app.schemas.simulation import SimulationInput, SimulationResponse
 from app.services.audit_service import AuditService
+
+_KST = timezone(timedelta(hours=9))
+_DEFAULT_DEADLINE_HOUR = 14
+_DEFAULT_DEADLINE_MINUTE = 0
+_ALERT_THRESHOLD_MINUTES = 20
+
+
+def _now_kst() -> datetime:
+    """현재 KST 시각 반환 (pytz 미설치 환경 호환)."""
+    try:
+        import pytz
+        return datetime.now(pytz.timezone("Asia/Seoul"))
+    except ImportError:
+        return datetime.now(timezone.utc).astimezone(_KST)
+
+
+def _minutes_to_deadline(
+    now: datetime,
+    deadline_hour: int = _DEFAULT_DEADLINE_HOUR,
+    deadline_minute: int = _DEFAULT_DEADLINE_MINUTE,
+) -> int:
+    """마감까지 남은 분 수 반환 (마감 지났으면 음수)."""
+    deadline = now.replace(hour=deadline_hour, minute=deadline_minute, second=0, microsecond=0)
+    return int((deadline - now).total_seconds() / 60)
 
 
 class OrderingService:
@@ -57,6 +81,25 @@ class OrderingService:
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             alerts=alerts,
         )
+
+    def get_deadline(
+        self,
+        store_id: str | None = None,
+        deadline_hour: int = _DEFAULT_DEADLINE_HOUR,
+        deadline_minute: int = _DEFAULT_DEADLINE_MINUTE,
+    ) -> dict:
+        """주문 마감까지 남은 시간 정보를 반환합니다."""
+        now = _now_kst()
+        delta = _minutes_to_deadline(now, deadline_hour, deadline_minute)
+        sid = store_id or "default"
+        deadline_str = f"{deadline_hour:02d}:{deadline_minute:02d}"
+        return {
+            "store_id": sid,
+            "deadline": deadline_str,
+            "minutes_remaining": max(0, delta),
+            "is_urgent": 0 <= delta <= _ALERT_THRESHOLD_MINUTES,
+            "is_passed": delta < 0,
+        }
 
     async def save_selection(self, payload: OrderSelectionRequest) -> OrderSelectionResponse:
         saved = await self.repository.save_selection(payload.model_dump())
