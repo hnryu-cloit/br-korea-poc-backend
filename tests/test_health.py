@@ -89,7 +89,7 @@ def test_ordering_selection_save() -> None:
 def test_ordering_selection_history() -> None:
     client.post(
         "/api/ordering/selections",
-        json={"option_id": "opt-c", "reason": "히스토리 테스트", "actor": "store_owner", "store_id": "gangnam"},
+        json={"option_id": "opt-c", "reason": "히스토리 테스트", "actor": "store_owner", "store_id": "POC_001"},
     )
     response = client.get("/api/ordering/selections/history?limit=5")
     assert response.status_code == 200
@@ -103,7 +103,7 @@ def test_ordering_selection_history() -> None:
 def test_ordering_selection_summary() -> None:
     client.post(
         "/api/ordering/selections",
-        json={"option_id": "opt-a", "reason": "요약 테스트", "actor": "store_owner", "store_id": "gangnam"},
+        json={"option_id": "opt-a", "reason": "요약 테스트", "actor": "store_owner", "store_id": "POC_001"},
     )
     response = client.get("/api/ordering/selections/summary")
     assert response.status_code == 200
@@ -130,7 +130,7 @@ def test_ordering_selection_summary_filters_by_store() -> None:
 def test_ordering_selection_history_filters_by_date_range() -> None:
     client.post(
         "/api/ordering/selections",
-        json={"option_id": "opt-a", "reason": "기간 테스트", "actor": "store_owner", "store_id": "gangnam"},
+        json={"option_id": "opt-a", "reason": "기간 테스트", "actor": "store_owner", "store_id": "POC_001"},
     )
     matched = client.get("/api/ordering/selections/history?date_from=2026-03-31&date_to=2026-03-31")
     assert matched.status_code == 200
@@ -176,7 +176,7 @@ def test_production_overview() -> None:
     assert isinstance(payload["alerts"], list)
 
 def test_production_items() -> None:
-    response = client.get("/api/production/items?page=1&page_size=20&store_id=gangnam")
+    response = client.get("/api/production/items?page=1&page_size=20&store_id=POC_001")
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload["items"], list)
@@ -190,7 +190,7 @@ def test_production_item_detail() -> None:
     assert items
 
     sku_id = items[0]["sku_id"]
-    response = client.get(f"/api/production/items/{sku_id}?store_id=gangnam")
+    response = client.get(f"/api/production/items/{sku_id}?store_id=POC_001")
     assert response.status_code == 200
     payload = response.json()
     assert payload["sku_id"] == sku_id
@@ -210,7 +210,7 @@ def test_production_registration() -> None:
 def test_production_registration_history() -> None:
     client.post(
         "/api/production/registrations",
-        json={"sku_id": "sku-2", "qty": 24, "registered_by": "store_operator", "store_id": "gangnam"},
+        json={"sku_id": "sku-2", "qty": 24, "registered_by": "store_operator", "store_id": "POC_001"},
     )
     response = client.get("/api/production/registrations/history?limit=5")
     assert response.status_code == 200
@@ -224,7 +224,7 @@ def test_production_registration_history() -> None:
 def test_production_registration_summary() -> None:
     client.post(
         "/api/production/registrations",
-        json={"sku_id": "sku-3", "qty": 18, "registered_by": "store_owner", "store_id": "gangnam"},
+        json={"sku_id": "sku-3", "qty": 18, "registered_by": "store_owner", "store_id": "POC_001"},
     )
     response = client.get("/api/production/registrations/summary")
     assert response.status_code == 200
@@ -239,7 +239,7 @@ def test_production_registration_summary() -> None:
 
 def test_production_simulation_routes() -> None:
     request_body = {
-        "store_id": "gangnam",
+        "store_id": "POC_001",
         "item_id": "sku-1",
         "simulation_date": "2026-04-13",
         "lead_time_hour": 1,
@@ -250,7 +250,7 @@ def test_production_simulation_routes() -> None:
         response = client.post(path, json=request_body)
         assert response.status_code == 200
         payload = response.json()
-        assert payload["metadata"]["store_id"] == "gangnam"
+        assert payload["metadata"]["store_id"] == "POC_001"
         assert payload["metadata"]["source"] in {"repository", "ai-fastapi-contract"}
         assert len(payload["time_series_data"]) >= 1
         assert len(payload["actions_timeline"]) >= 0
@@ -259,7 +259,7 @@ def test_production_simulation_routes() -> None:
 def test_production_simulation_response_accepts_ai_contract_aliases() -> None:
     response = ProductionSimulationResponse.model_validate(
         {
-            "metadata": {"store_id": "gangnam", "item_id": "sku-1", "date": "2026-04-13"},
+            "metadata": {"store_id": "POC_001", "item_id": "sku-1", "date": "2026-04-13"},
             "summary_metrics": {
                 "additional_sales_qty": 12.0,
                 "additional_profit_amt": 18000,
@@ -296,7 +296,7 @@ def test_production_registration_summary_filters_by_store() -> None:
 def test_production_registration_history_filters_by_date_range() -> None:
     client.post(
         "/api/production/registrations",
-        json={"sku_id": "sku-1", "qty": 10, "registered_by": "store_owner", "store_id": "gangnam"},
+        json={"sku_id": "sku-1", "qty": 10, "registered_by": "store_owner", "store_id": "POC_001"},
     )
     matched = client.get("/api/production/registrations/history?date_from=2026-03-31&date_to=2026-03-31")
     assert matched.status_code == 200
@@ -353,10 +353,10 @@ def test_sales_query_blocks_sensitive_prompt_for_store_role() -> None:
 
 
 def test_sales_insights() -> None:
-    response = client.get("/api/sales/insights?store_id=gangnam&date_from=2026-03-01&date_to=2026-03-31")
+    response = client.get("/api/sales/insights?store_id=POC_001&date_from=2026-03-01&date_to=2026-03-31")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["filtered_store_id"] == "gangnam"
+    assert payload["filtered_store_id"] == "POC_001"
     assert payload["filtered_date_from"] == "2026-03-01"
     assert payload["peak_hours"]["title"] == "시간대 운영 코칭"
     assert len(payload["channel_mix"]["metrics"]) >= 1
@@ -539,10 +539,10 @@ def test_sales_query_not_blocked_for_general_question() -> None:
 # ── 주문 마감 시간 계산 테스트 ────────────────────────────────────────────
 
 def test_ordering_deadline_returns_expected_shape() -> None:
-    response = client.get("/api/ordering/deadline?store_id=gangnam")
+    response = client.get("/api/ordering/deadline?store_id=POC_001")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["store_id"] == "gangnam"
+    assert payload["store_id"] == "POC_001"
     assert payload["deadline"] == "14:00"
     assert "minutes_remaining" in payload
     assert isinstance(payload["minutes_remaining"], int)
@@ -576,7 +576,7 @@ def test_production_registration_form_returns_items() -> None:
 
 
 def test_production_registration_form_with_store_id() -> None:
-    response = client.get("/api/production/registrations/form?store_id=gangnam")
+    response = client.get("/api/production/registrations/form?store_id=POC_001")
     assert response.status_code == 200
     payload = response.json()
     assert "items" in payload
@@ -605,8 +605,8 @@ def test_production_items_response_fields() -> None:
 
 def test_production_store_id_consistency() -> None:
     """같은 store_id로 조회한 overview와 items가 같은 매장 기준으로 동작한다."""
-    overview_resp = client.get("/api/production/overview?store_id=gangnam")
-    items_resp = client.get("/api/production/items?store_id=gangnam")
+    overview_resp = client.get("/api/production/overview?store_id=POC_001")
+    items_resp = client.get("/api/production/items?store_id=POC_001")
     assert overview_resp.status_code == 200
     assert items_resp.status_code == 200
     overview_danger = overview_resp.json()["danger_count"]

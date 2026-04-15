@@ -321,14 +321,14 @@ def test_ai_fastapi_simulation_route_returns_contract(ai_client: TestClient) -> 
     response = ai_client.post(
         "/api/production/simulation",
         json={
-            "store_id": "gangnam",
+            "store_id": "POC_001",
             "item_id": "sku-1",
             "simulation_date": "2026-04-13",
             "lead_time_hour": 1,
             "margin_rate": 0.3,
             "inventory_data": [
                 {
-                    "MASKED_STOR_CD": "gangnam",
+                    "MASKED_STOR_CD": "POC_001",
                     "ITEM_CD": "sku-1",
                     "ITEM_NM": "스트로베리 필드",
                     "STOCK_QTY": 24,
@@ -338,7 +338,7 @@ def test_ai_fastapi_simulation_route_returns_contract(ai_client: TestClient) -> 
             ],
             "production_data": [
                 {
-                    "MASKED_STOR_CD": "gangnam",
+                    "MASKED_STOR_CD": "POC_001",
                     "ITEM_CD": "sku-1",
                     "ITEM_NM": "스트로베리 필드",
                     "PROD_QTY": 40,
@@ -350,7 +350,7 @@ def test_ai_fastapi_simulation_route_returns_contract(ai_client: TestClient) -> 
             ],
             "sales_data": [
                 {
-                    "MASKED_STOR_CD": "gangnam",
+                    "MASKED_STOR_CD": "POC_001",
                     "ITEM_CD": "sku-1",
                     "ITEM_NM": "스트로베리 필드",
                     "SALE_QTY": 3,
@@ -386,7 +386,7 @@ def test_ai_fastapi_management_alias_routes_are_compatible(ai_client: TestClient
     ordering_response = ai_client.post(
         "/management/ordering/recommend",
         json={
-            "store_id": "gangnam",
+            "store_id": "POC_001",
             "current_date": "2026-04-13",
             "is_campaign": True,
             "is_holiday": False,
@@ -413,7 +413,7 @@ def test_backend_simulation_round_trip_uses_ai_fastapi_app(ai_client: TestClient
         response = TestClient(backend_app).post(
             "/api/production/simulation",
             json={
-                "store_id": "gangnam",
+                "store_id": "POC_001",
                 "item_id": "sku-1",
                 "simulation_date": "2026-04-13",
                 "lead_time_hour": 1,
@@ -425,7 +425,7 @@ def test_backend_simulation_round_trip_uses_ai_fastapi_app(ai_client: TestClient
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["metadata"]["store_id"] == "gangnam"
+    assert payload["metadata"]["store_id"] == "POC_001"
     assert payload["metadata"]["source"] == "ai-fastapi-contract"
     assert len(payload["time_series_data"]) == 2
     assert len(payload["actions_timeline"]) == 2
@@ -434,4 +434,4 @@ def test_backend_simulation_round_trip_uses_ai_fastapi_app(ai_client: TestClient
     assert len(validated.time_series_data) == 2
     assert in_process_ai_client.last_request is not None
     assert in_process_ai_client.last_request["path"] == "/api/production/simulation"
-    assert in_process_ai_client.last_request["body"]["store_id"] == "gangnam"
+    assert in_process_ai_client.last_request["body"]["store_id"] == "POC_001"

@@ -24,7 +24,7 @@ _KST = timezone(timedelta(hours=9))
 _DEFAULT_DEADLINE_HOUR = 14
 _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
-_DEFAULT_STORE_ID = "gangnam"
+_DEFAULT_STORE_ID = "POC_001"
 
 
 def _now_kst() -> datetime:

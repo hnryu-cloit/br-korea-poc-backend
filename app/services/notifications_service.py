@@ -59,7 +59,7 @@ class NotificationsService:
         # AI 서비스 생산 PUSH 알림 병합 (ai_client 연결 시)
         if self.ai_client is not None:
             try:
-                push_alerts = await self.ai_client.get_production_push_alerts(store_id="gangnam")
+                push_alerts = await self.ai_client.get_production_push_alerts(store_id="POC_001")
                 for idx, alert in enumerate(push_alerts[:2], start=10):
                     severity = alert.get("severity", "medium")
                     items.append(
