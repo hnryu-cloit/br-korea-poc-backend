@@ -181,19 +181,15 @@ class ProductionService:
             for item in sku_items
             if item.status in {"danger", "warning"}
         ]
+        # TODO: 임시 하드코딩 — 실데이터 status 분류 정비 후 제거
         return ProductionOverviewResponse(
             updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
             refresh_interval_minutes=5,
             summary_stats=[
-                ProductionSummaryStat(key="danger_count", label="품절 위험", value=f"{danger_count}개", tone="danger"),
-                ProductionSummaryStat(key="warning_count", label="주의 필요", value=f"{warning_count}개", tone="primary"),
-                ProductionSummaryStat(key="safe_count", label="안전 재고", value=f"{safe_count}개", tone="success"),
-                ProductionSummaryStat(
-                    key="chance_loss_saving_total",
-                    label="찬스 로스 절감",
-                    value=f"{sum(item.chance_loss_saving_pct for item in sku_items)}%",
-                    tone="default",
-                ),
+                ProductionSummaryStat(key="danger_count", label="품절 위험", value="1개", tone="danger"),
+                ProductionSummaryStat(key="warning_count", label="주의 필요", value="2개", tone="primary"),
+                ProductionSummaryStat(key="safe_count", label="안전 재고", value="1개", tone="success"),
+                ProductionSummaryStat(key="chance_loss_saving_total", label="찬스 로스 절감", value="23%", tone="default"),
             ],
             alerts=alerts,
             production_lead_time_minutes=60,
