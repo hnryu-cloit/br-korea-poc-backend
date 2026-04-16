@@ -88,3 +88,6 @@ class SalesSummaryResponse(BaseModel):
     today_net_revenue: float = 0.0
     weekly_data: list[SalesWeeklyItem] = Field(default_factory=list)
     top_products: list[SalesProductItem] = Field(default_factory=list)
+    avg_margin_rate: float = 0.0
+    avg_net_profit_per_item: float = 0.0
+    estimated_today_profit: float = 0.0
