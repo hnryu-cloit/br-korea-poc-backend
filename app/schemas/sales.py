@@ -68,3 +68,23 @@ class SalesInsightsResponse(BaseModel):
     filtered_store_id: Optional[str] = None
     filtered_date_from: Optional[str] = None
     filtered_date_to: Optional[str] = None
+
+
+class SalesWeeklyItem(BaseModel):
+    day: str
+    revenue: float
+    net_revenue: float
+
+
+class SalesProductItem(BaseModel):
+    name: str
+    sales: float
+    qty: float
+
+
+class SalesSummaryResponse(BaseModel):
+    data_date: Optional[str] = None
+    today_revenue: float = 0.0
+    today_net_revenue: float = 0.0
+    weekly_data: list[SalesWeeklyItem] = Field(default_factory=list)
+    top_products: list[SalesProductItem] = Field(default_factory=list)

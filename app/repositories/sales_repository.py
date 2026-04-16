@@ -1170,6 +1170,154 @@ class SalesRepository:
             ],
         }
 
+    async def get_summary(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict:
+        """오늘 매출 요약 및 최근 7일 주간 데이터, 상품별 매출 순위를 실 DB에서 집계"""
+        result: dict = {
+            "data_date": None,
+            "today_revenue": 0.0,
+            "today_net_revenue": 0.0,
+            "weekly_data": [],
+            "top_products": [],
+        }
+        if not self.engine:
+            return result
+
+        # 1. 사용할 테이블·컬럼 결정
+        item_relation, amt_col, net_col, qty_col = None, None, None, None
+        if has_table(self.engine, "core_daily_item_sales"):
+            item_relation = "core_daily_item_sales"
+            amt_col = "sale_amt"
+            net_col = "net_sale_amt"
+            qty_col = "sale_qty"
+        elif has_table(self.engine, "raw_daily_store_item"):
+            item_relation = "raw_daily_store_item"
+            amt_col = "sale_amt"
+            net_col = "sale_amt"
+            qty_col = "sale_qty"
+
+        if not item_relation:
+            return result
+
+        store_filter = ""
+        params: dict = {}
+        if store_id:
+            store_filter = "AND masked_stor_cd = :store_id"
+            params["store_id"] = store_id
+        if date_from:
+            store_filter += " AND sale_dt >= :date_from"
+            params["date_from"] = date_from.replace("-", "")
+        if date_to:
+            store_filter += " AND sale_dt <= :date_to"
+            params["date_to"] = date_to.replace("-", "")
+
+        try:
+            with self.engine.connect() as connection:
+                # 2. 최신 데이터 날짜 조회
+                max_dt_row = connection.execute(
+                    text(f"SELECT MAX(sale_dt) AS max_dt FROM {item_relation} WHERE sale_dt IS NOT NULL {store_filter}"),
+                    params,
+                ).mappings().first()
+                if not max_dt_row or not max_dt_row["max_dt"]:
+                    return result
+                max_dt = str(max_dt_row["max_dt"])
+                result["data_date"] = max_dt
+
+                # 3. 오늘(최신일) 매출 집계
+                today_row = connection.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({net_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS net_revenue
+                        FROM {item_relation}
+                        WHERE sale_dt = :max_dt {store_filter}
+                        """
+                    ),
+                    {**params, "max_dt": max_dt},
+                ).mappings().first()
+                if today_row:
+                    result["today_revenue"] = float(today_row["revenue"] or 0)
+                    result["today_net_revenue"] = float(today_row["net_revenue"] or 0)
+
+                # 4. 최근 7개 영업일 데이터 집계
+                weekly_rows = connection.execute(
+                    text(
+                        f"""
+                        WITH recent_dates AS (
+                            SELECT DISTINCT sale_dt
+                            FROM {item_relation}
+                            WHERE sale_dt IS NOT NULL {store_filter}
+                            ORDER BY sale_dt DESC
+                            LIMIT 7
+                        )
+                        SELECT
+                            d.sale_dt,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(t.{amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(t.{net_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS net_revenue
+                        FROM recent_dates d
+                        JOIN {item_relation} t ON t.sale_dt = d.sale_dt {store_filter.replace("AND ", "AND t.")}
+                        GROUP BY d.sale_dt
+                        ORDER BY d.sale_dt ASC
+                        """
+                    ),
+                    params,
+                ).mappings().all()
+
+                _DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
+                weekly = []
+                for row in weekly_rows:
+                    dt_str = str(row["sale_dt"])
+                    if len(dt_str) == 8:
+                        try:
+                            from datetime import datetime as _dt
+                            dow = _dt.strptime(dt_str, "%Y%m%d").weekday()
+                            day_label = _DAY_LABELS[dow]
+                        except ValueError:
+                            day_label = dt_str[-2:]
+                    else:
+                        day_label = dt_str
+                    weekly.append({
+                        "day": day_label,
+                        "revenue": float(row["revenue"] or 0),
+                        "net_revenue": float(row["net_revenue"] or 0),
+                    })
+                result["weekly_data"] = weekly
+
+                # 5. 상품별 매출 순위 (전체 기간 기준)
+                product_rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT
+                            COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타') AS item_nm,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS sales,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({qty_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS qty
+                        FROM {item_relation}
+                        WHERE sale_dt IS NOT NULL {store_filter}
+                        GROUP BY item_nm
+                        ORDER BY sales DESC, qty DESC
+                        LIMIT 5
+                        """
+                    ),
+                    params,
+                ).mappings().all()
+                result["top_products"] = [
+                    {
+                        "name": str(row["item_nm"]),
+                        "sales": float(row["sales"] or 0),
+                        "qty": float(row["qty"] or 0),
+                    }
+                    for row in product_rows
+                ]
+        except SQLAlchemyError:
+            pass
+
+        return result
+
     def _query_channel_breakdown(self, connection, source_relation: str) -> dict | None:
         """채널별 매출 상세 분석 (C-09)"""
         try:
