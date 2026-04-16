@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+print("SCRIPT STARTING")
 import csv
 import json
 import sys
@@ -196,12 +197,17 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
 
 
 def main() -> None:
+    print("Starting main...")
     manifest = json.loads(settings.manifest_path.read_text(encoding="utf-8"))
+    print(f"Manifest loaded from {settings.manifest_path}")
     engine = get_database_engine()
+    print(f"Engine created: {engine}")
     if engine is None:
         raise RuntimeError("PostgreSQL driver is not installed. Install psycopg before loading resource data.")
 
+    print("Beginning transaction...")
     with engine.begin() as connection:
+        print("Transaction started. Inserting ingestion_run...")
         run_id = connection.execute(
             text(
                 """
