@@ -114,8 +114,10 @@ class AIServiceClient:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
 
-    async def get_production_push_alerts(self, store_id: str) -> list[dict]:
+    async def get_production_push_alerts(self, store_id: Optional[str]) -> list[dict]:
         """AI 서비스에서 생산 PUSH 알림 페이로드 목록을 조회합니다."""
+        if not store_id:
+            return []
         result = await self._get("/api/production/alerts/push", params={"store_id": store_id})
         if result is None:
             return []
