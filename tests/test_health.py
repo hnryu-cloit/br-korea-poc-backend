@@ -146,11 +146,12 @@ def test_ordering_selection_history_filters_by_date_range() -> None:
 
 
 def test_ordering_selection_summary_filters_by_date_range() -> None:
-    response = client.get("/api/ordering/selections/summary?date_from=2026-04-01")
+    # 실데이터가 절대 존재하지 않을 미래 날짜로 필터 — DB 누적 데이터에 영향받지 않음
+    response = client.get("/api/ordering/selections/summary?date_from=2099-12-31")
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 0
-    assert payload["filtered_date_from"] == "2026-04-01"
+    assert payload["filtered_date_from"] == "2099-12-31"
     assert payload["summary_status"] == "empty"
 
 
@@ -171,7 +172,8 @@ def test_production_overview() -> None:
     response = client.get("/api/production/overview")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["refresh_interval_minutes"] == 5
+    # danger≥1 → 3, warning≥1 → 5, 정상 → 10 (실데이터 기반 동적 반환)
+    assert payload["refresh_interval_minutes"] in (3, 5, 10)
     assert isinstance(payload["summary_stats"], list)
     assert isinstance(payload["alerts"], list)
 
