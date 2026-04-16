@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 import httpx
 from fastapi.encoders import jsonable_encoder
@@ -33,7 +34,7 @@ class AIServiceClient:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
 
-    async def query_sales(self, prompt: str, store_id: str = "POC_001") -> dict | None:
+    async def query_sales(self, prompt: str, store_id: Optional[str] = None) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
         result = await self._post("/sales/query", {"store_id": store_id, "query": prompt})
         if result is None:

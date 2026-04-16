@@ -24,6 +24,7 @@ class SalesComparison(BaseModel):
 
 class SalesQueryRequest(BaseModel):
     prompt: str
+    store_id: Optional[str] = None
 
 
 class SalesQueryResponse(BaseModel):
