@@ -4,9 +4,11 @@ from datetime import datetime
 
 from app.schemas.home import (
     HomeCardMetric,
+    HomeCta,
     HomeOverviewRequest,
     HomeOverviewResponse,
     HomePriorityAction,
+    HomePriorityActionBasisData,
     HomeStatItem,
     HomeSummaryCard,
 )
@@ -20,13 +22,13 @@ class HomeService:
         self.ordering_service = ordering_service
 
     async def get_overview(self, payload: HomeOverviewRequest) -> HomeOverviewResponse:
-        production = await self.production_service.get_overview()
+        production = await self.production_service.get_overview(store_id=payload.store_id)
         ordering_summary = await self.ordering_service.get_selection_summary(
             store_id=payload.store_id,
             date_from=payload.business_date,
             date_to=payload.business_date,
         )
-        ordering_options = await self.ordering_service.list_options(notification_entry=False)
+        ordering_options = await self.ordering_service.list_options(notification_entry=False, store_id=payload.store_id)
         sales_status = self._build_sales_status(ordering_summary=ordering_summary, production_danger_count=production.danger_count)
 
         priority_actions = self._build_priority_actions(production=production, ordering_summary=ordering_summary)
@@ -44,7 +46,7 @@ class HomeService:
         )
 
         return HomeOverviewResponse(
-            updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+            updated_at=datetime.now().replace(microsecond=0).isoformat(),
             priority_actions=priority_actions,
             stats=stats,
             cards=cards,
@@ -67,8 +69,7 @@ class HomeService:
                         f"현재 {danger_item.current}개, 1시간 후 {danger_item.forecast}개 예상 · "
                         f"권장 생산 {danger_item.recommended}개"
                     ),
-                    cta_label="생산하기",
-                    cta_path="/production",
+                    cta=HomeCta(label="생산하기", path="/production"),
                     focus_section=danger_item.sku_id,
                     related_sku_id=danger_item.sku_id,
                     ai_reasoning=(
@@ -77,6 +78,15 @@ class HomeService:
                     ),
                     confidence_score=self._calculate_confidence_score(danger_item.current, danger_item.forecast),
                     is_finished_good=False,
+                    basis_data=HomePriorityActionBasisData(
+                        selection_rule="first_danger_item",
+                        sku_id=danger_item.sku_id,
+                        name=danger_item.name,
+                        current=danger_item.current,
+                        forecast=danger_item.forecast,
+                        recommended=danger_item.recommended,
+                        depletion_time=danger_item.depletion_time,
+                    ),
                 )
             )
 
@@ -91,8 +101,7 @@ class HomeService:
                     f"최근 주문 선택 {ordering_summary.total}건 · "
                     f"현재 상태: {'추천안 선택 완료' if ordering_summary.recommended_selected else '검토 필요'}"
                 ),
-                cta_label="주문 검토하기",
-                cta_path="/ordering",
+                cta=HomeCta(label="주문 검토하기", path="/ordering"),
                 focus_section="summary",
                 ai_reasoning=(
                     f"최근 선택 {ordering_summary.total}건, 최근 7일 선택 {ordering_summary.recent_selection_count_7d}건을 기준으로 "
@@ -100,6 +109,12 @@ class HomeService:
                 ),
                 confidence_score=self._calculate_ordering_confidence(ordering_summary.total),
                 is_finished_good=False,
+                basis_data=HomePriorityActionBasisData(
+                    selection_rule="ordering_deadline_fixed",
+                    summary_status=ordering_summary.summary_status,
+                    recent_selection_count_7d=ordering_summary.recent_selection_count_7d,
+                    total=ordering_summary.total,
+                ),
             )
         )
 
@@ -113,8 +128,7 @@ class HomeService:
                 description=(
                     "본사 납품 완제품은 매장 생산 대상이 아니므로 생산 버튼을 비활성화합니다."
                 ),
-                cta_label="생산관리 보기",
-                cta_path="/production",
+                cta=HomeCta(label="생산관리 보기", path="/production"),
                 focus_section=warning_item.sku_id if warning_item else None,
                 related_sku_id=warning_item.sku_id if warning_item else None,
                 ai_reasoning=(
@@ -122,6 +136,11 @@ class HomeService:
                 ),
                 confidence_score=0.99,
                 is_finished_good=True,
+                basis_data=HomePriorityActionBasisData(
+                    selection_rule="finished_goods_guidance",
+                    sku_id=warning_item.sku_id if warning_item else None,
+                    name=warning_item.name if warning_item else None,
+                ),
             )
         )
 
@@ -130,10 +149,33 @@ class HomeService:
     @staticmethod
     def _build_stats(danger_count: int, ordering_deadline_minutes: int, alert_count: int) -> list[HomeStatItem]:
         return [
-            HomeStatItem(key="production_risk_count", label="품절 위험 SKU", value=f"{danger_count}개", tone="danger"),
-            HomeStatItem(key="ordering_deadline_minutes", label="주문 마감까지", value=f"{ordering_deadline_minutes}분", tone="primary"),
-            HomeStatItem(key="today_profit_estimate", label="오늘 운영 상태", value=("위험 있음" if danger_count else "안정"), tone="success" if danger_count == 0 else "default"),
-            HomeStatItem(key="alert_count", label="알림 상태", value=f"긴급 {alert_count}건", tone="default"),
+            HomeStatItem(
+                key="production_risk_count",
+                label="품절 위험 상품",
+                value=danger_count,
+                unit="count",
+                tone="danger" if danger_count > 0 else "success",
+            ),
+            HomeStatItem(
+                key="ordering_deadline_minutes",
+                label="주문 마감까지",
+                value=ordering_deadline_minutes,
+                unit="minutes",
+                tone="primary",
+            ),
+            HomeStatItem(
+                key="today_profit_estimate",
+                label="오늘 운영 상태",
+                value=("risk" if danger_count > 0 else "stable"),
+                tone="default" if danger_count > 0 else "success",
+            ),
+            HomeStatItem(
+                key="alert_count",
+                label="알림 상태",
+                value=alert_count,
+                unit="count",
+                tone="default",
+            ),
         ]
 
     def _build_cards(
@@ -154,13 +196,25 @@ class HomeService:
             domain="production",
             title="생산 현황",
             description="실시간 재고 및 1시간 후 예측",
-            highlights=production_highlights,
-            metrics=[
-                HomeCardMetric(label="품절 위험", value=f"{production.danger_count}개", tone="danger"),
-                HomeCardMetric(label="생산 리드타임", value=f"{production.production_lead_time_minutes}분", tone="primary"),
+            highlights_text=production_highlights,
+            highlights_data=[
+                {
+                    "type": "production_item",
+                    "sku_id": item.sku_id,
+                    "name": item.name,
+                    "status": item.status,
+                    "current": item.current,
+                    "forecast": item.forecast,
+                    "recommended": item.recommended,
+                    "depletion_time": item.depletion_time,
+                }
+                for item in danger_items
             ],
-            cta_label="생산관리 상세보기",
-            cta_path="/production",
+            metrics=[
+                HomeCardMetric(key="danger_count", label="품절 위험", value=production.danger_count, unit="count", tone="danger"),
+                HomeCardMetric(key="production_lead_time_minutes", label="생산 리드타임", value=production.production_lead_time_minutes, unit="minutes", tone="primary"),
+            ],
+            cta=HomeCta(label="생산관리 상세보기", path="/production"),
             prompts=["지금 생산해야 할 품목은?", "찬스 로스가 뭔가요?", "품절 처리 방법은?"],
             status_label="즉시 확인",
         )
@@ -169,16 +223,25 @@ class HomeService:
             domain="ordering",
             title="주문 관리",
             description="주문 누락 방지 및 추천 검토",
-            highlights=[
+            highlights_text=[
                 f"주문 상태 · {'추천안 선택 완료' if ordering_summary.recommended_selected else '검토 필요'}",
                 f"AI 추천안 {ordering_option_count}개 준비됨 · 최근 7일 선택 {ordering_summary.recent_selection_count_7d}건",
             ],
-            metrics=[
-                HomeCardMetric(label="주문 마감", value=f"{ordering_deadline_minutes}분 남음", tone="primary"),
-                HomeCardMetric(label="추천 기준", value=f"옵션 {ordering_option_count}개", tone="default"),
+            highlights_data=[
+                {
+                    "type": "ordering_summary",
+                    "recommended_selected": ordering_summary.recommended_selected,
+                    "summary_status": ordering_summary.summary_status,
+                    "ordering_option_count": ordering_option_count,
+                    "recent_selection_count_7d": ordering_summary.recent_selection_count_7d,
+                    "selection_total": ordering_summary.total,
+                }
             ],
-            cta_label="주문 검토하기",
-            cta_path="/ordering",
+            metrics=[
+                HomeCardMetric(key="ordering_deadline_minutes", label="주문 마감", value=ordering_deadline_minutes, unit="minutes", tone="primary"),
+                HomeCardMetric(key="ordering_option_count", label="추천 기준", value=ordering_option_count, unit="count", tone="default"),
+            ],
+            cta=HomeCta(label="주문 검토하기", path="/ordering"),
             prompts=["추천 주문량은?", "최근 선택 현황은?", "마감 전 확인 항목은?"],
             status_label="검토 필요" if not ordering_summary.recommended_selected else "선택 완료",
             deadline_minutes=ordering_deadline_minutes,
@@ -189,16 +252,24 @@ class HomeService:
             domain="sales",
             title="손익 분석",
             description="현재 운영 데이터 기반 상태 요약",
-            highlights=[
+            highlights_text=[
                 sales_status["headline"],
                 sales_status["detail"],
             ],
-            metrics=[
-                HomeCardMetric(label="위험 SKU", value=f"{production.danger_count}개", tone="danger" if production.danger_count else "success"),
-                HomeCardMetric(label="주문 선택", value=f"{ordering_summary.total}건", tone="default"),
+            highlights_data=[
+                {
+                    "type": "sales_summary",
+                    "production_danger_count": production.danger_count,
+                    "ordering_selection_total": ordering_summary.total,
+                    "recent_selection_count_7d": ordering_summary.recent_selection_count_7d,
+                    "status_label": sales_status["status_label"],
+                }
             ],
-            cta_label="손익분석 상세보기",
-            cta_path="/sales",
+            metrics=[
+                HomeCardMetric(key="danger_count", label="위험 SKU", value=production.danger_count, unit="count", tone="danger" if production.danger_count else "success"),
+                HomeCardMetric(key="ordering_selection_total", label="주문 선택", value=ordering_summary.total, unit="count", tone="default"),
+            ],
+            cta=HomeCta(label="손익분석 상세보기", path="/sales"),
             prompts=["최근 매출 인사이트는?", "위험 요인은?", "운영 상태는?"],
             status_label=sales_status["status_label"],
         )
