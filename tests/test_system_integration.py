@@ -126,34 +126,6 @@ def _install_ai_import_stubs() -> None:
         api_config.get_settings = lambda: _DummySettings()  # type: ignore[attr-defined]
         sys.modules["api.config"] = api_config
 
-    if "api.main" not in sys.modules:
-        api_main = types.ModuleType("api.main")
-        from fastapi import FastAPI
-        api_main.app = FastAPI()  # type: ignore[attr-defined]
-        sys.modules["api.main"] = api_main
-
-    if "schemas.management" not in sys.modules:
-        schemas_management = types.ModuleType("schemas.management")
-
-        class _DummyResponse:
-            def __init__(self, **kwargs: object) -> None:
-                pass
-
-        schemas_management.OrderingRecommendResponse = _DummyResponse  # type: ignore[attr-defined]
-        schemas_management.ProductionPredictResponse = _DummyResponse  # type: ignore[attr-defined]
-        sys.modules["schemas.management"] = schemas_management
-
-    if "schemas.contracts" not in sys.modules:
-        schemas_contracts = types.ModuleType("schemas.contracts")
-
-        class _DummyResponse:
-            def __init__(self, **kwargs: object) -> None:
-                pass
-
-        schemas_contracts.ChartDataPoint = _DummyResponse  # type: ignore[attr-defined]
-        schemas_contracts.SimulationReportResponse = _DummyResponse  # type: ignore[attr-defined]
-        sys.modules["schemas.contracts"] = schemas_contracts
-
     if "api.dependencies" not in sys.modules:
         api_dependencies = types.ModuleType("api.dependencies")
         from api.config import Settings as AISettings
@@ -305,10 +277,10 @@ class FakeAIProductionService:
             ],
         )
 
-    def predict_stock(self, sku, current_stock, history, pattern_4w):
+    def predict_stock(self, payload):
         return ProductionPredictResponse(
-            sku=sku,
-            predicted_stock_1h=max(float(current_stock) - 4.0, 0.0),
+            sku=payload.sku,
+            predicted_stock_1h=max(float(payload.current_stock) - 4.0, 0.0),
             risk_detected=True,
             stockout_expected_at="1시간 이내",
             alert_message="1시간 이내 품절 위험입니다. 즉시 생산 여부를 확인하세요.",

@@ -24,7 +24,6 @@ _KST = timezone(timedelta(hours=9))
 _DEFAULT_DEADLINE_HOUR = 14
 _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
-_DEFAULT_STORE_ID = "POC_001"
 
 
 def _now_kst() -> datetime:
@@ -73,18 +72,18 @@ class OrderingService:
 
     async def _get_ai_ordering_recommendation(
         self,
-        store_id: str,
+        store_id: str | None,
         current_date: str,
     ) -> dict | None:
-        if not self.ai_client:
+        if not self.ai_client or not store_id:
             return None
         return await self.ai_client.recommend_ordering(
             store_id=store_id,
             current_date=current_date,
         )
 
-    async def _get_ai_deadline_alert(self, store_id: str) -> dict | None:
-        if not self.ai_client:
+    async def _get_ai_deadline_alert(self, store_id: str | None) -> dict | None:
+        if not self.ai_client or not store_id:
             return None
         return await self.ai_client.get_ordering_deadline_alert(store_id)
 
@@ -127,8 +126,7 @@ class OrderingService:
     ) -> OrderingOptionsResponse:
         business_date = self._today_kst()
         options = await self.repository.list_options(store_id=store_id)
-        ai_store_id = store_id or _DEFAULT_STORE_ID
-        ai_payload = await self._get_ai_ordering_recommendation(store_id=ai_store_id, current_date=business_date)
+        ai_payload = await self._get_ai_ordering_recommendation(store_id=store_id, current_date=business_date)
         ai_options = (ai_payload or {}).get("options") or []
         merged_options = [
             self._merge_option_payloads(option, ai_options[index] if index < len(ai_options) else None, index=index)
@@ -188,8 +186,7 @@ class OrderingService:
         options = await self.repository.list_options(store_id=store_id)
         focus_option_id = self._derive_focus_option_id(options)
         alerts: list[OrderingDeadlineAlert] = []
-        ai_store_id = store_id or _DEFAULT_STORE_ID
-        ai_deadline = await self._get_ai_deadline_alert(ai_store_id)
+        ai_deadline = await self._get_ai_deadline_alert(store_id)
         if ai_deadline is not None:
             deadline_minutes = int(ai_deadline.get("deadline_minutes") or ai_deadline.get("minutes_remaining") or before_minutes)
             alerts.append(
@@ -230,8 +227,7 @@ class OrderingService:
     ) -> dict:
         """주문 마감까지 남은 시간 정보를 반환합니다."""
         sid = store_id or "default"
-        ai_lookup_store_id = store_id or _DEFAULT_STORE_ID
-        ai_deadline = await self._get_ai_deadline_alert(ai_lookup_store_id)
+        ai_deadline = await self._get_ai_deadline_alert(store_id)
         if ai_deadline is not None:
             minutes_remaining = int(ai_deadline.get("minutes_remaining") or ai_deadline.get("deadline_minutes") or 0)
             alert_level = self._safe_str(ai_deadline.get("alert_level")) or "normal"

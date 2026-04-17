@@ -4,7 +4,7 @@ import re
 from typing import Optional
 
 from app.repositories.sales_repository import SalesRepository
-from app.schemas.sales import SalesComparison, SalesInsightsResponse, SalesPrompt, SalesQueryRequest, SalesQueryResponse
+from app.schemas.sales import SalesComparison, SalesInsightsResponse, SalesPrompt, SalesQueryRequest, SalesQueryResponse, SalesSummaryResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
 
@@ -73,7 +73,7 @@ class SalesService:
         ai_result: Optional[dict] = None
         processing_route = "stub_repository"
         if self.ai_client:
-            ai_result = await self.ai_client.query_sales(safe_prompt)
+            ai_result = await self.ai_client.query_sales(safe_prompt, store_id=payload.store_id)
 
         if ai_result is not None:
             response = ai_result
@@ -118,6 +118,15 @@ class SalesService:
                 continue
             section["status"] = "active" if section.get("status") == "active" else "review"
         return SalesInsightsResponse(**payload)
+
+    async def get_summary(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> SalesSummaryResponse:
+        payload = await self.repository.get_summary(store_id=store_id, date_from=date_from, date_to=date_to)
+        return SalesSummaryResponse(**payload)
 
     def _classify_query(self, prompt: str) -> str:
         if any(keyword in prompt for keyword in _SENSITIVE_KEYWORDS):

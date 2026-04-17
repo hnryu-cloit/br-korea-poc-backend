@@ -21,7 +21,7 @@ class NotificationsService:
         self.repository = repository
         self.ai_client = ai_client
 
-    async def list_notifications(self) -> NotificationListResponse:
+    async def list_notifications(self, store_id: Optional[str] = None) -> NotificationListResponse:
         items: list[NotificationItem] = []
 
         production_alerts = await self.production_service.get_alerts()
@@ -59,7 +59,7 @@ class NotificationsService:
         # AI 서비스 생산 PUSH 알림 병합 (ai_client 연결 시)
         if self.ai_client is not None:
             try:
-                push_alerts = await self.ai_client.get_production_push_alerts(store_id="POC_001")
+                push_alerts = await self.ai_client.get_production_push_alerts(store_id=store_id)
                 for idx, alert in enumerate(push_alerts[:2], start=10):
                     severity = alert.get("severity", "medium")
                     items.append(
