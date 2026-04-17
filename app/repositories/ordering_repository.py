@@ -180,8 +180,8 @@ class OrderingRepository:
                             "quantity": int(bucket["qty"]),
                             "note": "추천 상위 SKU" if row_index == 0 and idx == 0 else None,
                         }
-                        for row_index, bucket in enumerate(sorted_items)
-                    ][:4]
+                        for idx, bucket in enumerate(sorted_items)
+                    ]
                     if items:
                         raw_notes = notes_map[idx]
                         total_qty = sum(int(b["qty"]) for b in aggregated.values())

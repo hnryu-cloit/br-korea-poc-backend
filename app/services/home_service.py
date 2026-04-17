@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
+from app.core.utils import get_now
 from app.schemas.home import (
     HomeCardMetric,
     HomeOverviewRequest,
@@ -44,7 +43,7 @@ class HomeService:
         )
 
         return HomeOverviewResponse(
-            updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+            updated_at=get_now().strftime("%Y-%m-%d %H:%M"),
             priority_actions=priority_actions,
             stats=stats,
             cards=cards,

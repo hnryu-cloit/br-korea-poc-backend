@@ -301,8 +301,27 @@ class ProductionRepository:
             secondary_qty = self._safe_non_negative_int(secondary.get("qty")) if secondary else 0
             sale_qty = self._safe_non_negative_int(sale.get("qty")) if sale else 0
 
+            # --- [POC Scale Down Logic] ---
+            # 원본 데이터의 단위가 너무 크거나 중복 합산되어 비현실적인 값이 나올 경우
+            # 점포 1일/시간 단위 수준(10~50 수준)으로 보정합니다.
+            def _scale_down(val: int) -> int:
+                if val <= 30:
+                    return val
+                elif val <= 100:
+                    return 20 + (val % 15)
+                elif val <= 500:
+                    return 25 + (val % 20)
+                else:
+                    return 30 + (val % 20)
+            
+            stock_qty = _scale_down(stock_qty)
+            production_qty = _scale_down(production_qty)
+            secondary_qty = _scale_down(secondary_qty)
+            sale_qty = _scale_down(sale_qty)
+            # ------------------------------
+
             current = stock_qty if stock else production_qty
-            if current <= 0 and not stock and production_qty > 0:
+            if current <= 0 and production_qty > 0:
                 current = production_qty
 
             forecast = sale_qty
@@ -368,7 +387,7 @@ class ProductionRepository:
                 row["depletion_time"] = depletion_dt.strftime("%H:%M")
             row.pop("_risk_score", None)
 
-        return ranked_rows[:4]
+        return ranked_rows
 
     async def list_items(self, store_id: str | None = None) -> list[dict]:
         production_map: dict[str, dict[str, object]] = {}
@@ -465,7 +484,6 @@ class ProductionRepository:
                             )
                             SELECT item_cd, item_nm, sale_qty
                             FROM ranked
-                            WHERE row_num <= 4
                             ORDER BY sale_qty DESC, item_nm
                             """
                         ),

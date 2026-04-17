@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from app.core.utils import get_now
 from typing import Optional
 
 from app.repositories.production_repository import ProductionRepository
@@ -213,7 +213,7 @@ class ProductionService:
             if item.status in {"danger", "warning"}
         ]
         return ProductionOverviewResponse(
-            updated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+            updated_at=get_now().strftime("%Y-%m-%d %H:%M"),
             refresh_interval_minutes=3 if danger_count >= 1 else (5 if warning_count >= 1 else 10),
             summary_stats=[
                 ProductionSummaryStat(key="danger_count", label="품절 위험", value=f"{danger_count}개", tone="danger"),
@@ -300,7 +300,7 @@ class ProductionService:
         ]
         return ProductionRegistrationFormResponse(
             items=form_items,
-            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+            generated_at=get_now().strftime("%Y-%m-%d %H:%M"),
         )
 
     async def get_alerts(self) -> ProductionAlertsResponse:
@@ -327,7 +327,7 @@ class ProductionService:
             if item["status"] in {"danger", "warning"}
         ]
         return ProductionAlertsResponse(
-            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            generated_at=get_now().strftime("%Y-%m-%d %H:%M:%S"),
             lead_time_minutes=60,
             alerts=alerts,
         )

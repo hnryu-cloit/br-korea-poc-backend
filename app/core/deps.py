@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from app.repositories.audit_repository import AuditRepository
@@ -26,6 +27,9 @@ from app.services.home_service import HomeService
 from app.services.hq_service import HQService
 from app.services.sales_service import SalesService
 from app.services.signals_service import SignalsService
+
+
+from app.core.utils import get_now
 
 
 def get_audit_service() -> AuditService:

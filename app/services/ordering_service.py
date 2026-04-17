@@ -20,6 +20,8 @@ from app.schemas.simulation import SimulationInput, SimulationResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
 
+from app.core.utils import get_now
+
 _KST = timezone(timedelta(hours=9))
 _DEFAULT_DEADLINE_HOUR = 14
 _DEFAULT_DEADLINE_MINUTE = 0
@@ -28,12 +30,8 @@ _DEFAULT_STORE_ID = "POC_001"
 
 
 def _now_kst() -> datetime:
-    """현재 KST 시각 반환 (pytz 미설치 환경 호환)."""
-    try:
-        import pytz
-        return datetime.now(pytz.timezone("Asia/Seoul"))
-    except ImportError:
-        return datetime.now(timezone.utc).astimezone(_KST)
+    """현재 KST 시각 반환 (MOCK_NOW 반영)."""
+    return get_now()
 
 
 def _minutes_to_deadline(
