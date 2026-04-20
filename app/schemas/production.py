@@ -56,6 +56,7 @@ class ProductionSkuDecision(BaseModel):
 class ProductionSkuItem(BaseModel):
     sku_id: str
     sku_name: str
+    image_url: str | None = None
     current_stock: int
     forecast_stock_1h: int
     avg_first_production_qty_4w: int
@@ -94,6 +95,7 @@ class GetProductionSkuListResponse(BaseModel):
 class ProductionSkuDetailResponse(BaseModel):
     sku_id: str
     sku_name: str
+    image_url: str | None = None
     current_stock: int
     forecast_stock_1h: int
     recommended_qty: int
