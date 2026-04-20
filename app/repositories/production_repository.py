@@ -329,33 +329,6 @@ class ProductionRepository(BaseRepository):
         sale_qty = self._scale_down_poc_qty(sale_qty)
         order_confirm_qty = self._scale_down_poc_qty(order_confirm_qty)
         hourly_sale_qty = self._scale_down_poc_qty(hourly_sale_qty)
-            # 재고 데이터 없을 때는 1차+2차+3차 생산 합계를 현재고 추정값으로 사용
-            total_production_qty = production_qty + secondary_qty + tertiary_qty
-            current = stock_qty if stock else total_production_qty
-            if current <= 0 and not stock and total_production_qty > 0:
-                current = total_production_qty
-            # --- [POC Scale Down Logic] ---
-            # 원본 데이터의 단위가 너무 크거나 중복 합산되어 비현실적인 값이 나올 경우
-            # 점포 1일/시간 단위 수준(10~50 수준)으로 보정합니다.
-            def _scale_down(val: int) -> int:
-                if val <= 30:
-                    return val
-                elif val <= 100:
-                    return 20 + (val % 15)
-                elif val <= 500:
-                    return 25 + (val % 20)
-                else:
-                    return 30 + (val % 20)
-
-            stock_qty = _scale_down(stock_qty)
-            production_qty = _scale_down(production_qty)
-            secondary_qty = _scale_down(secondary_qty)
-            sale_qty = _scale_down(sale_qty)
-            # ------------------------------
-
-            current = stock_qty if stock else production_qty
-            if current <= 0 and production_qty > 0:
-                current = production_qty
 
         current = stock_qty if stock else production_qty
         if current <= 0 and production_qty > 0:
@@ -477,7 +450,11 @@ class ProductionRepository(BaseRepository):
 
         return self._finalize_ranked_rows(ranked_rows)
 
-    async def list_items(self, store_id: str | None = None) -> list[dict]:
+    async def list_items(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+    ) -> list[dict]:
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
         stock_map: dict[str, dict[str, object]] = {}

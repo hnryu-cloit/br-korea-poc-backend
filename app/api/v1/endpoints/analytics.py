@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from typing import Literal
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from app.core.deps import get_analytics_service
 from app.schemas.analytics import (
@@ -83,3 +87,38 @@ async def get_weather_impact(
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> WeatherImpactResponse:
     return await service.get_weather_impact(store_id=store_id, date_from=date_from, date_to=date_to)
+
+
+@router.get("/market-intelligence/weekly-report")
+def download_market_weekly_report(
+    store_id: str | None = Query(default=None),
+    gu: str | None = Query(default=None),
+    dong: str | None = Query(default=None),
+    industry: str | None = Query(default=None),
+    year: int | None = Query(default=None),
+    quarter: str | None = Query(default=None),
+    radius_m: int | None = Query(default=None, ge=100, le=3000),
+    format: Literal["md", "pdf"] = Query(default="md"),
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> Response:
+    filename, markdown = service.get_weekly_market_report_markdown(
+        store_id=store_id,
+        gu=gu,
+        dong=dong,
+        industry=industry,
+        year=year,
+        quarter=quarter,
+        radius_m=radius_m,
+    )
+    if format == "pdf":
+        pdf_filename, pdf_bytes = service.render_weekly_market_report_pdf(markdown, filename)
+        encoded = quote(pdf_filename)
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"weekly_market_report.pdf\"; filename*=UTF-8''{encoded}"
+        }
+        return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+    encoded = quote(filename)
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"weekly_market_report.md\"; filename*=UTF-8''{encoded}"
+    }
+    return Response(content=markdown, media_type="text/markdown; charset=utf-8", headers=headers)

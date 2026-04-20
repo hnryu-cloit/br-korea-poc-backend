@@ -868,3 +868,7 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 ## 운영 메모
 
 - `run_id = 11` cleanup 이후 `raw_store_master`, 주요 매출 raw 테이블, `raw_pay_cd`는 legacy csv/NFD source가 제거되었고 최신 manifest 기준 source만 남아 있다.
+- `GET /api/analytics/market-intelligence`는 `raw_seoul_market_sales` + `raw_seoul_market_floating_population` 실데이터를 기준으로 응답하며, `household_composition_pie`/`estimated_residence_regions`도 동일 테이블 집계(추정 포함)로 생성한다.
+- 요청한 `year/quarter`에 데이터가 없을 때는 동일 스코프에서 연도/분기 조건만 제거한 가용 실데이터로 폴백한다(합성값 사용 없음).
+- 동일 API에서 `industry_analysis`/`sales_analysis`/`population_analysis`/`regional_status`/`customer_characteristics`를 함께 생성하며, 일부 항목은 원천 컬럼 한계로 reference 기반 프록시 집계(예: 직장·주거 인구, 소득소비, 교통접근지수)를 사용한다.
+- `customer_characteristics.new_customer_ratio/regular_customer_ratio`는 `raw_daily_store_item/raw_daily_store_pay_way/raw_order_extract`의 고객식별 컬럼(존재 시)을 자동탐지해 계산하고, 미존재 시 `raw_daily_store_cpi_tmzon` 키워드 보조추출을 시도한 뒤 최종적으로 null 처리한다.

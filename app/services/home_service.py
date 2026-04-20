@@ -236,7 +236,8 @@ class HomeService:
                         f"현재 {danger_item.current}개, 1시간 후 {danger_item.forecast}개 예상 · "
                         f"권장 생산 {danger_item.recommended}개"
                     ),
-                    cta=HomeCta(label="생산하기", path="/production"),
+                    cta_label="생산하기",
+                    cta_path="/production",
                     focus_section=danger_item.sku_id,
                     related_sku_id=danger_item.sku_id,
                     ai_reasoning=(
@@ -270,7 +271,8 @@ class HomeService:
                     f"최근 주문 선택 {ordering_summary.total}건 · "
                     f"현재 상태: {'추천안 선택 완료' if ordering_summary.recommended_selected else '검토 필요'}"
                 ),
-                cta=HomeCta(label="주문 검토하기", path="/ordering"),
+                cta_label="주문 검토하기",
+                cta_path="/ordering",
                 focus_section="summary",
                 ai_reasoning=(
                     f"최근 선택 {ordering_summary.total}건, 최근 7일 선택 {ordering_summary.recent_selection_count_7d}건을 기준으로 "
@@ -301,7 +303,8 @@ class HomeService:
                 description=(
                     "본사 납품 완제품은 매장 생산 대상이 아니므로 생산 버튼을 비활성화합니다."
                 ),
-                cta=HomeCta(label="생산관리 보기", path="/production"),
+                cta_label="생산관리 보기",
+                cta_path="/production",
                 focus_section=warning_item.sku_id if warning_item else None,
                 related_sku_id=warning_item.sku_id if warning_item else None,
                 ai_reasoning=(

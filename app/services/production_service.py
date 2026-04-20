@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from app.core.utils import get_now
+from pathlib import Path
+import re
 from typing import Optional
+import unicodedata
+from urllib.parse import quote
 
 from app.repositories.production_repository import ProductionRepository
 from app.schemas.production import (
@@ -27,6 +31,10 @@ from app.schemas.production import (
     ProductionSkuDetailResponse,
     ProductionSkuDecision,
     Pagination,
+    InventoryStatusItem,
+    InventoryStatusResponse,
+    WasteItem,
+    WasteSummaryResponse,
 )
 import logging
 
@@ -37,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 
 class ProductionService:
+    _menu_image_index: dict[str, str] | None = None
+
     def __init__(
         self,
         repository: ProductionRepository,
@@ -46,6 +56,60 @@ class ProductionService:
         self.repository = repository
         self.audit_service = audit_service
         self.ai_client = ai_client
+
+    @staticmethod
+    def _normalize_menu_key(value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        normalized = re.sub(r"\.[a-z0-9]+$", "", normalized)
+        normalized = re.sub(r"_[0-9]+$", "", normalized)
+        normalized = re.sub(r"[^0-9a-z가-힣]+", "", normalized)
+        return normalized
+
+    @classmethod
+    def _menu_image_directory(cls) -> Path:
+        repo_root = Path(__file__).resolve().parents[3]
+        local_resource_dir = repo_root / "resource" / "05. 던킨도너츠 메뉴"
+        if local_resource_dir.exists():
+            return local_resource_dir
+        docker_resource_dir = Path("/resource/05. 던킨도너츠 메뉴")
+        return docker_resource_dir
+
+    @classmethod
+    def _load_menu_image_index(cls) -> dict[str, str]:
+        if cls._menu_image_index is not None:
+            return cls._menu_image_index
+
+        image_dir = cls._menu_image_directory()
+        image_index: dict[str, str] = {}
+        if not image_dir.exists():
+            logger.warning("메뉴 이미지 디렉터리가 없어 image_url을 생성하지 못합니다: %s", image_dir)
+            cls._menu_image_index = image_index
+            return image_index
+
+        for path in image_dir.glob("*.png"):
+            key = cls._normalize_menu_key(path.name)
+            if key and key not in image_index:
+                image_index[key] = path.name
+
+        cls._menu_image_index = image_index
+        return image_index
+
+    @classmethod
+    def _resolve_image_url(cls, sku_name: str) -> str | None:
+        key = cls._normalize_menu_key(sku_name)
+        if not key:
+            return None
+
+        image_index = cls._load_menu_image_index()
+        filename = image_index.get(key)
+        if filename is None:
+            for index_key, candidate in image_index.items():
+                if key in index_key or index_key in key:
+                    filename = candidate
+                    break
+        if filename is None:
+            return None
+        return f"/static/menu-images/{quote(filename)}"
 
     @staticmethod
     def _calc_chance_loss_pct(current: int, forecast: int, status: str) -> int:
@@ -112,6 +176,7 @@ class ProductionService:
         return ProductionSkuItem(
             sku_id=raw["sku_id"],
             sku_name=raw["name"],
+            image_url=cls._resolve_image_url(str(raw["name"])),
             current_stock=raw["current"],
             forecast_stock_1h=raw["forecast"],
             avg_first_production_qty_4w=p1_qty,
@@ -263,6 +328,7 @@ class ProductionService:
         return ProductionSkuDetailResponse(
             sku_id=target.sku_id,
             sku_name=target.sku_name,
+            image_url=target.image_url,
             current_stock=target.current_stock,
             forecast_stock_1h=target.forecast_stock_1h,
             recommended_qty=target.recommended_production_qty,
@@ -304,8 +370,8 @@ class ProductionService:
             generated_at=get_now().strftime("%Y-%m-%d %H:%M"),
         )
 
-    async def get_alerts(self) -> ProductionAlertsResponse:
-        items = await self.repository.list_items()
+    async def get_alerts(self, store_id: str | None = None) -> ProductionAlertsResponse:
+        items = await self.repository.list_items(store_id=store_id)
         alerts = [
             ProductionAlertItem(
                 sku_id=item["sku_id"],
@@ -332,6 +398,57 @@ class ProductionService:
             lead_time_minutes=60,
             alerts=alerts,
         )
+
+    def get_waste_summary(self, store_id: str | None = None) -> WasteSummaryResponse:
+        rows = self.repository.get_waste_summary(store_id=store_id)
+        items: list[WasteItem] = []
+        total_loss_amount = 0.0
+        for row in rows:
+            total_disuse_qty = float(row.get("total_disuse_qty") or 0)
+            avg_cost = float(row.get("avg_cost") or 0)
+            loss_amount = round(total_disuse_qty * avg_cost, 2)
+            total_loss_amount += loss_amount
+            items.append(
+                WasteItem(
+                    item_nm=str(row.get("item_nm") or ""),
+                    total_disuse_qty=total_disuse_qty,
+                    loss_amount=loss_amount,
+                )
+            )
+
+        return WasteSummaryResponse(
+            items=items,
+            total_loss_amount=round(total_loss_amount, 2),
+        )
+
+    def get_inventory_status(self, store_id: str | None = None) -> InventoryStatusResponse:
+        rows = self.repository.get_inventory_status(store_id=store_id)
+        items: list[InventoryStatusItem] = []
+        for row in rows:
+            total_stock = float(row.get("total_stock") or 0)
+            total_sold = float(row.get("total_sold") or 0)
+            # 재고 적정성: 판매량 대비 재고를 단순 구간화
+            if total_sold <= 0:
+                status = "적정" if total_stock <= 0 else "과잉"
+            else:
+                stock_ratio = total_stock / max(total_sold, 1)
+                if stock_ratio >= 1.5:
+                    status = "과잉"
+                elif stock_ratio <= 0.5:
+                    status = "부족"
+                else:
+                    status = "적정"
+
+            items.append(
+                InventoryStatusItem(
+                    item_nm=str(row.get("item_nm") or ""),
+                    total_stock=total_stock,
+                    total_sold=total_sold,
+                    status=status,
+                )
+            )
+
+        return InventoryStatusResponse(items=items)
 
     async def register_production(self, payload: ProductionRegistrationRequest) -> ProductionRegistrationResponse:
         await self.repository.save_registration(payload.model_dump())

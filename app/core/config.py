@@ -13,9 +13,21 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc"
     EXTERNAL_API_KEY: str = "stub-key"
+    SBIZ_API_SNS_ANALYSIS_KEY: str = ""
+    SBIZ_API_STARTUP_WEATHER_KEY: str = ""
+    SBIZ_API_HOTPLACE_KEY: str = ""
+    SBIZ_API_SALES_INDEX_KEY: str = ""
+    SBIZ_API_BUSINESS_DURATION_KEY: str = ""
+    SBIZ_API_STORE_STATUS_KEY: str = ""
+    SBIZ_API_COMMERCIAL_MAP_KEY: str = ""
+    SBIZ_API_DETAIL_ANALYSIS_KEY: str = ""
+    SBIZ_API_DELIVERY_ANALYSIS_KEY: str = ""
+    SBIZ_API_TOUR_FESTIVAL_KEY: str = ""
+    SBIZ_API_SIMPLE_ANALYSIS_KEY: str = ""
 
     AI_SERVICE_URL: str = ""
     AI_SERVICE_TOKEN: str = ""
+    MOCK_NOW_STR: str = ""
     ALLOW_CLIENT_ROLE_HEADER_NON_LOCAL: bool = False
     ROLE_OVERRIDE_TOKEN: str = ""
 

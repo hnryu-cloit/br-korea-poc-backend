@@ -83,20 +83,6 @@ class NotificationsService:
                 pass  # AI 서비스 연결 실패 시 무시
 
         sales_item = await self.repository.get_recent_sales_notification(store_id=store_id)
-        ai_client: object | None = None,
-    async def list_notifications(self, store_id: str | None = None) -> NotificationListResponse:
-        production_alerts = await self.production_service.get_alerts(store_id=store_id)
-        ordering_alerts = await self.ordering_service.list_deadline_alerts(
-            before_minutes=20,
-            store_id=store_id,
-        )
-                    link_state={
-                        "source": "notification",
-                        "notificationId": alert.notification_id,
-                        "focusOptionId": alert.focus_option_id,
-                    },
-                push_alerts = await self.ai_client.get_production_push_alerts(store_id=store_id)
-        sales_item = await self.repository.get_recent_sales_notification(store_id=store_id)
         if sales_item is not None:
             items.append(NotificationItem(**sales_item))
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import random
 from calendar import monthrange
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -1176,239 +1175,52 @@ class AnalyticsRepository:
         radius_m: int | None = None,
     ) -> dict:
         """상권·경쟁·유동인구 종합 인사이트(POC용 통합 응답)."""
-        profile = self.get_store_profile(store_id=store_id)
-        if profile is None:
-            profile = {
-                "masked_stor_cd": store_id or "STORE_DEMO",
-                "maked_stor_nm": "기본매장",
-                "sido": "서울",
-                "region": "중구",
-                "actual_sales_amt": 120000000,
-            }
-
-        seed_base = str(profile.get("masked_stor_cd") or store_id or "STORE_DEMO")
-        seed = sum(ord(ch) for ch in seed_base)
-        rng = random.Random(seed)
         radius_km = round(max(min((radius_m or 3000) / 1000.0, 3.0), 0.1), 2)
-
-        monthly_base_sales = max(float(profile.get("actual_sales_amt") or 0) / 12.0, 8_000_000.0)
-        trade_area_total = monthly_base_sales * rng.uniform(8.5, 11.5)
-        bakery_ratio = rng.uniform(0.38, 0.56)
-        coffee_ratio = 1 - bakery_ratio
-        category_sales_pie = [
-            {
-                "category": "제과",
-                "sales_amount": round(trade_area_total * bakery_ratio, 0),
-                "share_ratio": round(bakery_ratio * 100, 1),
-            },
-            {
-                "category": "커피",
-                "sales_amount": round(trade_area_total * coffee_ratio, 0),
-                "share_ratio": round(coffee_ratio * 100, 1),
-            },
-        ]
-
-        resident_age_groups = ["19세 이하", "20대", "30대", "40대", "50대", "60대 이상"]
+        category_sales_pie: list[dict] = []
+        competitors: list[dict] = []
         residential_population_radar: list[dict] = []
-        for age_group in resident_age_groups:
-            cohort_base = int(rng.uniform(900, 3200))
-            male_ratio = rng.uniform(0.44, 0.56)
-            male_population = int(round(cohort_base * male_ratio))
-            female_population = max(cohort_base - male_population, 0)
-            residential_population_radar.append(
-                {
-                    "age_group": age_group,
-                    "male_population": male_population,
-                    "female_population": female_population,
-                }
-            )
-
-        one_person_ratio = rng.uniform(0.44, 0.58)
-        three_person_ratio = 1.0 - one_person_ratio
-        household_base = int(rng.uniform(12000, 29000))
-        one_person_count = int(round(household_base * one_person_ratio))
-        three_person_count = max(household_base - one_person_count, 0)
-        household_composition_pie = [
-            {
-                "household_type": "1인가구",
-                "household_count": one_person_count,
-                "share_ratio": round((one_person_count / household_base) * 100, 1),
-            },
-            {
-                "household_type": "3인가족",
-                "household_count": three_person_count,
-                "share_ratio": round((three_person_count / household_base) * 100, 1),
-            },
-        ]
-
-        residence_candidates = [
-            f"{profile.get('sido', '서울')} {profile.get('region', '중구')}",
-            f"{profile.get('sido', '서울')} 마포구",
-            f"{profile.get('sido', '서울')} 강서구",
-            "경기 고양시",
-            "경기 성남시",
-        ]
-        residence_weights = [rng.uniform(0.14, 0.38) for _ in residence_candidates]
-        weight_sum = sum(residence_weights) or 1.0
-        normalized_ratios = [weight / weight_sum for weight in residence_weights]
+        household_composition_pie: list[dict] = []
         estimated_residence_regions: list[dict] = []
-        for region_name, ratio in zip(residence_candidates, normalized_ratios):
-            estimated_residence_regions.append(
-                {
-                    "region_name": region_name,
-                    "share_ratio": round(ratio * 100, 1),
-                    "estimated_customers": int(round(ratio * household_base * 1.25)),
-                }
-            )
-
-        monthly_estimated_sales = round(trade_area_total * rng.uniform(0.84, 1.12), 0)
         estimated_sales_summary = {
-            "monthly_estimated_sales": monthly_estimated_sales,
-            "weekly_estimated_sales": round(monthly_estimated_sales / 4.35, 0),
-            "weekend_ratio": round(rng.uniform(32.0, 48.0), 1),
+            "monthly_estimated_sales": 0.0,
+            "weekly_estimated_sales": 0.0,
+            "weekend_ratio": 0.0,
+        }
+        sales_heatmap: list[dict] = []
+        floating_population_trend: list[dict] = []
+        analysis = "조회 가능한 실데이터가 없어 상권 분석 지표를 생성하지 못했습니다."
+        data_sources: list[str] = []
+        industry_analysis = {
+            "business_count_trend": [],
+            "business_age_5y": [],
+        }
+        sales_analysis = {
+            "monthly_sales_trend": [],
+            "monthly_average_sales": 0.0,
+        }
+        population_analysis = {
+            "population_trend": [],
+            "income_consumption": [],
+        }
+        regional_status = {
+            "household_count": 0,
+            "apartment_household_count": 0,
+            "major_facilities_count": 0,
+            "transport_access_index": 0.0,
+        }
+        customer_characteristics = {
+            "male_ratio": 0.0,
+            "female_ratio": 0.0,
+            "new_customer_ratio": None,
+            "regular_customer_ratio": None,
+            "top_age_group": None,
+            "top_visit_time": None,
         }
 
-        dow_labels = ["월", "화", "수", "목", "금", "토", "일"]
-        hour_bands = ["08-11", "11-14", "14-18", "18-22"]
-        sales_heatmap: list[dict] = []
-        for dow in dow_labels:
-            for hour_band in hour_bands:
-                base_idx = rng.randint(48, 92)
-                if dow in ("토", "일"):
-                    base_idx += 8
-                if hour_band in ("11-14", "18-22"):
-                    base_idx += 6
-                sales_heatmap.append(
-                    {
-                        "dow_label": dow,
-                        "hour_band": hour_band,
-                        "sales_index": max(0, min(base_idx, 100)),
-                    }
-                )
-
-        current_month = datetime.utcnow().strftime("%Y-%m")
-        previous_month = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m")
-        store_reports = [
-            {
-                "report_id": f"RPT-{seed % 10000:04d}-01",
-                "title": "구의역 상권분석 2024 | 식당·카페 창업 완전 가이드",
-                "period": "2024",
-                "generated_at": "2026-03-10",
-                "status": "완료",
-            },
-            {
-                "report_id": f"RPT-{seed % 10000:04d}-02",
-                "title": "경쟁사 트렌드 비교 리포트",
-                "period": previous_month,
-                "generated_at": (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d"),
-                "status": "완료",
-            },
-        ]
-
-        now = datetime.utcnow()
-        months = []
-        for idx in range(5, -1, -1):
-            d = (now.replace(day=15) - timedelta(days=idx * 30))
-            months.append(d.strftime("%Y-%m"))
-
-        brand_pool = [
-            "던킨",
-            "파리바게뜨",
-            "뚜레쥬르",
-            "스타벅스",
-            "투썸플레이스",
-            "메가커피",
-            "컴포즈커피",
-            "빽다방",
-            "이디야",
-            "할리스",
-            "폴바셋",
-            "앤티앤스",
-        ]
-        age_groups = ["10대", "20대", "30대", "40대+",]
-        competitors: list[dict] = []
-        for rank in range(1, 11):
-            brand_name = brand_pool[(seed + rank) % len(brand_pool)]
-            store_name = f"{brand_name} {profile.get('region', '상권')} {rank}호점"
-            distance_km = round(rng.uniform(0.3, 2.9), 2)
-            comp_base = monthly_base_sales * rng.uniform(0.55, 1.45)
-            drift = rng.uniform(-0.06, 0.09)
-            sales_trend: list[dict] = []
-            for month_idx, month in enumerate(months):
-                trend_amt = comp_base * (1 + drift * month_idx) * rng.uniform(0.92, 1.08)
-                sales_trend.append(
-                    {
-                        "month": month,
-                        "sales_amount": round(max(trend_amt, comp_base * 0.55), 0),
-                    }
-                )
-
-            first_sales = float(sales_trend[0]["sales_amount"])
-            last_sales = float(sales_trend[-1]["sales_amount"])
-            trend_direction = "up" if last_sales > first_sales else "down" if last_sales < first_sales else "flat"
-
-            payment_demographics: list[dict] = []
-            for age_group in age_groups:
-                payment_base = int(rng.uniform(120, 430))
-                male_ratio = rng.uniform(0.35, 0.62)
-                male_count = int(round(payment_base * male_ratio))
-                female_count = max(payment_base - male_count, 0)
-                payment_demographics.append(
-                    {
-                        "age_group": age_group,
-                        "male_payment_count": male_count,
-                        "female_payment_count": female_count,
-                    }
-                )
-
-            competitors.append(
-                {
-                    "rank": rank,
-                    "brand_name": brand_name,
-                    "store_name": store_name,
-                    "distance_km": distance_km,
-                    "trend_direction": trend_direction,
-                    "sales_trend": sales_trend,
-                    "payment_demographics": payment_demographics,
-                }
-            )
-
-        floating_population_trend: list[dict] = []
-        float_base = int(rng.uniform(42000, 98000))
-        for month_idx, month in enumerate(months):
-            pop = int(float_base * (1 + rng.uniform(-0.09, 0.13) * (month_idx / 3 + 0.5)))
-            est_sales = round(pop * rng.uniform(185, 245), 0)
-            floating_population_trend.append(
-                {
-                    "month": month,
-                    "floating_population": pop,
-                    "estimated_sales_amount": est_sales,
-                }
-            )
-
-        pop_values = [point["floating_population"] for point in floating_population_trend]
-        sales_values = [point["estimated_sales_amount"] for point in floating_population_trend]
-        corr = 0.0
-        if len(pop_values) >= 2:
-            pop_avg = sum(pop_values) / len(pop_values)
-            sales_avg = sum(sales_values) / len(sales_values)
-            cov = sum((p - pop_avg) * (s - sales_avg) for p, s in zip(pop_values, sales_values))
-            pop_var = sum((p - pop_avg) ** 2 for p in pop_values)
-            sales_var = sum((s - sales_avg) ** 2 for s in sales_values)
-            denom = (pop_var * sales_var) ** 0.5
-            corr = (cov / denom) if denom else 0.0
-
-        analysis = (
-            f"서울시 공공데이터 유동인구 추세와 상권 추정 매출의 상관계수는 {corr:+.2f}입니다. "
-            "유동인구 증가 월에는 제과/커피 동반 성장 경향이 확인되어, 프로모션과 재고 배치를 주말·퇴근 시간대에 강화하는 전략이 유효합니다."
-        )
-
-        data_sources = [
-            "내부 매출 데이터(core/raw 매출 테이블)",
-            "오픈업 결제건 연령/성별 요약 데이터(POC 가공)",
-            "서울시 공공데이터 유동인구(월별 집계, POC 샘플 반영)",
-            "서울시 공공데이터 주거인구/가구구성(POC 샘플 반영)",
-        ]
+        sbiz_report_overrides = self._collect_sbiz_live_status_overrides(gu=gu)
+        sales_index_summary, sales_index_status = self._fetch_sbiz_sales_index_summary(gu=gu)
+        if sales_index_status:
+            sbiz_report_overrides["slsIdex"] = sales_index_status
 
         reference_payload = self._build_reference_market_payload(
             gu=gu,
@@ -1424,6 +1236,12 @@ class AnalyticsRepository:
             residential_population_radar = (
                 reference_payload.get("residential_population_radar") or residential_population_radar
             )
+            household_composition_pie = (
+                reference_payload.get("household_composition_pie") or household_composition_pie
+            )
+            estimated_residence_regions = (
+                reference_payload.get("estimated_residence_regions") or estimated_residence_regions
+            )
             estimated_sales_summary = (
                 reference_payload.get("estimated_sales_summary") or estimated_sales_summary
             )
@@ -1433,6 +1251,69 @@ class AnalyticsRepository:
             )
             analysis = reference_payload.get("floating_population_analysis") or analysis
             data_sources = reference_payload.get("data_sources") or data_sources
+            industry_analysis = reference_payload.get("industry_analysis") or industry_analysis
+            sales_analysis = reference_payload.get("sales_analysis") or sales_analysis
+            population_analysis = reference_payload.get("population_analysis") or population_analysis
+            regional_status = reference_payload.get("regional_status") or regional_status
+            customer_characteristics = (
+                reference_payload.get("customer_characteristics") or customer_characteristics
+            )
+
+        scoped_quarter = self._parse_quarter(quarter)
+        new_ratio, regular_ratio = self._get_customer_visit_ratio_from_identified_customers(
+            store_id=store_id,
+            year=year,
+            quarter=scoped_quarter,
+        )
+        if new_ratio is not None and regular_ratio is not None:
+            customer_characteristics["new_customer_ratio"] = new_ratio
+            customer_characteristics["regular_customer_ratio"] = regular_ratio
+            if "내부 고객식별 컬럼 기반 신규/단골 비율(자동탐지)" not in data_sources:
+                data_sources.append("내부 고객식별 컬럼 기반 신규/단골 비율(자동탐지)")
+
+        if (
+            customer_characteristics.get("new_customer_ratio") is None
+            or customer_characteristics.get("regular_customer_ratio") is None
+        ):
+            new_ratio, regular_ratio = self._get_customer_visit_ratio_from_cpi(
+                store_id=store_id,
+                year=year,
+                quarter=scoped_quarter,
+            )
+            if new_ratio is not None and regular_ratio is not None:
+                customer_characteristics["new_customer_ratio"] = new_ratio
+                customer_characteristics["regular_customer_ratio"] = regular_ratio
+                if "내부 고객지표(raw_daily_store_cpi_tmzon) 신규/재방문 비율" not in data_sources:
+                    data_sources.append("내부 고객지표(raw_daily_store_cpi_tmzon) 신규/재방문 비율")
+            elif "신규/재방문 분류 데이터 미식별(raw_daily_store_cpi_tmzon: 프로모션 중심 cpi)" not in data_sources:
+                data_sources.append("신규/재방문 분류 데이터 미식별(raw_daily_store_cpi_tmzon: 프로모션 중심 cpi)")
+
+        if sales_index_summary:
+            estimated_sales_summary = {
+                "monthly_estimated_sales": float(
+                    sales_index_summary.get("monthly_estimated_sales")
+                    or estimated_sales_summary.get("monthly_estimated_sales")
+                    or 0
+                ),
+                "weekly_estimated_sales": float(
+                    sales_index_summary.get("weekly_estimated_sales")
+                    or estimated_sales_summary.get("weekly_estimated_sales")
+                    or 0
+                ),
+                "weekend_ratio": float(
+                    sales_index_summary.get("weekend_ratio")
+                    or estimated_sales_summary.get("weekend_ratio")
+                    or 0
+                ),
+            }
+            if "소상공인365 점포당 매출액 추이 API (SBIZ_API_SALES_INDEX_KEY)" not in data_sources:
+                data_sources.append("소상공인365 점포당 매출액 추이 API (SBIZ_API_SALES_INDEX_KEY)")
+        if not data_sources:
+            data_sources = ["실데이터 소스 미조회: 필터 조건(연도/분기/지역/업종)을 확인하세요."]
+
+        store_reports = self._build_sbiz_store_reports(
+            live_status_overrides=sbiz_report_overrides,
+        )
 
         return {
             "radius_km": radius_km,
@@ -1447,6 +1328,11 @@ class AnalyticsRepository:
             "floating_population_trend": floating_population_trend,
             "floating_population_analysis": analysis,
             "data_sources": data_sources,
+            "industry_analysis": industry_analysis,
+            "sales_analysis": sales_analysis,
+            "population_analysis": population_analysis,
+            "regional_status": regional_status,
+            "customer_characteristics": customer_characteristics,
         }
 
     @staticmethod
@@ -1469,6 +1355,227 @@ class AnalyticsRepository:
             return None
         value = int(normalized)
         return value if value in (1, 2, 3, 4) else None
+
+    @staticmethod
+    def _build_quarter_month_filter(
+        *,
+        year: int | None,
+        quarter: int | None,
+        date_column: str = "sale_dt",
+    ) -> tuple[str, dict[str, object]]:
+        conditions: list[str] = []
+        params: dict[str, object] = {}
+        if year:
+            conditions.append(f"LEFT(COALESCE({date_column}, ''), 4) = :year_txt")
+            params["year_txt"] = str(year)
+        if quarter:
+            quarter_months = {
+                1: ("01", "02", "03"),
+                2: ("04", "05", "06"),
+                3: ("07", "08", "09"),
+                4: ("10", "11", "12"),
+            }
+            months = quarter_months.get(quarter)
+            if months:
+                conditions.append(
+                    f"SUBSTRING(COALESCE({date_column}, ''), 5, 2) IN (:q_month_1, :q_month_2, :q_month_3)"
+                )
+                params["q_month_1"] = months[0]
+                params["q_month_2"] = months[1]
+                params["q_month_3"] = months[2]
+        if not conditions:
+            return "", params
+        return " AND " + " AND ".join(conditions), params
+
+    def _find_existing_column(self, table_name: str, candidates: tuple[str, ...]) -> str | None:
+        if not self.engine or not has_table(self.engine, table_name):
+            return None
+        inspector = inspect(self.engine)
+        column_names = {column.get("name") for column in inspector.get_columns(table_name)}
+        for candidate in candidates:
+            if candidate in column_names:
+                return candidate
+        return None
+
+    def _get_customer_visit_ratio_from_identified_customers(
+        self,
+        *,
+        store_id: str | None,
+        year: int | None,
+        quarter: int | None,
+    ) -> tuple[float | None, float | None]:
+        if not self.engine or not store_id or not year or not quarter:
+            return None, None
+
+        candidate_tables = (
+            "raw_daily_store_item",
+            "raw_daily_store_pay_way",
+            "raw_order_extract",
+        )
+        for table_name in candidate_tables:
+            if not has_table(self.engine, table_name):
+                continue
+
+            store_col = self._find_existing_column(
+                table_name,
+                ("masked_stor_cd", "MASKED_STOR_CD", "store_id", "STOR_CD"),
+            )
+            date_col = self._find_existing_column(
+                table_name,
+                ("sale_dt", "SALE_DT", "dlv_dt", "DLV_DT"),
+            )
+            customer_col = self._find_existing_column(
+                table_name,
+                (
+                    "customer_id",
+                    "CUSTOMER_ID",
+                    "member_id",
+                    "MEMBER_ID",
+                    "cust_id",
+                    "CUST_ID",
+                    "phone_no",
+                    "PHONE_NO",
+                    "card_no",
+                    "CARD_NO",
+                ),
+            )
+            if not store_col or not date_col or not customer_col:
+                continue
+
+            quarter_filter_sql, quarter_params = self._build_quarter_month_filter(
+                year=year,
+                quarter=quarter,
+                date_column=date_col,
+            )
+            try:
+                with self.engine.connect() as conn:
+                    row = (
+                        conn.execute(
+                            text(
+                                f"""
+                                WITH all_visits AS (
+                                    SELECT
+                                        TRIM(COALESCE({customer_col}, '')) AS customer_key,
+                                        MIN(COALESCE({date_col}, '')) AS first_visit_dt
+                                    FROM {table_name}
+                                    WHERE {store_col} = :store_id
+                                      AND TRIM(COALESCE({customer_col}, '')) <> ''
+                                    GROUP BY TRIM(COALESCE({customer_col}, ''))
+                                ),
+                                scoped_visits AS (
+                                    SELECT DISTINCT
+                                        TRIM(COALESCE({customer_col}, '')) AS customer_key
+                                    FROM {table_name}
+                                    WHERE {store_col} = :store_id
+                                      AND TRIM(COALESCE({customer_col}, '')) <> ''
+                                      {quarter_filter_sql}
+                                ),
+                                customer_scope AS (
+                                    SELECT
+                                        s.customer_key,
+                                        a.first_visit_dt
+                                    FROM scoped_visits s
+                                    JOIN all_visits a
+                                      ON a.customer_key = s.customer_key
+                                )
+                                SELECT
+                                    SUM(
+                                        CASE
+                                            WHEN LEFT(COALESCE(first_visit_dt, ''), 4) = :year_txt
+                                             AND SUBSTRING(COALESCE(first_visit_dt, ''), 5, 2) IN (:q_month_1, :q_month_2, :q_month_3)
+                                            THEN 1 ELSE 0
+                                        END
+                                    ) AS new_customer_count,
+                                    SUM(
+                                        CASE
+                                            WHEN NOT (
+                                                LEFT(COALESCE(first_visit_dt, ''), 4) = :year_txt
+                                                AND SUBSTRING(COALESCE(first_visit_dt, ''), 5, 2) IN (:q_month_1, :q_month_2, :q_month_3)
+                                            )
+                                            THEN 1 ELSE 0
+                                        END
+                                    ) AS regular_customer_count
+                                FROM customer_scope
+                                """
+                            ),
+                            {
+                                "store_id": store_id,
+                                **quarter_params,
+                            },
+                        )
+                        .mappings()
+                        .one()
+                    )
+                new_count = float(row.get("new_customer_count") or 0)
+                regular_count = float(row.get("regular_customer_count") or 0)
+                total = new_count + regular_count
+                if total > 0:
+                    return round(new_count / total * 100, 1), round(regular_count / total * 100, 1)
+            except Exception:
+                continue
+
+        return None, None
+
+    def _get_customer_visit_ratio_from_cpi(
+        self,
+        *,
+        store_id: str | None,
+        year: int | None,
+        quarter: int | None,
+    ) -> tuple[float | None, float | None]:
+        if not self.engine or not store_id:
+            return None, None
+        if not has_table(self.engine, "raw_daily_store_cpi_tmzon"):
+            return None, None
+
+        quarter_filter_sql, quarter_params = self._build_quarter_month_filter(
+            year=year,
+            quarter=quarter,
+        )
+
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT
+                                cpi_nm,
+                                SUM(COALESCE(NULLIF(bill_cnt, ''), '0')::numeric) AS bill_cnt
+                            FROM raw_daily_store_cpi_tmzon
+                            WHERE masked_stor_cd = :store_id
+                            {quarter_filter_sql}
+                            GROUP BY cpi_nm
+                            """
+                        ),
+                        {
+                            "store_id": store_id,
+                            **quarter_params,
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+        except Exception:
+            return None, None
+
+        new_keywords = ("신규", "첫", "초방문", "first", "new")
+        regular_keywords = ("단골", "재방문", "기존", "충성", "repeat", "return")
+
+        new_count = 0.0
+        regular_count = 0.0
+        for row in rows:
+            cpi_name = str(row.get("cpi_nm") or "").lower()
+            bill_count = float(row.get("bill_cnt") or 0)
+            if any(keyword in cpi_name for keyword in new_keywords):
+                new_count += bill_count
+            if any(keyword in cpi_name for keyword in regular_keywords):
+                regular_count += bill_count
+
+        total = new_count + regular_count
+        if total <= 0:
+            return None, None
+        return round(new_count / total * 100, 1), round(regular_count / total * 100, 1)
 
     def _build_reference_market_payload(
         self,
@@ -1523,6 +1630,17 @@ class AnalyticsRepository:
 
         sales_where = " AND ".join(sales_filters)
         pop_where = " AND ".join(pop_filters)
+        fallback_sales_filters = [
+            condition
+            for condition in sales_filters
+            if condition not in {"base_year = :year", "base_quarter = :quarter"}
+        ]
+        fallback_pop_filters = [
+            condition
+            for condition in pop_filters
+            if condition not in {"base_year = :year", "base_quarter = :quarter"}
+        ]
+        period_fallback_used = False
 
         used_smallshop = False
         with self.engine.connect() as conn:
@@ -1551,7 +1669,51 @@ class AnalyticsRepository:
             category_rows = [row for row in pie_rows if row["category"] in ("제과", "커피")]
             category_total = sum(float(row["sales_amount"] or 0) for row in category_rows)
             if category_total <= 0:
-                return None
+                if year or scope_quarter:
+                    fallback_sales_where = " AND ".join(fallback_sales_filters)
+                    fallback_sales_params = {
+                        key: value
+                        for key, value in sales_params.items()
+                        if key not in {"year", "quarter"}
+                    }
+                    fallback_pop_where = " AND ".join(fallback_pop_filters)
+                    fallback_pop_params = {
+                        key: value
+                        for key, value in pop_params.items()
+                        if key not in {"year", "quarter"}
+                    }
+                    pie_rows = (
+                        conn.execute(
+                            text(
+                                f"""
+                                SELECT
+                                    CASE
+                                        WHEN service_name LIKE '%제과%' THEN '제과'
+                                        WHEN service_name LIKE '%커피%' OR service_name LIKE '%카페%' THEN '커피'
+                                        ELSE '기타'
+                                    END AS category,
+                                    SUM(COALESCE(monthly_sales_amount, 0)) AS sales_amount
+                                FROM raw_seoul_market_sales
+                                WHERE {fallback_sales_where}
+                                GROUP BY category
+                                """
+                            ),
+                            fallback_sales_params,
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    category_rows = [row for row in pie_rows if row["category"] in ("제과", "커피")]
+                    category_total = sum(float(row["sales_amount"] or 0) for row in category_rows)
+                    if category_total <= 0:
+                        return None
+                    sales_where = fallback_sales_where
+                    pop_where = fallback_pop_where
+                    sales_params = fallback_sales_params
+                    pop_params = fallback_pop_params
+                    period_fallback_used = True
+                else:
+                    return None
             category_sales_pie = [
                 {
                     "category": str(row["category"]),
@@ -1560,6 +1722,124 @@ class AnalyticsRepository:
                 }
                 for row in category_rows
             ]
+
+            industry_trend_rows = (
+                conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            base_year,
+                            base_quarter,
+                            COUNT(DISTINCT (area_name || '|' || service_name)) AS business_count
+                        FROM raw_seoul_market_sales
+                        WHERE {sales_where}
+                        GROUP BY base_year, base_quarter
+                        ORDER BY base_year, base_quarter
+                        """
+                    ),
+                    sales_params,
+                )
+                .mappings()
+                .all()
+            )
+            industry_business_count_trend = [
+                {
+                    "period": f"{int(row['base_year'])}-Q{int(row['base_quarter'])}",
+                    "business_count": int(row["business_count"] or 0),
+                }
+                for row in industry_trend_rows[-8:]
+            ]
+
+            industry_age_rows = (
+                conn.execute(
+                    text(
+                        f"""
+                        WITH entity_years AS (
+                            SELECT
+                                area_name,
+                                service_name,
+                                COUNT(DISTINCT base_year) AS active_years
+                            FROM raw_seoul_market_sales
+                            WHERE {sales_where}
+                            GROUP BY area_name, service_name
+                        )
+                        SELECT
+                            CASE
+                                WHEN active_years >= 5 THEN '5년 이상'
+                                WHEN active_years = 4 THEN '4년'
+                                WHEN active_years = 3 THEN '3년'
+                                WHEN active_years = 2 THEN '2년'
+                                ELSE '1년 이하'
+                            END AS bucket,
+                            COUNT(*) AS business_count
+                        FROM entity_years
+                        GROUP BY bucket
+                        ORDER BY
+                            CASE bucket
+                                WHEN '1년 이하' THEN 1
+                                WHEN '2년' THEN 2
+                                WHEN '3년' THEN 3
+                                WHEN '4년' THEN 4
+                                ELSE 5
+                            END
+                        """
+                    ),
+                    sales_params,
+                )
+                .mappings()
+                .all()
+            )
+            industry_business_age_5y = [
+                {
+                    "bucket": str(row["bucket"] or ""),
+                    "business_count": int(row["business_count"] or 0),
+                }
+                for row in industry_age_rows
+            ]
+
+            sales_monthly_rows = (
+                conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            base_year,
+                            base_quarter,
+                            SUM(COALESCE(monthly_sales_count, 0)) AS sales_count,
+                            SUM(COALESCE(monthly_sales_amount, 0)) AS sales_amount
+                        FROM raw_seoul_market_sales
+                        WHERE {sales_where}
+                        GROUP BY base_year, base_quarter
+                        ORDER BY base_year, base_quarter
+                        """
+                    ),
+                    sales_params,
+                )
+                .mappings()
+                .all()
+            )
+            sales_monthly_trend = [
+                {
+                    "period": f"{int(row['base_year'])}-Q{int(row['base_quarter'])}",
+                    "sales_count": float(row["sales_count"] or 0),
+                    "sales_amount": float(row["sales_amount"] or 0),
+                }
+                for row in sales_monthly_rows[-8:]
+            ]
+            sales_average_row = (
+                conn.execute(
+                    text(
+                        f"""
+                        SELECT AVG(COALESCE(monthly_sales_amount, 0)) AS monthly_average_sales
+                        FROM raw_seoul_market_sales
+                        WHERE {sales_where}
+                        """
+                    ),
+                    sales_params,
+                )
+                .mappings()
+                .one()
+            )
+            monthly_average_sales = float(sales_average_row["monthly_average_sales"] or 0)
 
             competitor_rows = (
                 conn.execute(
@@ -1679,12 +1959,18 @@ class AnalyticsRepository:
                     }
                 )
 
-            live_competitors = self._fetch_smallshop_competitors(
+            live_competitors, smallshop_key_source = self._fetch_smallshop_competitors(
                 gu=scope_gu,
                 dong=scope_dong,
                 industry=scope_industry,
                 radius_km=radius_km,
             )
+            if not live_competitors:
+                live_competitors, smallshop_key_source = self._fetch_sbiz_store_status_competitors(
+                    gu=scope_gu,
+                    dong=scope_dong,
+                    radius_km=radius_km,
+                )
             used_smallshop = bool(live_competitors)
             if live_competitors:
                 competitors = self._merge_competitor_trends_from_reference(
@@ -1704,7 +1990,13 @@ class AnalyticsRepository:
                             SUM(COALESCE(age30_population, 0)) AS age30_population,
                             SUM(COALESCE(age40_population, 0)) AS age40_population,
                             SUM(COALESCE(age50_population, 0)) AS age50_population,
-                            SUM(COALESCE(age60_plus_population, 0)) AS age60_plus_population
+                            SUM(COALESCE(age60_plus_population, 0)) AS age60_plus_population,
+                            SUM(COALESCE(time_slot1_population, 0)) AS time_slot1_population,
+                            SUM(COALESCE(time_slot2_population, 0)) AS time_slot2_population,
+                            SUM(COALESCE(time_slot3_population, 0)) AS time_slot3_population,
+                            SUM(COALESCE(time_slot4_population, 0)) AS time_slot4_population,
+                            SUM(COALESCE(time_slot5_population, 0)) AS time_slot5_population,
+                            SUM(COALESCE(time_slot6_population, 0)) AS time_slot6_population
                         FROM raw_seoul_market_floating_population
                         WHERE {pop_where}
                         """
@@ -1734,6 +2026,176 @@ class AnalyticsRepository:
                 }
                 for label, value in age_values
             ]
+            age10_population = float(pop_row["age10_population"] or 0)
+            age20_population = float(pop_row["age20_population"] or 0)
+            age30_population = float(pop_row["age30_population"] or 0)
+            age40_population = float(pop_row["age40_population"] or 0)
+            age50_population = float(pop_row["age50_population"] or 0)
+            age60_plus_population = float(pop_row["age60_plus_population"] or 0)
+
+            one_person_proxy = age20_population + age30_population + (age40_population * 0.3)
+            three_person_proxy = (
+                age10_population
+                + age50_population
+                + age60_plus_population
+                + (age40_population * 0.7)
+            )
+            household_proxy_total = max(one_person_proxy + three_person_proxy, 1.0)
+            household_composition_pie = [
+                {
+                    "household_type": "1인가구",
+                    "household_count": int(round(one_person_proxy)),
+                    "share_ratio": round(one_person_proxy / household_proxy_total * 100, 1),
+                },
+                {
+                    "household_type": "3인가족",
+                    "household_count": int(round(three_person_proxy)),
+                    "share_ratio": round(three_person_proxy / household_proxy_total * 100, 1),
+                },
+            ]
+
+            residence_filters = ["total_population IS NOT NULL"]
+            residence_params: dict[str, object] = {}
+            if year and not period_fallback_used:
+                residence_filters.append("base_year = :year")
+                residence_params["year"] = year
+            if scope_quarter and not period_fallback_used:
+                residence_filters.append("base_quarter = :quarter")
+                residence_params["quarter"] = scope_quarter
+            if scope_gu:
+                residence_filters.append("area_name LIKE :gu")
+                residence_params["gu"] = f"%{scope_gu}%"
+            elif scope_dong:
+                residence_filters.append("area_name LIKE :dong")
+                residence_params["dong"] = f"%{scope_dong}%"
+            residence_where = " AND ".join(residence_filters)
+            residence_rows = (
+                conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            area_name,
+                            SUM(COALESCE(total_population, 0)) AS total_population
+                        FROM raw_seoul_market_floating_population
+                        WHERE {residence_where}
+                        GROUP BY area_name
+                        ORDER BY total_population DESC
+                        LIMIT 5
+                        """
+                    ),
+                    residence_params,
+                )
+                .mappings()
+                .all()
+            )
+            residence_total = sum(float(row["total_population"] or 0) for row in residence_rows)
+            estimated_residence_regions = [
+                {
+                    "region_name": str(row["area_name"] or ""),
+                    "share_ratio": round(
+                        (float(row["total_population"] or 0) / max(residence_total, 1.0)) * 100,
+                        1,
+                    ),
+                    "estimated_customers": int(round(float(row["total_population"] or 0))),
+                }
+                for row in residence_rows
+            ]
+
+            pop_trend_rows = (
+                conn.execute(
+                    text(
+                        f"""
+                        SELECT
+                            base_year,
+                            base_quarter,
+                            SUM(COALESCE(total_population, 0)) AS floating_population,
+                            SUM(COALESCE(time_slot5_population, 0) + COALESCE(time_slot6_population, 0)) AS residential_population,
+                            SUM(COALESCE(time_slot2_population, 0) + COALESCE(time_slot3_population, 0) + COALESCE(time_slot4_population, 0)) AS worker_population
+                        FROM raw_seoul_market_floating_population
+                        WHERE {pop_where}
+                        GROUP BY base_year, base_quarter
+                        ORDER BY base_year, base_quarter
+                        """
+                    ),
+                    pop_params,
+                )
+                .mappings()
+                .all()
+            )
+            population_trend = [
+                {
+                    "period": f"{int(row['base_year'])}-Q{int(row['base_quarter'])}",
+                    "floating_population": int(float(row["floating_population"] or 0)),
+                    "residential_population": int(float(row["residential_population"] or 0)),
+                    "worker_population": int(float(row["worker_population"] or 0)),
+                }
+                for row in pop_trend_rows[-8:]
+            ]
+
+            income_rows = (
+                conn.execute(
+                    text(
+                        f"""
+                        WITH base AS (
+                            SELECT
+                                COALESCE(monthly_sales_amount, 0) AS sales_amount,
+                                COALESCE(monthly_sales_count, 0) AS sales_count,
+                                CASE
+                                    WHEN COALESCE(monthly_sales_count, 0) <= 0 THEN '미분류'
+                                    WHEN (COALESCE(monthly_sales_amount, 0) / NULLIF(monthly_sales_count, 0)) < 12000 THEN '저소비'
+                                    WHEN (COALESCE(monthly_sales_amount, 0) / NULLIF(monthly_sales_count, 0)) < 22000 THEN '중소비'
+                                    ELSE '고소비'
+                                END AS segment
+                            FROM raw_seoul_market_sales
+                            WHERE {sales_where}
+                        )
+                        SELECT
+                            segment,
+                            SUM(sales_count) AS estimated_customers,
+                            SUM(sales_amount) AS sales_amount
+                        FROM base
+                        GROUP BY segment
+                        ORDER BY
+                            CASE segment
+                                WHEN '저소비' THEN 1
+                                WHEN '중소비' THEN 2
+                                WHEN '고소비' THEN 3
+                                ELSE 4
+                            END
+                        """
+                    ),
+                    sales_params,
+                )
+                .mappings()
+                .all()
+            )
+            total_income_sales = sum(float(row["sales_amount"] or 0) for row in income_rows) or 1.0
+            income_consumption = [
+                {
+                    "segment": str(row["segment"] or "미분류"),
+                    "estimated_customers": int(float(row["estimated_customers"] or 0)),
+                    "sales_share_ratio": round(float(row["sales_amount"] or 0) / total_income_sales * 100, 1),
+                }
+                for row in income_rows
+            ]
+
+            time_slot_values = {
+                "새벽(00-06)": float(pop_row["time_slot1_population"] or 0),
+                "오전(06-11)": float(pop_row["time_slot2_population"] or 0),
+                "점심(11-14)": float(pop_row["time_slot3_population"] or 0),
+                "오후(14-17)": float(pop_row["time_slot4_population"] or 0),
+                "저녁(17-21)": float(pop_row["time_slot5_population"] or 0),
+                "밤(21-24)": float(pop_row["time_slot6_population"] or 0),
+            }
+            top_visit_time = max(time_slot_values.items(), key=lambda item: item[1])[0]
+            top_age_group = max(age_values, key=lambda item: item[1])[0] if age_values else None
+            floating_avg = (
+                sum(item["floating_population"] for item in population_trend) / len(population_trend)
+                if population_trend
+                else 0.0
+            )
+            floating_max = max((item["floating_population"] for item in population_trend), default=0)
+            transport_access_index = round((floating_avg / max(float(floating_max), 1.0)) * 100, 1)
 
             heatmap_source = (
                 conn.execute(
@@ -1872,14 +2334,23 @@ class AnalyticsRepository:
         data_sources = [
             "서울시 우리마을가게 상권분석서비스(상권-추정매출)_2019.csv",
             "서울시 우리마을가게 상권분석서비스(상권-추정유동인구).csv",
+            "서울시 유동인구 연령분포 기반 가구구성 추정(1인가구/3인가족)",
+            "서울시 상권데이터 기반 업력/소득소비/직장·주거 인구 추정(프록시)",
         ]
         if used_smallshop:
-            data_sources.append("소상공인시장진흥공단 상가(상권)정보 API (공공데이터포털)")
+            if smallshop_key_source == "SBIZ_API_COMMERCIAL_MAP_KEY":
+                data_sources.append("소상공인시장진흥공단 상가(상권)정보 API (SBIZ_API_COMMERCIAL_MAP_KEY)")
+            elif smallshop_key_source == "SBIZ_API_STORE_STATUS_KEY":
+                data_sources.append("소상공인365 업소현황 API (SBIZ_API_STORE_STATUS_KEY)")
+            else:
+                data_sources.append("소상공인시장진흥공단 상가(상권)정보 API (EXTERNAL_API_KEY)")
 
         return {
             "category_sales_pie": category_sales_pie,
             "competitors": competitors,
             "residential_population_radar": residential_population_radar,
+            "household_composition_pie": household_composition_pie,
+            "estimated_residence_regions": estimated_residence_regions,
             "estimated_sales_summary": {
                 "monthly_estimated_sales": monthly_sales,
                 "weekly_estimated_sales": round(monthly_sales / 4.35, 0),
@@ -1891,6 +2362,33 @@ class AnalyticsRepository:
                 f"reference CSV(서울시 우리마을가게) 기준 유동인구-매출 상관계수는 {corr:+.2f}입니다."
             ),
             "data_sources": data_sources,
+            "smallshop_key_source": smallshop_key_source,
+            "industry_analysis": {
+                "business_count_trend": industry_business_count_trend,
+                "business_age_5y": industry_business_age_5y,
+            },
+            "sales_analysis": {
+                "monthly_sales_trend": sales_monthly_trend,
+                "monthly_average_sales": monthly_average_sales,
+            },
+            "population_analysis": {
+                "population_trend": population_trend,
+                "income_consumption": income_consumption,
+            },
+            "regional_status": {
+                "household_count": int(round(household_proxy_total)),
+                "apartment_household_count": int(round(three_person_proxy)),
+                "major_facilities_count": len(competitors),
+                "transport_access_index": transport_access_index,
+            },
+            "customer_characteristics": {
+                "male_ratio": round(male_ratio * 100, 1),
+                "female_ratio": round((1.0 - male_ratio) * 100, 1),
+                "new_customer_ratio": None,
+                "regular_customer_ratio": None,
+                "top_age_group": top_age_group,
+                "top_visit_time": top_visit_time,
+            },
         }
 
     @staticmethod
@@ -1935,10 +2433,10 @@ class AnalyticsRepository:
         dong: str | None,
         industry: str | None,
         radius_km: float,
-    ) -> list[dict]:
-        service_key = unquote((settings.EXTERNAL_API_KEY or "").strip())
-        if not service_key or service_key == "stub-key":
-            return []
+    ) -> tuple[list[dict], str | None]:
+        service_key, key_source = self._resolve_smallshop_service_key()
+        if not service_key:
+            return [], None
 
         center_lon, center_lat = self._resolve_scope_center(gu=gu, dong=dong)
         params = {
@@ -1957,15 +2455,15 @@ class AnalyticsRepository:
             root = ET.fromstring(response.text)
         except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
             logger.warning("SmallShop API 호출 실패: %s", exc)
-            return []
+            return [], key_source
 
         result_code = (root.findtext("./header/resultCode") or "").strip()
         if result_code not in {"00", "03"}:
             result_msg = (root.findtext("./header/resultMsg") or "").strip()
             logger.warning("SmallShop API 오류: code=%s msg=%s", result_code, result_msg)
-            return []
+            return [], key_source
         if result_code == "03":
-            return []
+            return [], key_source
 
         items = root.findall("./body/items/item")
         competitors: list[dict] = []
@@ -2011,7 +2509,440 @@ class AnalyticsRepository:
                 dedup[key] = item
             if len(dedup) >= 10:
                 break
-        return list(dedup.values())
+        return list(dedup.values()), key_source
+
+    @staticmethod
+    def _resolve_smallshop_service_key() -> tuple[str | None, str | None]:
+        external_key = unquote((settings.EXTERNAL_API_KEY or "").strip())
+        if external_key and external_key != "stub-key":
+            return external_key, "EXTERNAL_API_KEY"
+
+        sbiz_commercial_map_key = unquote((settings.SBIZ_API_COMMERCIAL_MAP_KEY or "").strip())
+        if sbiz_commercial_map_key:
+            return sbiz_commercial_map_key, "SBIZ_API_COMMERCIAL_MAP_KEY"
+
+        return None, None
+
+    @staticmethod
+    def _build_sbiz_store_reports(
+        *,
+        live_status_overrides: dict[str, str] | None = None,
+    ) -> list[dict]:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        api_rows = [
+            ("snsAnaly", "SNS 분석", settings.SBIZ_API_SNS_ANALYSIS_KEY),
+            ("weather", "창업기상도", settings.SBIZ_API_STARTUP_WEATHER_KEY),
+            ("hpReport", "핫플레이스", settings.SBIZ_API_HOTPLACE_KEY),
+            ("slsIdex", "점포당 매출액 추이", settings.SBIZ_API_SALES_INDEX_KEY),
+            ("stcarSttus", "업력현황", settings.SBIZ_API_BUSINESS_DURATION_KEY),
+            ("storSttus", "업소현황", settings.SBIZ_API_STORE_STATUS_KEY),
+            ("startupPublic", "상권지도", settings.SBIZ_API_COMMERCIAL_MAP_KEY),
+            ("detail", "상세분석", settings.SBIZ_API_DETAIL_ANALYSIS_KEY),
+            ("delivery", "배달분석", settings.SBIZ_API_DELIVERY_ANALYSIS_KEY),
+            ("tour", "관광 축제 정보", settings.SBIZ_API_TOUR_FESTIVAL_KEY),
+            ("simple", "간단분석", settings.SBIZ_API_SIMPLE_ANALYSIS_KEY),
+        ]
+
+        reports: list[dict] = []
+        for api_code, api_name, cert_key in api_rows:
+            has_key = bool((cert_key or "").strip())
+            status = "실호출 미확인" if has_key else "키 미설정"
+            if live_status_overrides and api_code in live_status_overrides:
+                status = live_status_overrides[api_code]
+            reports.append(
+                {
+                    "report_id": f"SBIZ-{api_code}",
+                    "title": f"{api_name} API 연동 상태",
+                    "period": "임시 승인기간 내",
+                    "generated_at": today,
+                    "status": status,
+                }
+            )
+        return reports
+
+    def _collect_sbiz_live_status_overrides(self, *, gu: str | None) -> dict[str, str]:
+        statuses: dict[str, str] = {}
+        sns_status = self._probe_sbiz_sns_analysis()
+        if sns_status:
+            statuses["snsAnaly"] = sns_status
+        hotplace_status = self._probe_sbiz_hotplace(gu=gu)
+        if hotplace_status:
+            statuses["hpReport"] = hotplace_status
+        delivery_status = self._probe_sbiz_delivery(gu=gu)
+        if delivery_status:
+            statuses["delivery"] = delivery_status
+        tour_status = self._probe_sbiz_tour_page()
+        if tour_status:
+            statuses["tour"] = tour_status
+        store_status = self._probe_sbiz_store_status(gu=gu)
+        if store_status:
+            statuses["storSttus"] = store_status
+        return statuses
+
+    def _probe_sbiz_sns_analysis(self) -> str | None:
+        cert_key = (settings.SBIZ_API_SNS_ANALYSIS_KEY or "").strip()
+        if not cert_key:
+            return None
+        try:
+            with httpx.Client(timeout=6.0) as client:
+                response = client.get(
+                    "https://bigdata.sbiz.or.kr/gis/api/snsAnls/getSnsAnlsDetail",
+                    params={"lat": "37.5665", "lng": "126.9780"},
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+                if response.status_code >= 400:
+                    return "점검 필요"
+                payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 SNS 분석 API 상태 점검 실패: %s", exc)
+            return "점검 필요"
+
+        if isinstance(payload, dict) and "returnCode" in payload:
+            return "연동중"
+        return "점검 필요"
+
+    def _probe_sbiz_hotplace(self, *, gu: str | None) -> str | None:
+        cert_key = (settings.SBIZ_API_HOTPLACE_KEY or "").strip()
+        if not cert_key:
+            return None
+
+        area_cd = "11"
+        if gu == "광진구":
+            area_cd = "1121"
+        elif gu == "마포구":
+            area_cd = "1144"
+        elif gu == "강남구":
+            area_cd = "1168"
+        elif gu == "송파구":
+            area_cd = "1171"
+        elif gu == "영등포구":
+            area_cd = "1156"
+
+        params = {
+            "sprTypeNo": "1",
+            "areaCd": area_cd,
+            "upjongGb": "1",
+            "upjongCd": "",
+            "kind": "area",
+        }
+        try:
+            with httpx.Client(timeout=6.0) as client:
+                response = client.post(
+                    "https://bigdata.sbiz.or.kr/sbiz/api/bizonSttus/DongMTpctdCmpr/search.json",
+                    data=params,
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 핫플레이스 API 상태 점검 실패: %s", exc)
+            return "점검 필요"
+        return "연동중" if response.status_code < 400 else "점검 필요"
+
+    def _probe_sbiz_delivery(self, *, gu: str | None) -> str | None:
+        cert_key = (settings.SBIZ_API_DELIVERY_ANALYSIS_KEY or "").strip()
+        if not cert_key:
+            return None
+
+        area_cd = "11"
+        if gu == "광진구":
+            area_cd = "1121"
+        elif gu == "마포구":
+            area_cd = "1144"
+        elif gu == "강남구":
+            area_cd = "1168"
+        elif gu == "송파구":
+            area_cd = "1171"
+        elif gu == "영등포구":
+            area_cd = "1156"
+
+        params = {
+            "sprTypeNo": "1",
+            "areaCd": area_cd,
+            "upjongGb": "1",
+            "upjongCd": "",
+            "kind": "area",
+        }
+        try:
+            with httpx.Client(timeout=6.0) as client:
+                response = client.post(
+                    "https://bigdata.sbiz.or.kr/sbiz/api/bizonSttus/baeminIdex/search.json",
+                    data=params,
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 배달분석 API 상태 점검 실패: %s", exc)
+            return "점검 필요"
+        return "연동중" if response.status_code < 400 else "점검 필요"
+
+    def _probe_sbiz_tour_page(self) -> str | None:
+        cert_key = (settings.SBIZ_API_TOUR_FESTIVAL_KEY or "").strip()
+        if not cert_key:
+            return None
+        try:
+            with httpx.Client(timeout=6.0) as client:
+                response = client.get(
+                    "https://bigdata.sbiz.or.kr/gis/tour",
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 관광 API 상태 점검 실패: %s", exc)
+            return "점검 필요"
+        return "연동중" if response.status_code < 400 else "점검 필요"
+
+    def _probe_sbiz_store_status(self, *, gu: str | None) -> str | None:
+        cert_key = (settings.SBIZ_API_STORE_STATUS_KEY or "").strip()
+        if not cert_key:
+            return None
+
+        area_cd = "11"
+        if gu == "광진구":
+            area_cd = "1121"
+        elif gu == "마포구":
+            area_cd = "1144"
+        elif gu == "강남구":
+            area_cd = "1168"
+        elif gu == "송파구":
+            area_cd = "1171"
+        elif gu == "영등포구":
+            area_cd = "1156"
+
+        params = {
+            "sprTypeNo": "1",
+            "areaCd": area_cd,
+            "upjongGb": "1",
+            "upjongCd": "",
+            "kind": "area",
+        }
+
+        try:
+            with httpx.Client(timeout=6.0) as client:
+                response = client.get(
+                    "https://bigdata.sbiz.or.kr/sbiz/api/bizonSttus/storSttus/search.json",
+                    params=params,
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+                if response.status_code >= 400:
+                    return "점검 필요"
+                payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 업소현황 API 상태 점검 실패: %s", exc)
+            return "점검 필요"
+
+        rows = payload.get("upsoList")
+        if isinstance(rows, list):
+            return "연동중"
+        return "점검 필요"
+
+    def _fetch_sbiz_sales_index_summary(
+        self,
+        *,
+        gu: str | None,
+    ) -> tuple[dict | None, str | None]:
+        cert_key = (settings.SBIZ_API_SALES_INDEX_KEY or "").strip()
+        if not cert_key:
+            return None, None
+
+        area_cd = "11"
+        if gu == "광진구":
+            area_cd = "1121"
+        elif gu == "마포구":
+            area_cd = "1144"
+        elif gu == "강남구":
+            area_cd = "1168"
+        elif gu == "송파구":
+            area_cd = "1171"
+        elif gu == "영등포구":
+            area_cd = "1156"
+
+        params = {
+            "sprTypeNo": "1",
+            "areaCd": area_cd,
+            "upjongGb": "1",
+            "upjongCd": "",
+            "kind": "area",
+        }
+
+        try:
+            with httpx.Client(timeout=6.0) as client:
+                response = client.get(
+                    "https://bigdata.sbiz.or.kr/sbiz/api/bizonSttus/slsIdex/search.json",
+                    params=params,
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+                if response.status_code >= 400:
+                    logger.warning(
+                        "소진공 점포당 매출액 추이 API 응답 오류: status=%s",
+                        response.status_code,
+                    )
+                    return None, "점검 필요"
+                payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 점포당 매출액 추이 API 호출 실패: %s", exc)
+            return None, "점검 필요"
+
+        candidates = []
+        for key in ("slsList", "mapList", "upsoList", "resultList"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                candidates = [row for row in rows if isinstance(row, dict)]
+                if candidates:
+                    break
+        if not candidates:
+            return None, "키 설정됨"
+
+        filtered_rows = candidates
+        if gu:
+            scoped = [
+                row for row in candidates
+                if gu in str(row.get("areaNm") or row.get("area_name") or "")
+            ]
+            if scoped:
+                filtered_rows = scoped
+
+        def _to_float(value: object) -> float:
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        monthly_candidates = (
+            "aSum",
+            "saleAmt",
+            "salesAmt",
+            "monthlySales",
+            "totSaleAmt",
+            "slsAmt",
+        )
+        weekend_ratio_candidates = (
+            "weekendRatio",
+            "weekendPer",
+            "weekendSalesRatio",
+        )
+
+        best_monthly = 0.0
+        weekend_ratio = 0.0
+        for row in filtered_rows:
+            monthly = max(_to_float(row.get(key)) for key in monthly_candidates)
+            if monthly > best_monthly:
+                best_monthly = monthly
+                weekend_ratio = max(_to_float(row.get(key)) for key in weekend_ratio_candidates)
+
+        if best_monthly <= 0:
+            return None, "키 설정됨"
+
+        return {
+            "monthly_estimated_sales": round(best_monthly, 0),
+            "weekly_estimated_sales": round(best_monthly / 4.35, 0),
+            "weekend_ratio": round(weekend_ratio, 1) if weekend_ratio > 0 else 0.0,
+        }, "연동중"
+
+    def _fetch_sbiz_store_status_competitors(
+        self,
+        *,
+        gu: str | None,
+        dong: str | None,
+        radius_km: float,
+    ) -> tuple[list[dict], str | None]:
+        cert_key = (settings.SBIZ_API_STORE_STATUS_KEY or "").strip()
+        if not cert_key:
+            return [], None
+
+        center_lon, center_lat = self._resolve_scope_center(gu=gu, dong=dong)
+        area_cd = "11"
+        if gu == "광진구":
+            area_cd = "1121"
+        elif gu == "마포구":
+            area_cd = "1144"
+        elif gu == "강남구":
+            area_cd = "1168"
+        elif gu == "송파구":
+            area_cd = "1171"
+        elif gu == "영등포구":
+            area_cd = "1156"
+
+        params = {
+            "sprTypeNo": "1",
+            "areaCd": area_cd,
+            "upjongGb": "1",
+            "upjongCd": "",
+            "kind": "area",
+        }
+
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                response = client.get(
+                    "https://bigdata.sbiz.or.kr/sbiz/api/bizonSttus/storSttus/search.json",
+                    params=params,
+                    headers={"Cookie": f"XTLOGINID={cert_key}"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - 외부 API 장애 시 fallback 유지
+            logger.warning("소진공 업소현황 API 호출 실패: %s", exc)
+            return [], "SBIZ_API_STORE_STATUS_KEY"
+
+        rows = payload.get("upsoList")
+        if not isinstance(rows, list):
+            return [], "SBIZ_API_STORE_STATUS_KEY"
+
+        normalized: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            area_name = str(row.get("areaNm") or "").strip()
+            if not area_name:
+                continue
+            area_level = str(row.get("areaGb") or "")
+            if area_level not in {"12", "13", "24"}:
+                continue
+            if gu and gu not in area_name:
+                if area_level == "12":
+                    continue
+            try:
+                upso_count = float(row.get("aSum") or 0)
+            except (TypeError, ValueError):
+                upso_count = 0.0
+            try:
+                updown_rate = float(row.get("updownPer") or 0)
+            except (TypeError, ValueError):
+                updown_rate = 0.0
+            normalized.append(
+                {
+                    "area_name": area_name,
+                    "upso_count": upso_count,
+                    "updown_rate": updown_rate,
+                }
+            )
+
+        if not normalized:
+            return [], "SBIZ_API_STORE_STATUS_KEY"
+
+        normalized.sort(key=lambda item: item["upso_count"], reverse=True)
+
+        competitors: list[dict] = []
+        for idx, item in enumerate(normalized[:10], start=1):
+            area_name = str(item["area_name"])
+            point = _GU_CENTER.get(area_name)
+            if point:
+                distance_km = self._haversine_km(center_lon, center_lat, point[0], point[1])
+            else:
+                distance_km = min(radius_km, 0.3 + idx * 0.2)
+            competitors.append(
+                {
+                    "brand_name": "소진공 업소현황",
+                    "store_name": area_name,
+                    "distance_km": round(float(distance_km), 2),
+                    "industry": "업소현황",
+                    "trend_direction": (
+                        "up"
+                        if float(item["updown_rate"]) > 0
+                        else "down"
+                        if float(item["updown_rate"]) < 0
+                        else "flat"
+                    ),
+                }
+            )
+
+        return competitors, "SBIZ_API_STORE_STATUS_KEY"
 
     def _merge_competitor_trends_from_reference(
         self,
@@ -2034,11 +2965,13 @@ class AnalyticsRepository:
             )
             sales_trend = []
             payment_demographics = []
-            trend_direction = "flat"
+            trend_direction = str(item.get("trend_direction", "flat"))
             if fallback:
                 sales_trend = list(fallback.get("sales_trend", []))
                 payment_demographics = list(fallback.get("payment_demographics", []))
-                trend_direction = str(fallback.get("trend_direction", "flat"))
+                fallback_trend = str(fallback.get("trend_direction", "")).strip()
+                if fallback_trend:
+                    trend_direction = fallback_trend
             merged.append(
                 {
                     "rank": rank,

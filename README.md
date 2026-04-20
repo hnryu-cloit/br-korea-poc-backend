@@ -124,12 +124,32 @@ br-korea-poc-backend/
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc` | PostgreSQL 연결 URL |
-| `EXTERNAL_API_KEY` | `stub-key` | 공공데이터포털 API 키 (소진공 SmallShop 실시간 조회용) |
+| `EXTERNAL_API_KEY` | `stub-key` | 공공데이터포털 API 키 (소진공 SmallShop 실시간 조회용, 우선 사용) |
+| `SBIZ_API_SNS_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `SNS 분석` 인증키 |
+| `SBIZ_API_STARTUP_WEATHER_KEY` | (빈 값) | 소진공 빅데이터 오픈API `창업기상도` 인증키 |
+| `SBIZ_API_HOTPLACE_KEY` | (빈 값) | 소진공 빅데이터 오픈API `핫플레이스` 인증키 |
+| `SBIZ_API_SALES_INDEX_KEY` | (빈 값) | 소진공 빅데이터 오픈API `점포당 매출액 추이` 인증키 |
+| `SBIZ_API_BUSINESS_DURATION_KEY` | (빈 값) | 소진공 빅데이터 오픈API `업력현황` 인증키 |
+| `SBIZ_API_STORE_STATUS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `업소현황` 인증키 |
+| `SBIZ_API_COMMERCIAL_MAP_KEY` | (빈 값) | 소진공 빅데이터 오픈API `상권지도` 인증키 |
+| `SBIZ_API_DETAIL_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `상세분석` 인증키 |
+| `SBIZ_API_DELIVERY_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `배달분석` 인증키 |
+| `SBIZ_API_TOUR_FESTIVAL_KEY` | (빈 값) | 소진공 빅데이터 오픈API `관광 축제 정보` 인증키 |
+| `SBIZ_API_SIMPLE_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `간단분석` 인증키 |
 | `AI_SERVICE_URL` | `http://localhost:6001` | AI 서비스 URL (미설정 시 repository/fallback 계산 사용) |
 | `AI_SERVICE_TOKEN` | (빈 값) | AI 서비스 인증 토큰 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:6003` | 허용 Origin (쉼표 구분) |
 | `APP_ENV` | `local` | 실행 환경 |
 | `APP_PORT` | `8000` | 내부 기본 포트 |
+
+- 소진공 빅데이터 OpenAPI 키는 인증키(`certKey`) 값만 `.env`에 저장하고, URL 전체(`...?certKey=...`)는 코드/문서에 직접 하드코딩하지 않습니다.
+- `GET /api/analytics/market-intelligence`의 실시간 경쟁사 조회 키 우선순위:
+- `GET /api/analytics/market-intelligence` 응답의 `store_reports`는 소진공 11개 API 키(`SBIZ_API_*`) 설정 상태를 기준으로 동적으로 생성되며, 경쟁사 실시간 연동에 사용된 키는 `연동중`으로 표시됩니다.
+- `SBIZ_API_SALES_INDEX_KEY`가 설정된 경우 `market-intelligence`는 소진공 `점포당 매출액 추이(slsIdex)` 조회를 추가 시도합니다. 성공 시 추정 매출 요약을 보정하고, 실패 시 `store_reports` 상태를 `점검 필요`로 표시합니다.
+- `store_reports`의 기본 상태는 `실호출 미확인`이며, 실제 호출이 성공한 API만 `연동중`으로 표시합니다.
+  - 1순위: `EXTERNAL_API_KEY` (공공데이터포털 SmallShop)
+  - 2순위: `SBIZ_API_COMMERCIAL_MAP_KEY` (소진공 상권지도 certKey)
+  - 3순위: `SBIZ_API_STORE_STATUS_KEY` (소진공 업소현황 certKey, `/sbiz/api/bizonSttus/storSttus/search.json` 기반 fallback)
 
 ## 실행
 
@@ -213,6 +233,7 @@ mypy .
 | `GET /api/data/preview/{table_name}` | 테이블 미리보기 |
 | `GET /api/analytics/metrics` | 상단 운영 지표 |
 | `GET /api/analytics/market-intelligence` | 상권 인텔리전스(구/동/업종/연도/분기/반경 스코프 지원, `EXTERNAL_API_KEY` 설정 시 소진공 SmallShop 실시간 경쟁사 반경 조회 포함) |
+| `GET /api/analytics/market-intelligence/weekly-report` | 상권 인텔리전스 데이터를 기반으로 상권 인텔리전스 데이터를 기반으로 주간 분석 리포트를 PDF/markdown으로 다운로드한다. |
 | `GET /api/analytics/weather-impact` | 날씨(기온/강수)와 매출 지표 상관 분석 |
 | `GET /api/signals` | 매출 시그널 목록 |
 | `GET /api/notifications` | 알림 인박스 |
@@ -409,3 +430,22 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 ## AI 서비스 연동
 
 `AI_SERVICE_URL`이 설정돼 있으면 `SalesService`가 `AIServiceClient`를 통해 AI 서비스로 질의를 프록시합니다. 미설정 시에도 backend repository가 적재 데이터 기준으로 응답을 계산합니다.
+
+## Session Update (2026-04-20)
+
+- `GET /api/analytics/market-intelligence/weekly-report` 생성 로직에서 `store_profile`이 없는 경우를 null-safe로 보정했습니다.
+- 현재 스코프에 `gu/dong`이 없고 매장 정보 조회가 실패해도 markdown/PDF 리포트 다운로드가 500 없이 동작합니다.
+- `app.main`에 `/static/menu-images` 정적 마운트를 추가해 `resource/05. 던킨도너츠 메뉴/*.png` 파일을 URL로 직접 서빙합니다.
+- `production` 응답(`items`, `item-detail`)에 `image_url` 필드를 추가했고, 품목명 기반 매칭 실패 시 `null`을 반환하도록 처리했습니다.
+- 프론트에서 기본 플레이스홀더를 사용하도록 연계되어, backend `image_url`이 없는 품목도 화면 깨짐 없이 표시됩니다.
+- `notifications`, `home/overview`, `production/waste-summary`, `production/inventory-status` 500 원인을 정비해 `http://localhost:6003` Origin 기준 CORS 정상 응답(ACAO 포함)을 확인했습니다.
+- 주문 도메인에서 `GET /api/ordering/history` 필터(`date_from/date_to/item_nm/is_auto`)를 지원하도록 확장했습니다.
+- `GET /api/ordering/history/insights`를 추가해 발주 이력 기반 KPI/이상징후/변동 품목 인사이트를 제공합니다.
+- `GET /api/analytics/market-intelligence`의 합성 랜덤 데이터 응답을 제거하고, 상권/고객 분석 필드를 실데이터(서울시 상권 reference + 소진공 실호출) 기준으로만 생성하도록 변경했습니다.
+- `household_composition_pie`, `estimated_residence_regions`를 실데이터 집계로 추가했습니다.
+- 요청한 연도/분기에 데이터가 없을 때는 동일 스코프의 가용 실데이터(연도/분기 조건 제외)로 자동 폴백하고, 폴백도 없으면 빈값+안내 문구를 반환합니다.
+- `market-intelligence` 응답에 `industry_analysis`, `sales_analysis`, `population_analysis`, `regional_status`, `customer_characteristics`를 추가해 상권/고객 분석 화면 5개 블록(업종/매출/인구/지역/고객특성)을 단일 API로 제공합니다.
+- `5년 업력현황`, `직장/주거 인구`, `소득소비`, `교통접근지수`, `고객특성(성비/핵심 연령·시간대)`은 reference 데이터 기반 실집계 또는 프록시 집계로 계산합니다.
+- `raw_daily_store_cpi_tmzon`의 `cpi_nm/bill_cnt` 실데이터에서 신규/재방문 키워드가 식별되면 `customer_characteristics.new_customer_ratio / regular_customer_ratio`를 자동 계산합니다(미식별 시 null 유지).
+- 현재 샘플 데이터의 `cpi_nm/cpi_cd`는 프로모션 중심 코드로 확인되어 신규/재방문 식별값이 없어, 해당 비율은 `null` + `data_sources` 안내 문구로 반환됩니다.
+- 추가로 `raw_daily_store_item/raw_daily_store_pay_way/raw_order_extract`에서 고객 식별 컬럼(`customer_id/member_id/phone_no/card_no` 등)이 발견되면 자동탐지로 신규/단골 비율을 계산하도록 템플릿을 확장했습니다.

@@ -94,3 +94,10 @@ class SalesSummaryResponse(BaseModel):
     avg_margin_rate: float = 0.0
     avg_net_profit_per_item: float = 0.0
     estimated_today_profit: float = 0.0
+
+
+class SalesCampaignEffectResponse(BaseModel):
+    title: str = "캠페인 효과 분석"
+    summary: str = "캠페인 효과 데이터가 준비되지 않았습니다."
+    metrics: list[SalesInsightMetric] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
