@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Literal
 
@@ -40,6 +41,8 @@ from app.schemas.analytics import (
     WeatherImpactResponse,
     CustomerCharacteristics,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AnalyticsService:
@@ -112,15 +115,34 @@ class AnalyticsService:
         quarter: str | None = None,
         radius_m: int | None = None,
         ) -> MarketIntelligenceResponse:
-        data = self.repository.get_market_intelligence(
-            store_id=store_id,
-            gu=gu,
-            dong=dong,
-            industry=industry,
-            year=year,
-            quarter=quarter,
-            radius_m=radius_m,
-        )
+        try:
+            data = self.repository.get_market_intelligence(
+                store_id=store_id,
+                gu=gu,
+                dong=dong,
+                industry=industry,
+                year=year,
+                quarter=quarter,
+                radius_m=radius_m,
+            )
+        except Exception as exc:  # noqa: BLE001 - 상권 화면 전체 장애 방지
+            logger.exception(
+                "get_market_intelligence failed (store_id=%s, gu=%s, dong=%s, industry=%s, year=%s, quarter=%s, radius_m=%s): %s",
+                store_id,
+                gu,
+                dong,
+                industry,
+                year,
+                quarter,
+                radius_m,
+                exc,
+            )
+            data = {
+                "radius_km": float((radius_m or 3000) / 1000.0),
+                "data_sources": [
+                    "market-intelligence 조회 실패: 백엔드 로그를 확인하세요.",
+                ],
+            }
         return MarketIntelligenceResponse(
             radius_km=float(data.get("radius_km", 3.0)),
             category_sales_pie=[TradeAreaSalesSlice(**item) for item in data.get("category_sales_pie", [])],

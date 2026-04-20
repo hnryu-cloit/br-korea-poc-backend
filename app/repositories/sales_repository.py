@@ -40,20 +40,10 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             return result
 
         # 1. 사용할 테이블·컬럼 결정
-        item_relation, amt_col, net_col, qty_col = None, None, None, None
-        if has_table(self.engine, "core_daily_item_sales"):
-            item_relation = "core_daily_item_sales"
-            amt_col = "sale_amt"
-            net_col = "net_sale_amt"
-            qty_col = "sale_qty"
-        elif has_table(self.engine, "raw_daily_store_item"):
-            item_relation = "raw_daily_store_item"
-            amt_col = "sale_amt"
-            net_col = "sale_amt"
-            qty_col = "sale_qty"
-
-        if not item_relation:
-            return result
+        item_relation = "raw_daily_store_item"
+        amt_col = "sale_amt"
+        net_col = "sale_amt"
+        qty_col = "sale_qty"
 
         store_filter = ""
         params: dict = {}

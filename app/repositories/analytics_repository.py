@@ -60,10 +60,19 @@ class AnalyticsRepository:
             return []
 
         period = self._resolve_period(date_from=date_from, date_to=date_to)
+        resolved_store_id = self._resolve_metrics_store_id(store_id)
+        if period and not self._has_metric_rows_in_period(store_id=resolved_store_id, period=period):
+            logger.info(
+                "analytics metrics period fallback: no rows in selected period (store_id=%s, from=%s, to=%s), fallback to latest 7-day window",
+                resolved_store_id or "ALL",
+                period["recent_from"],
+                period["recent_to"],
+            )
+            period = None
 
         items: list[dict] = []
         try:
-            channel_metrics = self._get_channel_metrics(store_id=store_id, period=period)
+            channel_metrics = self._get_channel_metrics(store_id=resolved_store_id, period=period)
         except SQLAlchemyError:
             channel_metrics = None
         if channel_metrics:
@@ -77,14 +86,14 @@ class AnalyticsRepository:
             )
 
         try:
-            sales_metrics = self._get_sales_metrics(store_id=store_id, period=period)
+            sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
         except SQLAlchemyError:
             sales_metrics = None
         if sales_metrics:
             items.extend([sales_metrics["total_sales"], sales_metrics["coffee_attach_ratio"]])
 
         try:
-            discount_metrics = self._get_discount_metrics(store_id=store_id, period=period)
+            discount_metrics = self._get_discount_metrics(store_id=resolved_store_id, period=period)
         except SQLAlchemyError:
             discount_metrics = None
         if discount_metrics:
@@ -108,8 +117,7 @@ class AnalyticsRepository:
         required_tables = (
             "raw_weather_daily",
             "raw_store_master",
-            "core_channel_sales",
-            "core_daily_item_sales",
+            "raw_daily_store_item",
         )
         if not all(has_table(self.engine, name) for name in required_tables):
             return {
@@ -145,9 +153,9 @@ class AnalyticsRepository:
                 SELECT
                     c.sale_dt,
                     s.sido,
-                    SUM(CASE WHEN c.ho_chnl_div LIKE '온라인%' THEN COALESCE(c.ord_cnt, 0) ELSE 0 END) AS delivery_orders,
-                    SUM(CASE WHEN c.ho_chnl_div LIKE '오프라인%' THEN COALESCE(c.ord_cnt, 0) ELSE 0 END) AS offline_orders
-                FROM core_channel_sales c
+                    SUM(CAST(COALESCE(NULLIF(CAST(c.ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS delivery_orders,
+                    0 AS offline_orders
+                FROM raw_daily_store_online c
                 JOIN raw_store_master s ON s.masked_stor_cd = c.masked_stor_cd
                 WHERE c.sale_dt BETWEEN :date_from AND :date_to
                 {store_filter}
@@ -157,8 +165,8 @@ class AnalyticsRepository:
                 SELECT
                     i.sale_dt,
                     s.sido,
-                    SUM(COALESCE(i.sale_qty, 0)) AS product_qty
-                FROM core_daily_item_sales i
+                    SUM(CAST(COALESCE(NULLIF(CAST(i.sale_qty AS TEXT), ''), '0') AS NUMERIC)) AS product_qty
+                FROM raw_daily_store_item i
                 JOIN raw_store_master s ON s.masked_stor_cd = i.masked_stor_cd
                 WHERE i.sale_dt BETWEEN :date_from AND :date_to
                 {store_filter.replace("c.", "i.")}
@@ -293,10 +301,101 @@ class AnalyticsRepository:
             return "", {}
         return "WHERE masked_stor_cd = :store_id", {"store_id": store_id}
 
+    def _has_metric_rows_in_period(
+        self,
+        store_id: str | None,
+        period: dict[str, str],
+    ) -> bool:
+        if not self.engine:
+            return False
+
+        params: dict[str, str] = {
+            "date_from": period["recent_from"],
+            "date_to": period["recent_to"],
+        }
+        store_clause = ""
+        if store_id:
+            params["store_id"] = store_id
+            store_clause = "AND masked_stor_cd = :store_id"
+
+        checks: list[tuple[str, str]] = [
+            (
+                "raw_daily_store_item",
+                f"""
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM raw_daily_store_item
+                    WHERE sale_dt BETWEEN :date_from AND :date_to
+                      {store_clause}
+                )
+                """,
+            ),
+        ]
+        if has_table(self.engine, "raw_daily_store_pay_way"):
+            checks.append(
+                (
+                    "raw_daily_store_pay_way",
+                    f"""
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM raw_daily_store_pay_way
+                        WHERE sale_dt BETWEEN :date_from AND :date_to
+                          {store_clause}
+                    )
+                    """,
+                )
+            )
+
+        with self.engine.connect() as connection:
+            for _, query in checks:
+                exists = bool(connection.execute(text(query), params).scalar_one())
+                if exists:
+                    return True
+        return False
+
+    def _resolve_metrics_store_id(self, store_id: str | None) -> str | None:
+        if not store_id:
+            return None
+
+        normalized = store_id.strip()
+        if not normalized or normalized == "STORE_DEMO":
+            return None
+
+        if not self.engine or not has_table(self.engine, "raw_store_master"):
+            return normalized
+
+        try:
+            with self.engine.connect() as connection:
+                exists = bool(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT EXISTS(
+                                SELECT 1
+                                FROM raw_store_master
+                                WHERE masked_stor_cd = :store_id
+                            )
+                            """
+                        ),
+                        {"store_id": normalized},
+                    ).scalar_one()
+                )
+        except SQLAlchemyError:
+            return normalized
+
+        if exists:
+            return normalized
+
+        logger.info(
+            "analytics metrics store_id fallback: invalid store_id=%s, aggregate all stores",
+            normalized,
+        )
+        return None
+
     def _get_channel_metrics(
         self, store_id: str | None, period: dict[str, str] | None
     ) -> dict | None:
-        if not has_table(self.engine, "core_channel_sales"):
+        if not self.engine:
             return None
 
         store_filter, store_params = self._build_store_filter(store_id)
@@ -308,12 +407,12 @@ class AnalyticsRepository:
                 WITH daily AS (
                     SELECT
                         sale_dt,
-                        SUM(sale_amt) AS total_sales,
-                        SUM(CASE WHEN ho_chnl_div LIKE '온라인%' THEN ord_cnt ELSE 0 END) AS online_orders,
-                        SUM(CASE WHEN ho_chnl_div LIKE '오프라인%' THEN ord_cnt ELSE 0 END) AS offline_orders,
-                        SUM(CASE WHEN ho_chnl_div LIKE '온라인%' THEN sale_amt ELSE 0 END) AS online_sales,
-                        SUM(ord_cnt) AS total_orders
-                    FROM core_channel_sales
+                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS total_sales,
+                        SUM(CASE WHEN online_div_cd IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
+                        0 AS offline_orders,
+                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS online_sales,
+                        SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS total_orders
+                    FROM raw_daily_store_online
                     {store_filter}
                     GROUP BY sale_dt
                 )
@@ -338,12 +437,12 @@ class AnalyticsRepository:
                 WITH daily AS (
                     SELECT
                         sale_dt,
-                        SUM(sale_amt) AS total_sales,
-                        SUM(CASE WHEN ho_chnl_div LIKE '온라인%' THEN ord_cnt ELSE 0 END) AS online_orders,
-                        SUM(CASE WHEN ho_chnl_div LIKE '오프라인%' THEN ord_cnt ELSE 0 END) AS offline_orders,
-                        SUM(CASE WHEN ho_chnl_div LIKE '온라인%' THEN sale_amt ELSE 0 END) AS online_sales,
-                        SUM(ord_cnt) AS total_orders
-                    FROM core_channel_sales
+                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS total_sales,
+                        SUM(CASE WHEN online_div_cd IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
+                        0 AS offline_orders,
+                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS online_sales,
+                        SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS total_orders
+                    FROM raw_daily_store_online
                     {store_filter}
                     GROUP BY sale_dt
                 ),
@@ -452,27 +551,28 @@ class AnalyticsRepository:
     def _get_sales_metrics(
         self, store_id: str | None, period: dict[str, str] | None
     ) -> dict | None:
-        if not has_table(self.engine, "core_daily_item_sales"):
+        if not self.engine:
             return None
 
         store_filter, store_params = self._build_store_filter(store_id)
+        amt_expr = "CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)"
 
         if period:
             params: dict[str, str] = {**store_params, **period}
             query = text(
                 f"""
                 WITH daily AS (
-                    SELECT sale_dt, SUM(net_sale_amt) AS total_sales
-                    FROM core_daily_item_sales
+                    SELECT sale_dt, SUM({amt_expr}) AS total_sales
+                    FROM raw_daily_store_item
                     {store_filter}
                     GROUP BY sale_dt
                 ),
                 coffee AS (
                     SELECT
                         sale_dt,
-                        SUM(CASE WHEN item_nm LIKE '%커피%' OR item_nm LIKE '%아메리카노%' THEN net_sale_amt ELSE 0 END) AS coffee_sales,
-                        SUM(net_sale_amt) AS total_sales
-                    FROM core_daily_item_sales
+                        SUM(CASE WHEN item_nm LIKE '%커피%' OR item_nm LIKE '%아메리카노%' THEN {amt_expr} ELSE 0 END) AS coffee_sales,
+                        SUM({amt_expr}) AS total_sales
+                    FROM raw_daily_store_item
                     {store_filter}
                     GROUP BY sale_dt
                 )
@@ -493,8 +593,8 @@ class AnalyticsRepository:
                 WITH daily AS (
                     SELECT
                         sale_dt,
-                        SUM(net_sale_amt) AS total_sales
-                    FROM core_daily_item_sales
+                        SUM({amt_expr}) AS total_sales
+                    FROM raw_daily_store_item
                     {store_filter}
                     GROUP BY sale_dt
                 ),
@@ -511,10 +611,10 @@ class AnalyticsRepository:
                     FROM (
                         SELECT
                             sale_dt,
-                            SUM(CASE WHEN item_nm LIKE '%커피%' OR item_nm LIKE '%아메리카노%' THEN net_sale_amt ELSE 0 END) AS coffee_sales,
-                            SUM(net_sale_amt) AS total_sales,
+                            SUM(CASE WHEN item_nm LIKE '%커피%' OR item_nm LIKE '%아메리카노%' THEN {amt_expr} ELSE 0 END) AS coffee_sales,
+                            SUM({amt_expr}) AS total_sales,
                             ROW_NUMBER() OVER (ORDER BY sale_dt DESC) AS rn
-                        FROM core_daily_item_sales
+                        FROM raw_daily_store_item
                         {store_filter}
                         GROUP BY sale_dt
                     ) src
@@ -702,14 +802,23 @@ class AnalyticsRepository:
         prior_total_amt = float(summary["prior_total_amt"] or 0)
         prior_discount_amt = float(summary["prior_discount_amt"] or 0)
 
-        recent_ratio = (
-            0 if recent_total_amt == 0 else round(recent_discount_amt / recent_total_amt * 100, 1)
-        )
-        prior_ratio = (
-            0 if prior_total_amt == 0 else round(prior_discount_amt / prior_total_amt * 100, 1)
-        )
-        ratio_delta = round(recent_ratio - prior_ratio, 1)
+        recent_ratio_raw = 0 if recent_total_amt == 0 else (recent_discount_amt / recent_total_amt * 100)
+        prior_ratio_raw = 0 if prior_total_amt == 0 else (prior_discount_amt / prior_total_amt * 100)
+        recent_ratio = round(recent_ratio_raw, 1)
+        prior_ratio = round(prior_ratio_raw, 1)
+        ratio_delta_raw = recent_ratio_raw - prior_ratio_raw
+        ratio_delta = round(ratio_delta_raw, 1)
         trend = "up" if ratio_delta > 0 else "down" if ratio_delta < 0 else "flat"
+
+        if 0 < abs(recent_ratio_raw) < 0.1:
+            ratio_text = f"{recent_ratio_raw:.2f}%"
+        else:
+            ratio_text = f"{recent_ratio:.1f}%"
+
+        if 0 < abs(ratio_delta_raw) < 0.1:
+            ratio_delta_text = f"{ratio_delta_raw:+.2f}%p"
+        else:
+            ratio_delta_text = f"{ratio_delta:+.1f}%p"
 
         detail_parts = ["제휴할인 + 캠페인할인결제"]
         if period:
@@ -722,8 +831,8 @@ class AnalyticsRepository:
         return {
             "discount_ratio": {
                 "label": "할인 결제 비중",
-                "value": f"{recent_ratio:.1f}%",
-                "change": f"{ratio_delta:+.1f}%p",
+                "value": ratio_text,
+                "change": ratio_delta_text,
                 "trend": trend,
                 "detail": " · ".join(detail_parts),
             }
@@ -793,108 +902,108 @@ class AnalyticsRepository:
             return None
 
     def get_customer_profile(self, store_id: str | None = None) -> dict:
+        if not self.engine:
+            return {"customer_segments": [], "telecom_discounts": []}
+
         customer_segments: list[dict] = []
         telecom_discounts: list[dict] = []
 
-        if not self.engine:
-            return {"customer_segments": customer_segments, "telecom_discounts": telecom_discounts}
+        try:
+            with self.engine.connect() as conn:
+                campaign_columns = {
+                    column["name"].lower()
+                    for column in inspect(self.engine).get_columns("raw_campaign_master")
+                }
+                campaign_store_col = next(
+                    (
+                        column
+                        for column in ("masked_stor_cd", "store_id", "stor_cd")
+                        if column in campaign_columns
+                    ),
+                    None,
+                )
+                campaign_store_filter = (
+                    f" AND {campaign_store_col} = :store_id"
+                    if store_id and campaign_store_col
+                    else ""
+                )
+                campaign_params: dict[str, str] = {}
+                if store_id and campaign_store_col:
+                    campaign_params["store_id"] = store_id
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                        SELECT trgt_cust_type_nm, COUNT(*) AS cnt
+                        FROM raw_campaign_master
+                        WHERE use_yn = '1'
+                          {campaign_store_filter}
+                        GROUP BY trgt_cust_type_nm
+                        ORDER BY cnt DESC
+                    """
+                        ),
+                        campaign_params,
+                    )
+                    .mappings()
+                    .all()
+                )
+                customer_segments = [
+                    {"segment_nm": r["trgt_cust_type_nm"] or "", "count": int(r["cnt"] or 0)}
+                    for r in rows
+                ]
+        except SQLAlchemyError as exc:
+            logger.warning("get_customer_profile 캠페인 세그먼트 쿼리 실패: error=%s", exc)
 
         try:
             with self.engine.connect() as conn:
-                if has_table(self.engine, "raw_campaign_master"):
-                    campaign_columns = {
-                        column["name"].lower()
-                        for column in inspect(self.engine).get_columns("raw_campaign_master")
-                    }
-                    campaign_store_col = next(
-                        (
-                            column
-                            for column in ("masked_stor_cd", "store_id", "stor_cd")
-                            if column in campaign_columns
+                telecom_columns = {
+                    column["name"].lower()
+                    for column in inspect(self.engine).get_columns("raw_telecom_discount_policy")
+                }
+                telecom_store_col = next(
+                    (
+                        column
+                        for column in ("masked_stor_cd", "store_id", "stor_cd")
+                        if column in telecom_columns
+                    ),
+                    None,
+                )
+                telecom_store_filter = (
+                    f" AND {telecom_store_col} = :store_id"
+                    if store_id and telecom_store_col
+                    else ""
+                )
+                telecom_params: dict[str, str] = {}
+                if store_id and telecom_store_col:
+                    telecom_params["store_id"] = store_id
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                        SELECT pay_dc_nm, pay_dc_grp_type_nm, pay_dc_val, pay_dc_methd_nm
+                        FROM raw_telecom_discount_policy
+                        WHERE use_yn = '1'
+                          {telecom_store_filter}
+                        ORDER BY grp_prrty
+                        LIMIT 6
+                    """
                         ),
-                        None,
+                        telecom_params,
                     )
-                    campaign_store_filter = (
-                        f" AND {campaign_store_col} = :store_id"
-                        if store_id and campaign_store_col
-                        else ""
-                    )
-                    campaign_params: dict[str, str] = {}
-                    if store_id and campaign_store_col:
-                        campaign_params["store_id"] = store_id
-                    rows = (
-                        conn.execute(
-                            text(
-                                f"""
-                            SELECT trgt_cust_type_nm, COUNT(*) AS cnt
-                            FROM raw_campaign_master
-                            WHERE use_yn = '1'
-                              {campaign_store_filter}
-                            GROUP BY trgt_cust_type_nm
-                            ORDER BY cnt DESC
-                        """
-                            )
-                            ,
-                            campaign_params,
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    customer_segments = [
-                        {"segment_nm": r["trgt_cust_type_nm"] or "", "count": int(r["cnt"] or 0)}
-                        for r in rows
-                    ]
-
-                if has_table(self.engine, "raw_telecom_discount_policy"):
-                    telecom_columns = {
-                        column["name"].lower()
-                        for column in inspect(self.engine).get_columns("raw_telecom_discount_policy")
+                    .mappings()
+                    .all()
+                )
+                telecom_discounts = [
+                    {
+                        "name": r["pay_dc_nm"] or "",
+                        "type_nm": r["pay_dc_grp_type_nm"] or "",
+                        "value": str(r["pay_dc_val"] or ""),
+                        "method_nm": r["pay_dc_methd_nm"] or "",
                     }
-                    telecom_store_col = next(
-                        (
-                            column
-                            for column in ("masked_stor_cd", "store_id", "stor_cd")
-                            if column in telecom_columns
-                        ),
-                        None,
-                    )
-                    telecom_store_filter = (
-                        f" AND {telecom_store_col} = :store_id"
-                        if store_id and telecom_store_col
-                        else ""
-                    )
-                    telecom_params: dict[str, str] = {}
-                    if store_id and telecom_store_col:
-                        telecom_params["store_id"] = store_id
-                    rows = (
-                        conn.execute(
-                            text(
-                                f"""
-                            SELECT pay_dc_nm, pay_dc_grp_type_nm, pay_dc_val, pay_dc_methd_nm
-                            FROM raw_telecom_discount_policy
-                            WHERE use_yn = '1'
-                              {telecom_store_filter}
-                            ORDER BY grp_prrty
-                            LIMIT 6
-                        """
-                            )
-                            ,
-                            telecom_params,
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    telecom_discounts = [
-                        {
-                            "name": r["pay_dc_nm"] or "",
-                            "type_nm": r["pay_dc_grp_type_nm"] or "",
-                            "value": str(r["pay_dc_val"] or ""),
-                            "method_nm": r["pay_dc_methd_nm"] or "",
-                        }
-                        for r in rows
-                    ]
+                    for r in rows
+                ]
         except SQLAlchemyError as exc:
-            logger.warning("get_customer_profile 쿼리 실패: error=%s", exc)
+            logger.warning("get_customer_profile 통신사 할인 쿼리 실패: error=%s", exc)
 
         return {"customer_segments": customer_segments, "telecom_discounts": telecom_discounts}
 
@@ -911,28 +1020,18 @@ class AnalyticsRepository:
 
         dow_labels = ["월", "화", "수", "목", "금", "토", "일"]
 
-        empty = {
-            "headline": "데이터를 불러오는 중입니다.",
-            "headline_trend": "flat",
-            "points": [],
-            "insight_chips": [],
-            "dow_points": [],
-            "hour_points": [],
-        }
-
         if not self.engine:
-            return empty
+            return {
+                "headline": "",
+                "headline_trend": "flat",
+                "points": [],
+                "insight_chips": [],
+                "dow_points": [],
+                "hour_points": [],
+            }
 
-        # 일별 매출 기준 테이블 선택
-        daily_table = None
-        for t in ("core_daily_item_sales", "raw_daily_store_item"):
-            if has_table(self.engine, t):
-                daily_table = t
-                break
-        if not daily_table:
-            return empty
-
-        amount_col = "net_sale_amt" if daily_table == "core_daily_item_sales" else "sale_amt"
+        daily_table = "raw_daily_store_item"
+        amount_col = "sale_amt"
 
         def _fmt(d) -> str:
             return d.strftime("%Y%m%d")
@@ -1016,10 +1115,9 @@ class AnalyticsRepository:
                     for i in range(7)
                 ]
 
-                # 4. 시간대별 평균 매출 (raw_daily_store_item_tmzon 우선)
+                # 4. 시간대별 평균 매출 (raw_daily_store_item_tmzon)
                 hour_points: list[dict] = []
-                if has_table(self.engine, "raw_daily_store_item_tmzon"):
-                    # tmzon_div 컬럼에 시간대 코드(0~23) 저장
+                try:
                     h_this = (
                         conn.execute(
                             text(
@@ -1073,10 +1171,12 @@ class AnalyticsRepository:
                         }
                         for h in all_hours
                     ]
+                except SQLAlchemyError:
+                    pass
 
                 # 5. 채널별 인사이트 chip
                 channel_chips: list[dict] = []
-                if has_table(self.engine, "raw_daily_store_online"):
+                try:
                     ch_rows = (
                         conn.execute(
                             text(
@@ -1101,10 +1201,19 @@ class AnalyticsRepository:
                                 "trend": "up",
                             }
                         )
+                except SQLAlchemyError:
+                    pass
 
         except SQLAlchemyError as exc:
             logger.warning("get_sales_trend 쿼리 실패: %s", exc)
-            return empty
+            return {
+                "headline": "",
+                "headline_trend": "flat",
+                "points": [],
+                "insight_chips": [],
+                "dow_points": [],
+                "hour_points": [],
+            }
 
         # 누적합 계산
         this_daily: dict[int, float] = {}
