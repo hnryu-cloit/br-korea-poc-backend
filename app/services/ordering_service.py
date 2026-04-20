@@ -72,6 +72,14 @@ class OrderingService:
     def _metric(key: str, value: object) -> dict[str, str]:
         return {"key": key, "value": str(value)}
 
+    def _require_history_store_id(self, store_id: str | None) -> str:
+        normalized = (store_id or "").strip()
+        if not normalized:
+            raise ValueError("store_id is required")
+        if not self.repository.is_known_store(normalized):
+            raise ValueError(f"Unknown store_id: {normalized}")
+        return normalized
+
     async def _get_ai_ordering_recommendation(
         self,
         store_id: str,
@@ -152,6 +160,9 @@ class OrderingService:
             )
             weather_summary = self._safe_str(ai_payload.get("weather_summary"))
             trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
+
+        if not weather_summary:
+            weather_summary = await self.repository.get_weather_forecast_summary(store_id=store_id)
 
         if deadline_at is None:
             deadline = await self.get_deadline(store_id=store_id)
@@ -350,8 +361,9 @@ class OrderingService:
         item_nm: str | None = None,
         is_auto: bool | None = None,
     ):
+        normalized_store_id = self._require_history_store_id(store_id)
         data = self.repository.get_history_filtered(
-            store_id=store_id,
+            store_id=normalized_store_id,
             limit=limit,
             date_from=date_from,
             date_to=date_to,
@@ -375,8 +387,9 @@ class OrderingService:
         is_auto: bool | None = None,
         limit: int = 200,
     ) -> OrderingHistoryInsightsResponse:
+        normalized_store_id = self._require_history_store_id(store_id)
         data = self.repository.get_history_filtered(
-            store_id=store_id,
+            store_id=normalized_store_id,
             limit=limit,
             date_from=date_from,
             date_to=date_to,

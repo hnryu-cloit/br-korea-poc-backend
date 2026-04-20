@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import get_ordering_service
 from app.schemas.ordering import (
@@ -87,7 +87,7 @@ async def get_order_selection_summary(
 
 @router.get("/history", response_model=OrderingHistoryResponse)
 def get_ordering_history(
-    store_id: str | None = Query(default=None),
+    store_id: str = Query(...),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
     item_nm: str | None = Query(default=None),
@@ -95,19 +95,22 @@ def get_ordering_history(
     limit: int = Query(default=30, ge=1, le=200),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingHistoryResponse:
-    return service.get_history(
-        store_id=store_id,
-        limit=limit,
-        date_from=date_from,
-        date_to=date_to,
-        item_nm=item_nm,
-        is_auto=is_auto,
-    )
+    try:
+        return service.get_history(
+            store_id=store_id,
+            limit=limit,
+            date_from=date_from,
+            date_to=date_to,
+            item_nm=item_nm,
+            is_auto=is_auto,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/history/insights", response_model=OrderingHistoryInsightsResponse)
 def get_ordering_history_insights(
-    store_id: str | None = Query(default=None),
+    store_id: str = Query(...),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
     item_nm: str | None = Query(default=None),
@@ -115,11 +118,14 @@ def get_ordering_history_insights(
     limit: int = Query(default=200, ge=20, le=500),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingHistoryInsightsResponse:
-    return service.get_history_insights(
-        store_id=store_id,
-        date_from=date_from,
-        date_to=date_to,
-        item_nm=item_nm,
-        is_auto=is_auto,
-        limit=limit,
-    )
+    try:
+        return service.get_history_insights(
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+            item_nm=item_nm,
+            is_auto=is_auto,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

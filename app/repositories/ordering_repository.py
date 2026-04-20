@@ -2,11 +2,62 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import httpx
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.infrastructure.db.utils import has_table
+
+_OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+_DEFAULT_WEATHER_COORD = (37.5665, 126.9780)  # 서울
+_SIDO_COORDINATES: dict[str, tuple[float, float]] = {
+    "서울": (37.5665, 126.9780),
+    "경기": (37.4138, 127.5183),
+    "인천": (37.4563, 126.7052),
+    "강원": (37.8228, 128.1555),
+    "충북": (36.6358, 127.4914),
+    "충남": (36.6588, 126.6728),
+    "대전": (36.3504, 127.3845),
+    "세종": (36.4800, 127.2890),
+    "전북": (35.7175, 127.1530),
+    "전남": (34.8679, 126.9910),
+    "광주": (35.1595, 126.8526),
+    "경북": (36.4919, 128.8889),
+    "경남": (35.4606, 128.2132),
+    "대구": (35.8714, 128.6014),
+    "울산": (35.5384, 129.3114),
+    "부산": (35.1796, 129.0756),
+    "제주": (33.4996, 126.5312),
+}
+_WEATHER_CODE_LABELS: dict[int, str] = {
+    0: "맑음",
+    1: "대체로 맑음",
+    2: "구름 조금",
+    3: "흐림",
+    45: "안개",
+    48: "안개",
+    51: "약한 이슬비",
+    53: "이슬비",
+    55: "강한 이슬비",
+    61: "약한 비",
+    63: "비",
+    65: "강한 비",
+    66: "약한 어는비",
+    67: "어는비",
+    71: "약한 눈",
+    73: "눈",
+    75: "강한 눈",
+    77: "진눈깨비",
+    80: "약한 소나기",
+    81: "소나기",
+    82: "강한 소나기",
+    85: "약한 눈소나기",
+    86: "눈소나기",
+    95: "뇌우",
+    96: "우박 동반 뇌우",
+    99: "강한 우박 동반 뇌우",
+}
 
 
 class OrderingRepository:
@@ -44,6 +95,80 @@ class OrderingRepository:
 
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
+
+    def is_known_store(self, store_id: str) -> bool:
+        if not self.engine or not store_id:
+            return False
+        try:
+            with self.engine.connect() as connection:
+                exists = connection.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM raw_store_master
+                        WHERE masked_stor_cd = :store_id
+                        LIMIT 1
+                        """
+                    ),
+                    {"store_id": store_id},
+                ).scalar_one_or_none()
+                return exists is not None
+        except SQLAlchemyError:
+            return False
+
+    def _resolve_store_sido(self, store_id: str | None) -> str:
+        if not self.engine or not store_id or not has_table(self.engine, "raw_store_master"):
+            return "서울"
+        try:
+            with self.engine.connect() as connection:
+                raw_sido = connection.execute(
+                    text(
+                        """
+                        SELECT NULLIF(TRIM(CAST(sido AS TEXT)), '')
+                        FROM raw_store_master
+                        WHERE masked_stor_cd = :store_id
+                        LIMIT 1
+                        """
+                    ),
+                    {"store_id": store_id},
+                ).scalar_one_or_none()
+                if raw_sido:
+                    return str(raw_sido)
+        except SQLAlchemyError:
+            return "서울"
+        return "서울"
+
+    async def get_weather_forecast_summary(self, store_id: str | None = None) -> str | None:
+        sido = self._resolve_store_sido(store_id=store_id)
+        latitude, longitude = _SIDO_COORDINATES.get(sido, _DEFAULT_WEATHER_COORD)
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                response = await client.get(
+                    _OPEN_METEO_FORECAST_URL,
+                    params={
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                        "forecast_days": 1,
+                        "timezone": "Asia/Seoul",
+                    },
+                )
+                response.raise_for_status()
+                daily = (response.json() or {}).get("daily") or {}
+                date = (daily.get("time") or [None])[0]
+                max_temp = (daily.get("temperature_2m_max") or [None])[0]
+                min_temp = (daily.get("temperature_2m_min") or [None])[0]
+                rain_prob = (daily.get("precipitation_probability_max") or [None])[0]
+                weather_code = (daily.get("weather_code") or [None])[0]
+                if not date:
+                    return None
+                weather_label = _WEATHER_CODE_LABELS.get(int(weather_code), "날씨")
+                max_text = "-" if max_temp is None else f"{int(round(float(max_temp)))}도"
+                min_text = "-" if min_temp is None else f"{int(round(float(min_temp)))}도"
+                rain_text = "-" if rain_prob is None else f"{int(round(float(rain_prob)))}%"
+                return f"{sido} {date} 예보 · {weather_label}, 최고 {max_text} / 최저 {min_text}, 강수확률 {rain_text}"
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
 
     def _table_columns(self, table_name: str) -> dict[str, str]:
         if not self.engine:
@@ -225,18 +350,6 @@ class OrderingRepository:
                 ("item_nm", "item_name", "product_nm"),
                 ("item_cd", "item_code", "sku_id"),
                 ("ord_rec_qty", "ord_qty", "confrm_qty"),
-                store_id=store_id,
-            )
-            if options:
-                return options
-
-        if self.engine and has_table(self.engine, "core_daily_item_sales"):
-            options = self._build_options_from_relation(
-                "core_daily_item_sales",
-                ("sale_dt",),
-                ("item_nm", "item_name"),
-                ("item_cd", "item_code", "sku_id"),
-                ("sale_qty",),
                 store_id=store_id,
             )
             if options:
@@ -506,14 +619,17 @@ class OrderingRepository:
         item_nm: str | None = None,
         is_auto: bool | None = None,
     ) -> dict:
-        if not self.engine or not store_id:
+        if not self.engine:
             return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
 
         date_from_norm = self._normalize_yyyymmdd(date_from)
         date_to_norm = self._normalize_yyyymmdd(date_to)
 
-        where_clauses = ["masked_stor_cd = :store_id"]
-        params: dict[str, object] = {"store_id": store_id, "limit": limit}
+        where_clauses: list[str] = []
+        params: dict[str, object] = {"limit": limit}
+        if store_id:
+            where_clauses.append("masked_stor_cd = :store_id")
+            params["store_id"] = store_id
         if date_from_norm:
             where_clauses.append("REPLACE(CAST(dlv_dt AS TEXT), '-', '') >= :date_from")
             params["date_from"] = date_from_norm
@@ -527,7 +643,7 @@ class OrderingRepository:
             where_clauses.append("CAST(auto_ord_yn AS TEXT) = :auto_ord_yn")
             params["auto_ord_yn"] = "1" if is_auto else "0"
 
-        where_sql = " AND ".join(where_clauses)
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
         try:
             with self.engine.connect() as conn:
