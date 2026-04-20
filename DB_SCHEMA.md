@@ -5,6 +5,50 @@
 
 ---
 
+## 원본 테이블 분류
+
+### 생산
+
+| 원본 테이블명 | Comment | DB 테이블 |
+|---|---|---|
+| `PROD_DTL` | 생산 테이블 | `raw_production_extract` |
+
+### 주문
+
+| 원본 테이블명 | Comment | DB 테이블 |
+|---|---|---|
+| `ORD_DTL` | 주문 테이블 | `raw_order_extract` |
+
+### 재고
+
+| 원본 테이블명 | Comment | DB 테이블 |
+|---|---|---|
+| `SPL_DAY_STOCK_DTL` | 재고 테이블 | `raw_inventory_extract` |
+
+### 매출
+
+| 원본 테이블명 | Comment | DB 테이블 |
+|---|---|---|
+| `DAILY_STOR_ITEM_TMZON` | 일자별 시간대별 상품별 매출 데이터 | `raw_daily_store_item_tmzon`, `core_hourly_item_sales` |
+| `DAILY_STOR_CPI` | 일자별 시간대별 캠페인 매출 데이터 | `raw_daily_store_cpi_tmzon` |
+| `DAILY_STOR_PAY_WAY` | 일자별 결제 수단별 매출 데이터 | `raw_daily_store_pay_way` |
+| `DAILY_STOR_ITEM` | 일자별 상품별 매출 | `raw_daily_store_item`, `core_daily_item_sales` |
+| `DAILY_STOR_CHL_TMZON` | 일자별 온/오프라인 매출 | `raw_daily_store_online`, `core_channel_sales` |
+
+### 마스터
+
+| 원본 테이블명 | Comment | DB 테이블 |
+|---|---|---|
+| `STOR_MST` | 점포 마스터 | `raw_store_master`, `core_store_master` |
+| `PAY_CD` | 결제수단 코드 | `raw_pay_cd` |
+| `MST_TERM_COOP_CMP_PAY_DC` | 마스터 기간 제휴사 결제 할인 | `raw_telecom_discount_policy` |
+| `MST_TERM_COOP_CMP_DC_ITEM` | 마스터 기간 제휴사 할인 상품 | `raw_telecom_discount_item` |
+| `CPI_MST` | 캠페인 마스터 | `raw_campaign_master` |
+| `CPI_ITEM_GRP_MNG` | 캠페인 상품 그룹 관리 | `raw_campaign_item_group` |
+| `CPI_ITEM_MNG` | 캠페인 상품 관리 | `raw_campaign_item` |
+
+---
+
 ## 문서 목적
 
 이 문서는 두 가지 목적을 함께 가집니다.
@@ -213,173 +257,529 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 
 ## STOR_MST — 점포 마스터
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| MASKED_STOR_CD | VARCHAR | str | 점포코드 |
-| MASKED_STOR_NM | VARCHAR | str | 점포명 |
+> DB 테이블: `raw_store_master`, `core_store_master`
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR | 점포코드 | |
+| MASKED_STOR_NM | `maked_stor_nm` | VARCHAR | 점포명 | DB 적재 시 오타 (s 누락) — 원본은 MASKED |
+
+> `raw_store_master` 추가 컬럼 (Excel 원본 확장 데이터):
+> `actual_sales_amt`, `campaign_sales_ratio`, `store_type`, `business_type`, `sido`, `region`, `shipment_center`, `store_area_pyeong`
 
 ---
 
 ## PAY_CD — 결제수단 코드
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| PAY_WAY_CD | VARCHAR | str | 결제/할인 그룹코드 |
-| PAY_WAY_NM | VARCHAR | str | 결제/할인 그룹명 |
-| PAY_DTL_CD | VARCHAR | str | 결제/할인 코드 |
-| PAY_DTL_NM | VARCHAR | str | 결제/할인 코드명 |
-| PAY_DC_TYPE | VARCHAR | str | 결제/할인 구분 |
-| PAY_DC_TYPE_NM | VARCHAR | str | 결제/할인 구분명 |
+> DB 테이블: `raw_pay_cd`
+>
+> ⚠️ CSV 적재 시 컬럼명이 원본과 다르게 변환됨
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 |
+|---|---|---|---|
+| PAY_WAY_CD | `pay_dc_grp_type` | VARCHAR | 결제/할인 그룹코드 |
+| PAY_WAY_NM | `entry_nm_1` | VARCHAR | 결제/할인 그룹명 |
+| PAY_DTL_CD | `pay_dc_cd` | VARCHAR | 결제/할인 코드 |
+| PAY_DTL_NM | `pay_dc_nm` | VARCHAR | 결제/할인 코드명 |
+| PAY_DC_TYPE | `pay_dc_type` | VARCHAR | 결제/할인 구분 |
+| PAY_DC_TYPE_NM | `entry_nm_2` | VARCHAR | 결제/할인 구분명 |
 
 ---
 
 ## DAILY_STOR_ITEM_TMZON — 일자·시간대·상품별 매출
 
+> DB 테이블: `raw_daily_store_item_tmzon` / 정제 뷰: `core_hourly_item_sales`
+>
 > 금액 계산 규칙
 > - `ACTUAL_SALE_AMT` = `SALE_AMT` - `DC_AMT`
 > - `NET_SALE_AMT` = `SALE_AMT` - `DC_AMT` - `VAT_AMT`
 > - 부가세율: 10%
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| MASKED_STOR_CD | VARCHAR2(10) | str | 점포코드 |
-| MASKED_STOR_NM | VARCHAR2(20) | str | 점포명 |
-| ITEM_CD | VARCHAR2 | Optional[str] | 상품코드 |
-| ITEM_NM | VARCHAR2(20) | str | 상품명 |
-| SALE_DT | VARCHAR2(8) | str | 판매일자 (YYYYMMDD) |
-| TMZON_DIV | VARCHAR2(20) | str | 시간대 구분 |
-| SALE_QTY | NUMBER(10,0) | int | 판매수량 |
-| SALE_AMT | NUMBER(10,0) | int | 판매금액 |
-| RTN_QTY | NUMBER(10,0) | int | 반품수량 |
-| RTN_AMT | NUMBER(10,0) | int | 반품금액 |
-| DC_AMT | NUMBER(10,0) | int | 할인금액 |
-| ENURI_AMT | NUMBER(10,0) | int | 에누리금액 |
-| VAT_AMT | NUMBER(10,0) | int | 부가세금액 |
-| ACTUAL_SALE_AMT | NUMBER(10,0) | int | 실매출금액 |
-| NET_SALE_AMT | NUMBER(10,0) | int | 순매출금액 |
-| TAKE_IN_AMT | NUMBER(10,0) | int | TAKE IN 금액 |
-| TAKE_IN_VAT_AMT | NUMBER(10,0) | int | TAKE IN 부가세 |
-| TAKE_OUT_AMT | NUMBER(10,0) | int | TAKE OUT 금액 |
-| TAKE_OUT_VAT_AMT | NUMBER(10,0) | int | TAKE OUT 부가세 |
-| SVC_FEE_AMT | NUMBER(10,0) | int | 봉사료 금액 |
-| SVC_FEE_VAT_AMT | NUMBER(10,0) | int | 봉사료 부가세 |
-| REG_USER_ID | VARCHAR2(50) | Optional[str] | 등록자 ID |
-| REG_DATE | DATE | Optional[datetime] | 등록일시 |
-| UPD_USER_ID | VARCHAR2(50) | Optional[str] | 수정자 ID |
-| UPD_DATE | DATE | Optional[datetime] | 수정일시 |
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR2(10) | 점포코드 | |
+| MASKED_STOR_NM | `masked_stor_nm` | VARCHAR2(20) | 점포명 | |
+| ITEM_NM | `item_nm` | VARCHAR2(20) | 상품명 | |
+| SALE_DT | `sale_dt` | VARCHAR2(8) | 판매일자 (YYYYMMDD) | |
+| TMZON_DIV | `tmzon_div` | VARCHAR2(20) | 시간대 구분 | |
+| ITEM_CD | `item_cd` | VARCHAR2(20) | 상품코드 | |
+| SALE_QTY | `sale_qty` | NUMBER(10,0) | 판매수량 | |
+| SALE_AMT | `sale_amt` | NUMBER(10,0) | 판매금액 | |
+| RTN_QTY | `rtn_qty` | NUMBER(10,0) | 반품수량 | |
+| RTN_AMT | `rtn_amt` | NUMBER(10,0) | 반품금액 | |
+| DC_AMT | `dc_amt` | NUMBER(10,0) | 할인금액 | |
+| ENURI_AMT | `enuri_amt` | NUMBER(10,0) | 에누리금액 | |
+| VAT_AMT | `vat_amt` | NUMBER(10,0) | 부가세금액 | |
+| ACTUAL_SALE_AMT | `actual_sale_amt` | NUMBER(10,0) | 실매출금액 = SALE_AMT - DC_AMT | |
+| NET_SALE_AMT | `net_sale_amt` | NUMBER(10,0) | 순매출금액 = SALE_AMT - DC_AMT - VAT_AMT | |
+| TAKE_IN_AMT | `take_in_amt` | NUMBER(10,0) | TAKE IN 금액 | |
+| TAKE_IN_VAT_AMT | `take_in_vat_amt` | NUMBER(10,0) | TAKE IN 부가세 금액 | |
+| TAKE_OUT_VAT | `take_out_amt` | NUMBER(10,0) | TAKE OUT 금액 | 원본 컬럼명 오타 (VAT→AMT), DB는 take_out_amt |
+| TAKE_OUT_VAT_AMT | `take_out_vat_amt` | NUMBER(10,0) | TAKE OUT 부가세 금액 | |
+| SVC_FEE_AMT | `svc_fee_amt` | NUMBER(10,0) | 봉사료 금액 | |
+| SVC_FEE_VAT_AMT | `svc_fee_vat_amt` | NUMBER(10,0) | 봉사료 부가세 금액 | |
+| REG_USER_ID | `reg_user_id` | VARCHAR2(50) | 등록자 ID | |
+| REG_DATE | `reg_date` | DATE | 등록 일시 | |
+| UPD_USER_ID | `upd_user_id` | VARCHAR2(50) | 수정자 ID | |
+| UPD_DATE | `upd_date` | DATE | 수정 일시 | |
 
 ---
 
-## DAILY_STOR_CPI_TMZON — 일자별 시간대별 캠페인 매출
+## DAILY_STOR_CPI — 일자별 시간대별 캠페인 매출
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| CMP_CD | VARCHAR2(4) | str | 회사코드 |
-| SALE_DT | VARCHAR2(8) | str | 판매일자 (YYYYMMDD) |
-| MASKED_STOR_CD | VARCHAR2(10) | str | 점포코드 |
-| CPI_CD | VARCHAR2(14) | str | 캠페인코드 |
-| CPI_ADD_ACCUM_POINT | NUMBER(15,2) | float | 캠페인 추가 적립 포인트 |
-| CPI_CUST_USE_POINT | NUMBER(15,2) | float | 캠페인 고객 사용 포인트 |
-| CPI_DC_QTY | NUMBER(10,0) | int | 캠페인 할인 수량 |
-| CPI_DC_AMT | NUMBER(15,2) | float | 캠페인 할인 금액 |
-| CPI_CUSTCNT | NUMBER(15,2) | float | 캠페인 고객수 |
-| CPI_BILLCNT | NUMBER(15,2) | float | 캠페인 영수건수 |
-| TOTSALE_QTY | NUMBER(10,0) | int | 총 판매수량 |
-| TOTSALE_AMT | NUMBER(15,2) | float | 총 판매금액 |
-| TOTDC_AMT | NUMBER(15,2) | float | 총 할인금액 |
-| TOTACTUAL_SALE_AMT | NUMBER(15,2) | float | 총 실매출금액 |
-| TOTVAT_AMT | NUMBER(15,2) | float | 총 부가세 |
-| TOTNET_SALE_AMT | NUMBER(15,2) | float | 총 순매출금액 |
-| TOTBILLCNT | NUMBER(15,2) | float | 총 영수건수 |
-| TOTCUSTCNT | NUMBER(15,2) | float | 총 고객수 |
-| REG_USER_ID | VARCHAR2(20) | Optional[str] | 등록자 ID |
-| REG_DATE | DATE | Optional[datetime] | 등록일시 |
-| UPD_USER_ID | VARCHAR2(20) | Optional[str] | 수정자 ID |
-| UPD_DATE | DATE | Optional[datetime] | 수정일시 |
+> DB 테이블: `raw_daily_store_cpi_tmzon`
+>
+> ⚠️ **구조 불일치**: Excel 원본이 Oracle 스키마와 다른 pivot 구조로 제공됨
+> - Oracle 원본: 캠페인×날짜 행 단위, 집계 컬럼 (`TOTSALE_AMT` 등)
+> - 실제 DB: 캠페인×점포 행 단위, 시간대별 열 분리 (`qty_00~23`, `dc_amt_00~23`, `act_amt_00~23`)
+> - **`SALE_DT` 미적재** — 날짜 필터링 불가
+> - 미적재 컬럼: `CMP_CD`, `SALE_DT`, `CPI_ADD_ACCUM_POINT`, `CPI_CUST_USE_POINT`, `CPI_DC_QTY`, `CPI_CUSTCNT`, `TOTSALE_AMT`, `TOTVAT_AMT`, `TOTNET_SALE_AMT`, `TOTCUSTCNT`
+
+**원본 스키마 (Oracle DAILY_STOR_CPI)**
+
+| 원본 컬럼명 | 타입 | 설명 | DB 대응 |
+|---|---|---|---|
+| CMP_CD | VARCHAR2(4) | 회사 코드 | 미적재 |
+| SALE_DT | VARCHAR2(8) | 판매 일자 | **미적재** |
+| MASKED_STOR_CD | VARCHAR2(10) | 점포 코드 | `masked_stor_cd` |
+| CPI_CD | VARCHAR2(14) | 캠페인 코드 | `cpi_cd` |
+| CPI_ADD_ACCUM_POINT | NUMBER(15,2) | 캠페인 추가 적립 포인트 | 미적재 |
+| CPI_CUST_USE_POINT | NUMBER(15,2) | 캠페인 고객 사용 포인트 | 미적재 |
+| CPI_DC_QTY | NUMBER(10,0) | 캠페인 할인 수량 | 미적재 |
+| CPI_DC_AMT | NUMBER(15,2) | 캠페인 할인 금액 | `dc_amt_00~23` (시간대별) |
+| CPI_CUSTCNT | NUMBER(15,2) | 캠페인 고객수 | 미적재 |
+| CPI_BILLCNT | NUMBER(15,2) | 캠페인 영수건수 | `bill_cnt` |
+| TOTSALE_QTY | NUMBER(10,0) | 판매 수량 | `qty_00~23` 합산으로 계산 가능 |
+| TOTSALE_AMT | NUMBER(15,2) | 판매 금액 | 미적재 |
+| TOTDC_AMT | NUMBER(15,2) | 할인 금액 | `dc_amt_00~23` 합산으로 계산 가능 |
+| TOTACTUAL_SALE_AMT | NUMBER(15,2) | 실 매출 금액 | `act_amt_00~23` 합산으로 계산 가능 |
+| TOTVAT_AMT | NUMBER(15,2) | 부가세 금액 | 미적재 |
+| TOTNET_SALE_AMT | NUMBER(15,2) | 순 매출 금액 | 미적재 |
+| TOTBILLCNT | NUMBER(15,2) | 영수건수 | `bill_cnt` |
+| TOTCUSTCNT | NUMBER(15,2) | 고객수 | 미적재 |
+| REG_USER_ID | VARCHAR2(20) | 등록자 ID | 미적재 |
+| REG_DATE | DATE | 등록 일시 | 미적재 |
+| UPD_USER_ID | VARCHAR2(20) | 수정자 ID | 미적재 |
+| UPD_DATE | DATE | 수정 일시 | 미적재 |
+
+**실제 DB 컬럼 (`raw_daily_store_cpi_tmzon`)**
+
+| DB 컬럼명 | 설명 |
+|---|---|
+| `masked_stor_cd` | 점포코드 |
+| `masked_stor_nm` | 점포명 |
+| `cpi_cd` | 캠페인 코드 |
+| `cpi_nm` | 캠페인명 (Oracle 스키마 외 추가) |
+| `bill_cnt` | 영수건수 합계 |
+| `qty_00`~`qty_23` | 시간대별(0~23시) 판매수량 |
+| `dc_amt_00`~`dc_amt_23` | 시간대별 할인금액 |
+| `act_amt_00`~`act_amt_23` | 시간대별 실매출금액 |
 
 ---
 
 ## DAILY_STOR_PAY_WAY — 일자별 결제수단별 매출
 
-> PAY_WAY_CD 코드표
+> DB 테이블: `raw_daily_store_pay_way`
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| CMP_CD | 미적재 | VARCHAR2(4) | 회사코드 | |
+| SALE_DT | `sale_dt` | VARCHAR2(8) | 판매일자 (YYYYMMDD) | |
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR2(10) | 점포코드 | |
+| — | `masked_stor_nm` | — | 점포명 | 원본 외 추가 |
+| PAY_WAY_CD | `pay_way_cd` | VARCHAR2(2) | 결제수단코드 | 코드표 아래 참조 |
+| — | `pay_way_cd_nm` | — | 결제수단명 | 원본 외 추가 |
+| PAY_DTL_CD | `pay_dtl_cd` | VARCHAR2(2) | 결제 세부코드 (PAY_CD 참조) | |
+| — | `pay_dtl_cd_nm` | — | 결제 세부코드명 | 원본 외 추가 |
+| PAY_AMT | `pay_amt` | NUMBER(15,2) | 결제금액 | |
+| REC_AMT | `rec_amt` | NUMBER(15,2) | 받은금액 | |
+| CHANGE | `change_amt` | NUMBER(15,2) | 거스름돈 | 원본: CHANGE |
+| RTN_PAY_AMT | `rtn_pay_amt` | NUMBER(15,2) | 반품 결제금액 | |
+| RTN_REC_AMT | `rtn_rec_amt` | NUMBER(15,2) | 반품 받은금액 | |
+| RTN_CHANGE | `rtn_change` | NUMBER(15,2) | 반품 거스름돈 | |
+| ETC_PROFIT_AMT | `etc_profit_amt` | NUMBER(15,2) | 기타 수익금액 | |
+| RTN_ETC_PROFIT_AMT | `rtn_etc_profit_amt` | NUMBER(15,2) | 반품 기타 수익금액 | |
+| CASH_EXCHNG_CPN | `cash_exchng_cpn` | NUMBER(15,2) | 현금 교환권 | |
+| RTN_CASH_EXCHNG_CPN | `rtn_cash_exchng_cpn` | NUMBER(15,2) | 반품 현금 교환권 | |
+| REG_USER_ID | `reg_user_id` | VARCHAR2(50) | 등록자 ID | |
+| REG_DATE | `reg_date` | DATE | 등록 일시 | |
+| UPD_USER_ID | `upd_user_id` | VARCHAR2(50) | 수정자 ID | |
+| UPD_DATE | `upd_date` | DATE | 수정 일시 | |
+
+> **PAY_WAY_CD 코드표**
 > `00`:현금 `01`:수표 `02`:신용카드 `03`:제휴할인(통신사) `04`:포인트사용
 > `06`:상품권 `07`:알리페이 `08`:쿠폰 `09`:모바일CASH `10`:선불카드
 > `11`:모바일CON `12`:직원결제 `13`:외상 `14`:외화 `15`:예약
 > `16`:직원할인 `17`:임의할인 `99`:기타결제
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| CMP_CD | VARCHAR2(4) | str | 회사코드 |
-| SALE_DT | VARCHAR2(8) | str | 판매일자 (YYYYMMDD) |
-| MASKED_STOR_CD | VARCHAR2(10) | str | 점포코드 |
-| PAY_WAY_CD | VARCHAR2(2) | str | 결제수단코드 |
-| PAY_DTL_CD | VARCHAR2(2) | str | 결제 세부코드 |
-| PAY_AMT | NUMBER(15,2) | float | 결제금액 |
-| REC_AMT | NUMBER(15,2) | float | 받은금액 |
-| CHANGE | NUMBER(15,2) | float | 거스름돈 |
-| RTN_PAY_AMT | NUMBER(15,2) | float | 반품 결제금액 |
-| RTN_REC_AMT | NUMBER(15,2) | float | 반품 받은금액 |
-| RTN_CHANGE | NUMBER(15,2) | float | 반품 거스름돈 |
-| ETC_PROFIT_AMT | NUMBER(15,2) | float | 기타 수익금액 |
-| RTN_ETC_PROFIT_AMT | NUMBER(15,2) | float | 반품 기타 수익금액 |
-| CASH_EXCHNG_CPN | NUMBER(15,2) | float | 현금 교환권 |
-| RTN_CASH_EXCHNG_CPN | NUMBER(15,2) | float | 반품 현금 교환권 |
-| REG_USER_ID | VARCHAR2(50) | Optional[str] | 등록자 ID |
-| REG_DATE | DATE | Optional[datetime] | 등록일시 |
-| UPD_USER_ID | VARCHAR2(50) | Optional[str] | 수정자 ID |
-| UPD_DATE | DATE | Optional[datetime] | 수정일시 |
-
 ---
 
 ## DAILY_STOR_ITEM — 일자별 상품별 매출
 
+> DB 테이블: `raw_daily_store_item` / 정제 뷰: `core_daily_item_sales`
+>
 > `ITEM_TAX_DIV`: 상품 과세 구분 (M0018 코드표 참조)
+>
+> `core_daily_item_sales` 뷰는 `TAKE_IN_AMT`, `TAKE_OUT_AMT`, `SVC_FEE_AMT` 등 제외, 분석용 핵심 컬럼만 포함
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| CMP_CD | VARCHAR2(4) | str | 회사코드 |
-| SALE_DT | VARCHAR2(8) | str | 판매일자 (YYYYMMDD) |
-| MASKED_STOR_CD | VARCHAR2(10) | str | 점포코드 |
-| ITEM_CD | VARCHAR2(20) | str | 상품코드 |
-| ITEM_TAX_DIV | VARCHAR2(1) | Optional[str] | 상품 과세 구분 |
-| SALE_QTY | NUMBER(10,0) | int | 판매수량 |
-| SALE_AMT | NUMBER(15,2) | float | 판매금액 |
-| RTN_QTY | NUMBER(10,0) | int | 반품수량 |
-| RTN_AMT | NUMBER(15,2) | float | 반품금액 |
-| DC_AMT | NUMBER(15,2) | float | 할인금액 |
-| ENURI_AMT | NUMBER(15,2) | float | 에누리금액 |
-| VAT_AMT | NUMBER(15,2) | float | 부가세금액 |
-| ACTUAL_SALE_AMT | NUMBER(15,2) | float | 실매출금액 |
-| NET_SALE_AMT | NUMBER(15,2) | float | 순매출금액 |
-| TAKE_IN_AMT | NUMBER(15,2) | float | TAKE IN 금액 |
-| TAKE_IN_VAT_AMT | NUMBER(15,2) | float | TAKE IN 부가세 |
-| TAKE_OUT_AMT | NUMBER(15,2) | float | TAKE OUT 금액 |
-| TAKE_OUT_VAT_AMT | NUMBER(15,2) | float | TAKE OUT 부가세 |
-| SVC_FEE_AMT | NUMBER(15,2) | float | 봉사료 금액 |
-| SVC_FEE_VAT_AMT | NUMBER(15,2) | float | 봉사료 부가세 |
-| REG_USER_ID | VARCHAR2(50) | Optional[str] | 등록자 ID |
-| REG_DATE | DATE | Optional[datetime] | 등록일시 |
-| UPD_USER_ID | VARCHAR2(50) | Optional[str] | 수정자 ID |
-| UPD_DATE | DATE | Optional[datetime] | 수정일시 |
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | core 뷰 포함 |
+|---|---|---|---|---|
+| CMP_CD | 미적재 | VARCHAR2(4) | 회사코드 | — |
+| SALE_DT | `sale_dt` | VARCHAR2(8) | 판매일자 (YYYYMMDD) | ✓ |
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR2(10) | 점포코드 | ✓ |
+| — | `masked_stor_nm` | — | 점포명 (원본 외 추가) | ✓ |
+| ITEM_CD | `item_cd` | VARCHAR2(20) | 상품코드 | ✓ |
+| — | `item_nm` | — | 상품명 (원본 외 추가) | ✓ |
+| ITEM_TAX_DIV | `item_tax_div` | VARCHAR2(1) | 상품 과세구분 | ✓ |
+| SALE_QTY | `sale_qty` | NUMBER(10,0) | 판매수량 | ✓ |
+| SALE_AMT | `sale_amt` | NUMBER(15,2) | 판매금액 | ✓ |
+| RTN_QTY | `rtn_qty` | NUMBER(10,0) | 반품수량 | ✓ |
+| RTN_AMT | `rtn_amt` | NUMBER(15,2) | 반품금액 | ✓ |
+| DC_AMT | `dc_amt` | NUMBER(15,2) | 할인금액 | ✓ |
+| ENURI_AMT | `enuri_amt` | NUMBER(15,2) | 에누리금액 | ✓ |
+| VAT_AMT | `vat_amt` | NUMBER(15,2) | 부가세금액 (세율 10%) | ✓ |
+| ACTUAL_SALE_AMT | `actual_sale_amt` | NUMBER(15,2) | 실매출금액 = SALE_AMT - DC_AMT | ✓ |
+| NET_SALE_AMT | `net_sale_amt` | NUMBER(15,2) | 순매출금액 = SALE_AMT - DC_AMT - VAT_AMT | ✓ |
+| TAKE_IN_AMT | `take_in_amt` | NUMBER(15,2) | TAKE IN 금액 | — |
+| TAKE_IN_VAT_AMT | `take_in_vat_amt` | NUMBER(15,2) | TAKE IN 부가세 금액 | — |
+| TAKE_OUT_AMT | `take_out_amt` | NUMBER(15,2) | TAKE OUT 금액 | — |
+| TAKE_OUT_VAT_AMT | `take_out_vat_amt` | NUMBER(15,2) | TAKE OUT 부가세 금액 | — |
+| SVC_FEE_AMT | `svc_fee_amt` | NUMBER(15,2) | 봉사료 금액 | — |
+| SVC_FEE_VAT_AMT | `svc_fee_vat_amt` | NUMBER(15,2) | 봉사료 부가세 금액 | — |
+| REG_USER_ID | `reg_user_id` | VARCHAR2(50) | 등록자 ID | — |
+| REG_DATE | `reg_date` | DATE | 등록 일시 | — |
+| UPD_USER_ID | `upd_user_id` | VARCHAR2(50) | 수정자 ID | — |
+| UPD_DATE | `upd_date` | DATE | 수정 일시 | — |
 
 ---
 
-## DAILY_STOR_ONLINE — 일자별 온/오프라인 매출
+## DAILY_STOR_CHL_TMZON — 일자별 온/오프라인 매출
 
+> DB 테이블: `raw_daily_store_online` / 정제 뷰: `core_channel_sales`
+>
 > `HO_CHNL_DIV`: 판매유형 구분 (온라인 / 오프라인)
+>
+> 원본↔DB 컬럼 완전 일치 ✓
 
-| 컬럼명 | 타입 | Python 타입 | 설명 |
-|--------|------|-------------|------|
-| MASKED_STOR_CD | VARCHAR | str | 점포코드 |
-| MASKED_STOR_NM | VARCHAR | str | 점포명 |
-| SALE_DT | VARCHAR | str | 판매일자 (YYYYMMDD) |
-| TMZON_DIV | VARCHAR | str | 판매시간대 |
-| HO_CHNL_CD | VARCHAR | str | 판매채널코드 |
-| HO_CHNL_NM | VARCHAR | str | 판매채널명 |
-| SALES_ORG_NM | VARCHAR | str | 영업조직 |
-| HO_CHNL_DIV | VARCHAR | str | 판매유형 (온/오프라인) |
-| SALE_AMT | NUMBER | float | 판매금액 |
-| ORD_CNT | NUMBER | int | 판매수량 |
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 |
+|---|---|---|---|
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR | 점포코드 |
+| MASKED_STOR_NM | `masked_stor_nm` | VARCHAR | 점포명 |
+| SALE_DT | `sale_dt` | VARCHAR | 판매일자 (YYYYMMDD) |
+| TMZON_DIV | `tmzon_div` | VARCHAR | 판매시간대 |
+| HO_CHNL_CD | `ho_chnl_cd` | VARCHAR | 판매채널코드 |
+| SALES_ORG_NM | `sales_org_nm` | VARCHAR | 영업조직 |
+| HO_CHNL_DIV | `ho_chnl_div` | VARCHAR | 판매유형 (온라인/오프라인) |
+| HO_CHNL_NM | `ho_chnl_nm` | VARCHAR | 판매채널명 |
+| SALE_AMT | `sale_amt` | NUMBER | 판매금액 |
+| ORD_CNT | `ord_cnt` | NUMBER | 판매수량 |
+
+---
+
+## PROD_DTL — 생산 테이블
+
+> DB 테이블: `raw_production_extract`
+>
+> **생산 차수 규칙 (Info1)**
+> - `PROD_DGRE` 필드는 차수 구분 불가 (단일 레코드에 1~3차 수량이 모두 기록됨)
+> - 1차 생산 수량: `prod_qty`, 2차 생산 수량: `prod_qty_2`, 3차 생산 수량: `prod_qty_3`
+> - **총 생산 수량 = `prod_qty + prod_qty_2 + prod_qty_3`**
+>
+> **생산 시점 규칙 (Info2)**
+> - 1차 생산 시점: `reg_date`
+> - 2차 생산 시점: `upd_date`
+> - 3차까지 있을 경우 2차 생산 시점은 알 수 없음
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| CMP_CD | `cmp_cd` | VARCHAR2(4) | 회사 코드 | |
+| PROD_DT | `prod_dt` | VARCHAR2(8) | 생산 일자 (YYYYMMDD) | |
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR2(10) | 마스킹 점포 코드 | |
+| — | `masked_stor_nm` | — | 마스킹 점포명 | 원본 외 추가 |
+| PROD_DGRE | `prod_dgre` | VARCHAR2(2) | 생산 차수 (차수 구분 불가) | |
+| ITEM_CD | `item_cd` | VARCHAR2(20) | 상품 코드 | |
+| — | `item_nm` | — | 상품명 | 원본 외 추가 |
+| PROD_QTY | `prod_qty` | NUMBER(7,0) | **1차 생산 수량** | 총 생산량 계산 시 반드시 포함 |
+| SALE_PRC | `sale_prc` | NUMBER(15,2) | 판매 단가 | |
+| ITEM_COST | `item_cost` | NUMBER(15,2) | 상품 원가 | |
+| PROD_QTY_2 | `prod_qty_2` | NUMBER(7,0) | **2차 생산 수량** | 총 생산량 계산 시 반드시 포함 |
+| PROD_QTY_3 | `prod_qty_3` | NUMBER(7,0) | **3차 생산 수량** | 총 생산량 계산 시 반드시 포함 |
+| REPROD_QTY | `reprod_qty` | NUMBER(7,0) | 재생산 수량 | |
+| REG_USER_ID | `reg_user_id` | VARCHAR2(50) | 등록자 ID (1차 생산 등록자) | |
+| REG_DATE | `reg_date` | DATE | **1차 생산 등록 일시** | |
+| UPD_USER_ID | `upd_user_id` | VARCHAR2(50) | 수정자 ID | |
+| UPD_DATE | `upd_date` | DATE | **2차 생산 수정 일시** | |
+
+---
+
+## ORD_DTL — 주문 테이블
+
+> DB 테이블: `raw_order_extract`
+>
+> **수량 환산 규칙 (Info1)**
+> - `ord_noqqty`: 주문 입수량 — 단위별 수량 지정
+> - 낱개 환산: `ord_qty × ord_noqqty = 낱개 수량`
+>
+> **주문 vs 확정 수량 (Info2, Info3)**
+> - `ord_qty`: 점주가 실제 주문한 수량
+> - `confrm_qty`: 실제 센터에서 출하된 수량
+> - 센터 재고·CAPA에 따라 상이할 수 있음 (미출 = `ord_qty - confrm_qty`)
+>
+> **권고 주문 수량 (Info4)**
+> - `ord_rec_qty`: 던킨 시스템이 자동 계산한 권고 주문 수량 (강제 아님)
+>
+> ⚠️ Oracle `STOR_CD` → DB `masked_stor_cd` (점포코드 마스킹), `CMP_CD`·`REG_USER_ID` 등 미적재
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| CMP_CD | — | VARCHAR2(4) | 회사 코드 | 미적재 |
+| DLV_DT | `dlv_dt` | VARCHAR2(8) | 배송 일자 (YYYYMMDD) | |
+| STOR_CD | `masked_stor_cd` | VARCHAR2(10) | 마스킹 점포 코드 | Oracle은 STOR_CD, DB에서 마스킹됨 |
+| — | `masked_stor_nm` | — | 마스킹 점포명 | 원본 외 추가 |
+| ORD_GRP | `ord_grp` | VARCHAR2(4) | 주문 그룹 | |
+| — | `ord_grp_nm` | — | 주문 그룹명 | 원본 외 추가 |
+| ORD_DGRE | `ord_dgre` | VARCHAR2(2) | 주문 차수 | |
+| — | `ord_dgre_nm` | — | 주문 차수명 | 원본 외 추가 |
+| ORD_TYPE | `ord_type` | VARCHAR2(2) | 주문 유형 | |
+| — | `ord_type_nm` | — | 주문 유형명 | 원본 외 추가 |
+| ITEM_CD | `item_cd` | VARCHAR2(20) | 상품 코드 | |
+| — | `item_nm` | — | 상품명 | 원본 외 추가 |
+| ERP_SEND_DT | `erp_send_dt` | VARCHAR2(8) | ERP 전송 일자 | |
+| ERP_WEB_ITEM_GRP | `erp_web_item_grp` | VARCHAR2(3) | ERP 웹 제품군 코드 | |
+| — | `erp_web_item_grp_nm` | — | ERP 웹 제품군명 | 원본 외 추가 |
+| ORD_UNIT | `ord_unit` | VARCHAR2(3) | 주문 단위 | |
+| ORD_NOQQTY | `ord_noqqty` | NUMBER(7,0) | 주문 입수량 (낱개 환산: ×ord_qty) | |
+| ORD_PRC | `ord_prc` | NUMBER(15,2) | 주문 단가 | |
+| ORD_QTY | `ord_qty` | NUMBER(7,0) | **점주 실 주문 수량** | |
+| ORD_AMT | `ord_amt` | NUMBER(15,2) | 주문 금액 | |
+| ORD_VAT | `ord_vat` | NUMBER(15,2) | 주문 VAT | |
+| CONFRM_PRC | `confrm_prc` | NUMBER(15,2) | 확정 단가 | |
+| CONFRM_QTY | `confrm_qty` | NUMBER(7,0) | **확정 수량 (실 출하)** | 미출 = ord_qty - confrm_qty |
+| CONFRM_AMT | `confrm_amt` | NUMBER(15,2) | 확정 금액 | |
+| CONFRM_VAT | `confrm_vat` | NUMBER(15,2) | 확정 VAT | |
+| CONFRM_DC_AMT | `confrm_dc_amt` | NUMBER(15,2) | 확정 할인 금액 | |
+| AUTO_ORD_YN | `auto_ord_yn` | VARCHAR2(1) | 자동 주문 여부 | |
+| ERP_DGRE | `erp_dgre` | VARCHAR2(2) | ERP 차수 | |
+| — | `erp_dgre_nm` | — | ERP 차수명 | 원본 외 추가 |
+| REG_USER_ID | — | VARCHAR2(50) | 등록자 ID | 미적재 |
+| REG_DATE | — | DATE | 등록 일시 | 미적재 |
+| UPD_USER_ID | — | VARCHAR2(50) | 수정자 ID | 미적재 |
+| UPD_DATE | — | DATE | 수정 일시 | 미적재 |
+| ORD_REC_QTY | `ord_rec_qty` | NUMBER(15,2) | **시스템 권고 주문 수량** (강제 아님) | |
+
+---
+
+## SPL_DAY_STOCK_DTL — 재고 테이블
+
+> DB 테이블: `raw_inventory_extract`
+>
+> ⚠️ 컬럼명이 Oracle 원본과 다수 상이함. 일부 Oracle 컬럼 미적재, 원본 외 추가 컬럼 다수 존재.
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| CMP_CD | `cmp_cd` | VARCHAR2 | 회사 코드 | |
+| STOCK_DT | `stock_dt` | VARCHAR2 | 재고 일자 (YYYYMMDD) | |
+| MASKED_STOR_CD | `masked_stor_cd` | VARCHAR2 | 마스킹 점포 코드 | |
+| — | `masked_stor_nm` | — | 마스킹 점포명 | 원본 외 추가 |
+| RECDIS_LOC | — | VARCHAR2 | 수불 위치 (M0049 참조) | 미적재 |
+| ITEM_CD | `item_cd` | VARCHAR2 | 상품 코드 | |
+| — | `item_nm` | — | 상품명 | 원본 외 추가 |
+| BAR_CD | — | VARCHAR2 | 바코드 | 미적재 |
+| GI_QTY | `gi_qty` | NUMBER | 입고 수량 | |
+| GO_QTY | — | NUMBER | 출고 수량 | 미적재 |
+| GO_CANCEL_QTY | — | NUMBER | 출고 취소 수량 | 미적재 |
+| DSPS_QTY | `disuse_qty` | NUMBER | 폐기 수량 | 컬럼명 변경 |
+| RTN_QTY | `rtn_qty` | NUMBER | 반품 수량 | |
+| ADJ_QTY | `adj_qty` | NUMBER | 재고 조정 수량 | |
+| MOVE_GI_QTY | `mv_in_qty` | NUMBER | 창고 이동 입고 수량 | 컬럼명 변경 |
+| MOVE_GO_QTY | `mv_out_qty` | NUMBER | 창고 이동 출고 수량 | 컬럼명 변경 |
+| CUST_RTN_QTY | — | NUMBER | 고객 반품 수량 | 미적재 |
+| ADD_FOUT_QTY | `add_sout_qty` | NUMBER | 추가 선출 수량 | 컬럼명 변경 |
+| ADD_UNDLV_QTY | `add_mout_qty` | NUMBER | 추가 미출 수량 | 컬럼명 변경 |
+| ISPCTN_FOUT_QTY | `ins_sout_qty` | NUMBER | 검수 선출 수량 | 컬럼명 변경 |
+| ISPCTN_UNDLV_QTY | `ins_mout_qty` | NUMBER | 검수 미출 수량 | 컬럼명 변경 |
+| SALE_QTY | `sale_qty` | NUMBER | 판매 수량 | |
+| DISTBT_EXPIRE | — | VARCHAR2 | 유통 기한 | 미적재 |
+| REG_USER_ID | `reg_user_id` | VARCHAR2 | 등록자 ID | |
+| REG_DATE | `reg_date` | DATE | 등록 일시 | |
+| UPD_USER_ID | `upd_user_id` | VARCHAR2 | 수정자 ID | |
+| UPD_DATE | `upd_date` | DATE | 수정 일시 | |
+| NO_SALE_QTY | — | NUMBER | 비매출 수량 | 미적재 |
+| — | `prod_in_qty` | — | 생산 입고 수량 | 원본 외 추가 |
+| — | `prod_out_qty` | — | 생산 출고 수량 | 원본 외 추가 |
+| — | `last_sale_dt` | — | 최근 판매 일자 | 원본 외 추가 |
+| — | `cost` | — | 원가 | 원본 외 추가 |
+| — | `sale_prc` | — | 판매 단가 | 원본 외 추가 |
+| — | `sale_gram` | — | 판매 중량(g) | 원본 외 추가 |
+| — | `stock_qty` | — | **재고 수량** (앱에서 현재고 기준으로 사용) | 원본 외 추가 |
+
+---
+
+## MST_TERM_COOP_CMP_PAY_DC — 마스터 기간 제휴사 결제 할인
+
+> DB 테이블: `raw_telecom_discount_policy`
+>
+> 코드 컬럼에는 대응 `_nm` 컬럼이 추가되어 함께 적재됨
+
+| 원본 컬럼명 | DB 컬럼명 | 설명 |
+|---|---|---|
+| CMP_CD | `cmp_cd` | 회사 코드 |
+| PAY_DC_GRP_TYPE | `pay_dc_grp_type` | 결제 할인 그룹 유형 (M0077) |
+| PAY_DC_CD | `pay_dc_cd` | 결제 할인 코드 |
+| COOP_CMP_GRADE_CD | `coop_cmp_grade_cd` | 제휴사 등급 코드 |
+| FUNC_ID | `func_id` | 기능키 코드 |
+| START_DT | `start_dt` | 시작 일자 YYYYMMDD |
+| FNSH_DT | `fnsh_dt` | 종료 일자 YYYYMMDD |
+| DC_APPLY_TRGT | `dc_apply_trgt` | 할인 적용 대상 (M0078) |
+| PAY_DC_METHD | `pay_dc_methd` | 결제 할인 방법 (M0079) |
+| PAY_DC_VAL | `pay_dc_val` | 결제 할인 값 |
+| PAY_DC_AMT_STD_PAY_AMT | `pay_dc_amt_std_pay_amt` | 결제 할인 금액 기준 결제 금액 |
+| PAY_DC_DEC_PNT_CALC_METHD | `pay_dc_dec_pnt_calc_methd` | 소수점 계산 방법 (M0066) |
+| PAY_DC_CALC_DIGT_NO | `pay_dc_calc_digt_no` | 계산 자릿수 |
+| SALES_ORG_CD | `sales_org_cd` | 브랜드 코드 |
+| FUNC_ID | `func_id` | 기능키 코드 |
+| GRP_PRRTY | `grp_prrty` | 우선순위 (결제코드 기준) |
+| GRADE_PRRTY | `grade_prrty` | 우선순위 (등급코드 기준) |
+| ITEM_DC_YN | `item_dc_yn` | 할인 적용된 상품에 적용 여부 |
+| USE_YN | `use_yn` | 사용 여부 |
+| PAY_DC_AMT_MAX_PAY_AMT | `pay_dc_amt_max_pay_amt` | 최대 결제 할인값 |
+
+---
+
+## MST_TERM_COOP_CMP_DC_ITEM — 마스터 기간 제휴사 할인 상품
+
+> DB 테이블: `raw_telecom_discount_item`
+>
+> 코드 컬럼에는 대응 `_nm` 컬럼이 추가되어 함께 적재됨. 상품 분류 컬럼 (`l/m/s_item_class_nm`) 원본 외 추가.
+
+| 원본 컬럼명 | DB 컬럼명 | 설명 |
+|---|---|---|
+| CMP_CD | `cmp_cd` | 회사 코드 |
+| PAY_DC_GRP_TYPE | `pay_dc_grp_type` | 결제 할인 그룹 유형 (M0077) |
+| PAY_DC_CD | `pay_dc_cd` | 결제 할인 코드 |
+| COOP_CMP_GRADE_CD | `coop_cmp_grade_cd` | 제휴사 등급 코드 |
+| START_DT | `start_dt` | 시작 일자 YYYYMMDD |
+| ITEM_CD | `item_cd` | 상품 코드 |
+| USE_YN | `use_yn` | 사용 여부 (M0090) |
+| SALES_ORG_CD | `sales_org_cd` | 브랜드 코드 |
+| ITEM_SEQ | `item_seq` | 상품 우선순위 |
+
+---
+
+## MST_PAY_DC_INFO — 통신사 제휴 정산 기준 정보
+
+> DB 테이블: `raw_settlement_master`
+>
+> **조인 규칙 (Info1)**: `SUBSTR(pay_dc_ty_cd, -2)` = `raw_pay_cd.pay_dtl_cd`
+>
+> **할인 방법 (Info2)**: `pay_dc_methd = 1` → 율 / `pay_dc_methd = 2` → 금액
+
+| 원본 컬럼명 | DB 컬럼명 | 설명 |
+|---|---|---|
+| CMP_CD | `cmp_cd` | PK. 회사 코드 |
+| SALES_ORG_CD | `sales_org_cd` | PK. 영업 조직 코드 (브랜드 코드) |
+| PAY_DC_TY_CD | `pay_dc_ty_cd` | PK. 제휴통신사 결제코드 |
+| COOP_CD | `coop_cd` | PK. 제휴통신사 제휴코드 |
+| START_DT | `start_dt` | PK. 시작 일자 YYYYMMDD |
+| FNSH_DT | `fnsh_dt` | PK. 종료 일자 YYYYMMDD |
+| PAY_DC_METHD | `pay_dc_methd` | 결제 할인 방법 (1=율, 2=금액) |
+| MAT_LIST | `mat_list` | 자재 내역 |
+| HQ_ALLOT_RATE | `hq_allot_rate` | 본사 부담율 |
+| STOR_ALLOT_RATE | `stor_allot_rate` | 점포 부담율 |
+| COOP_CMP_ALLOT_RATE | `coop_cmp_allot_rate` | 제휴사 부담율 |
+| HQ_VAT_YN | `hq_vat_yn` | 본사 레포트 부가세 적용 여부 |
+| ERP_YN | `erp_yn` | ERP 정산 여부 |
+| USE_YN | `use_yn` | 사용 여부 |
+| REG_USER_ID | `reg_user_id` | 등록자 ID |
+| REG_DATE | `reg_date` | 등록 일시 |
+| UPD_USER_ID | `upd_user_id` | 수정자 ID |
+| UPD_DATE | `upd_date` | 수정 일시 |
+
+---
+
+## CPI_MST — 캠페인 마스터
+
+> DB 테이블: `raw_campaign_master`
+>
+> Oracle 컬럼명의 snake_case 변환이 기본 매핑이며, 대부분 1:1 대응됨.
+> 코드 컬럼마다 대응 `_nm` 컬럼이 추가되어 함께 적재됨 (ex: `cpi_type` → `cpi_type_nm`).
+
+**핵심 컬럼**
+
+| 원본 컬럼명 | DB 컬럼명 | 설명 |
+|---|---|---|
+| CMP_CD | `cmp_cd` | 회사 코드 |
+| SALES_ORG_CD | `sales_org_cd` | 영업 조직 코드 (브랜드 코드) |
+| CPI_CD | `cpi_cd` | 캠페인 코드 |
+| CPI_NM | `cpi_nm` | 캠페인명 |
+| RPST_CPI_CD | `rpst_cpi_cd` | 대표 캠페인 코드 |
+| PRGRS_STATUS | `prgrs_status` | 진행 상태 (E0004) |
+| START_DT | `start_dt` | 시작 일자 YYYYMMDD |
+| FNSH_DT | `fnsh_dt` | 종료 일자 YYYYMMDD |
+| USE_YN | `use_yn` | 사용 여부 (M0090) |
+| CPI_TYPE | `cpi_type` | 캠페인 유형 (E0003) |
+| CPI_KIND | `cpi_kind` | 캠페인 종류 (E0002) |
+| PRRTY | `prrty` | 우선순위 |
+| ADMT_METHD | `admt_methd` | 정산 방법 (E0012) |
+| TRGT_CUST_TYPE | `trgt_cust_type` | 대상 고객 유형 (E0005) |
+| CPI_CUST_BNFT_TYPE | `cpi_cust_bnft_type` | 캠페인 고객 혜택 유형 (E0006) |
+| REG_USER_ID | `reg_user_id` | 등록자 ID |
+| REG_DATE | `reg_date` | 등록 일시 |
+| UPD_USER_ID | `upd_user_id` | 수정자 ID |
+| UPD_DATE | `upd_date` | 수정 일시 |
+
+> 나머지 컬럼 (적립 정책, 부담율, 사은품, 복권, 수량 제한 등)은 Oracle 원본과 snake_case 매핑으로 전량 적재됨.
+
+---
+
+## CPI_ITEM_GRP_MNG — 캠페인 상품 그룹 관리
+
+> DB 테이블: `raw_campaign_item_group`
+>
+> Oracle 컬럼명과 1:1 snake_case 매핑. 코드 컬럼에 대응 `_nm` 추가.
+
+| 원본 컬럼명 | DB 컬럼명 | 설명 |
+|---|---|---|
+| CMP_CD | `cmp_cd` | 회사 코드 |
+| SALES_ORG_CD | `sales_org_cd` | 영업 조직 코드 |
+| CPI_CD | `cpi_cd` | 캠페인 코드 |
+| CPI_ITEM_GRP_CD | `cpi_item_grp_cd` | 캠페인 상품 그룹 코드 |
+| CPI_ITEM_GRP_NM | `cpi_item_grp_nm` | 캠페인 상품 그룹명 |
+| CPI_COND_TYPE | `cpi_cond_type` | 캠페인 조건 유형 (E0031) |
+| QTY_AMT | `qty_amt` | 수량/금액 |
+| CPI_DC_TYPE | `cpi_dc_type` | 캠페인 할인 유형 (E0032) |
+| DC_RATE_QTY_AMT | `dc_rate_qty_amt` | 할인율/수량/금액 |
+| NOTE | `note` | 비고 |
+| MAX_DC_AMT | `max_dc_amt` | 최대 할인 금액 |
+| USE_YN | `use_yn` | 사용 여부 (M0090) |
+| REG_USER_ID | `reg_user_id` | 등록자 ID |
+| REG_DATE | `reg_date` | 등록 일시 |
+| UPD_USER_ID | `upd_user_id` | 수정자 ID |
+| UPD_DATE | `upd_date` | 수정 일시 |
+
+---
+
+## CPI_ITEM_MNG — 캠페인 상품 관리
+
+> DB 테이블: `raw_campaign_item`
+>
+> Oracle 컬럼명과 1:1 snake_case 매핑. 코드 컬럼에 대응 `_nm` 추가. `item_nm` 원본 외 추가.
+
+| 원본 컬럼명 | DB 컬럼명 | 설명 |
+|---|---|---|
+| CMP_CD | `cmp_cd` | 회사 코드 |
+| SALES_ORG_CD | `sales_org_cd` | 영업 조직 코드 |
+| CPI_CD | `cpi_cd` | 캠페인 코드 |
+| CPI_ITEM_GRP_CD | `cpi_item_grp_cd` | 캠페인 상품 그룹 코드 |
+| ITEM_LVL | `item_lvl` | 상품 레벨 (그룹/개별) |
+| ITEM_CD | `item_cd` | 상품 코드 |
+| CPI_DC_TYPE | `cpi_dc_type` | 캠페인 할인 유형 (E0032) |
+| DC_RATE_AMT | `dc_rate_amt` | 할인율/금액 |
+| USE_YN | `use_yn` | 사용 여부 (M0090) |
+| REG_USER_ID | `reg_user_id` | 등록자 ID |
+| REG_DATE | `reg_date` | 등록 일시 |
+| UPD_USER_ID | `upd_user_id` | 수정자 ID |
+| UPD_DATE | `upd_date` | 수정 일시 |
 
 ---
 

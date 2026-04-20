@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     MOCK_NOW_STR: str = "2026-03-10 14:00:00"
 
-    AI_SERVICE_URL: str = "http://localhost:6001"
+    AI_SERVICE_URL: str = ""
     AI_SERVICE_TOKEN: str = ""
 
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:6003"

@@ -5,6 +5,7 @@ from typing import Optional
 
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.analytics_repository import AnalyticsRepository
+from app.repositories.stores_repository import StoresRepository
 from app.core.config import settings
 from app.infrastructure.db.connection import get_database_engine, get_safe_database_url
 from app.repositories.bootstrap_repository import BootstrapRepository
@@ -105,3 +106,7 @@ def get_hq_service() -> HQService:
         repository=HQRepository(engine=get_database_engine()),
         ordering_service=get_ordering_service(),
     )
+
+
+def get_stores_repository() -> StoresRepository:
+    return StoresRepository(engine=get_database_engine())

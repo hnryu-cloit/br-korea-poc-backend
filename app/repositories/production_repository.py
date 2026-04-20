@@ -272,10 +272,11 @@ class ProductionRepository:
         self,
         production_map: dict[str, dict[str, object]],
         secondary_map: dict[str, dict[str, object]],
+        tertiary_map: dict[str, dict[str, object]],
         stock_map: dict[str, dict[str, object]],
         sale_map: dict[str, dict[str, object]],
     ) -> list[dict]:
-        combined_keys = set(production_map) | set(secondary_map) | set(stock_map) | set(sale_map)
+        combined_keys = set(production_map) | set(secondary_map) | set(tertiary_map) | set(stock_map) | set(sale_map)
         if not combined_keys:
             return []
 
@@ -283,6 +284,7 @@ class ProductionRepository:
         for key in combined_keys:
             production = production_map.get(key, {})
             secondary = secondary_map.get(key, {})
+            tertiary = tertiary_map.get(key, {})
             stock = stock_map.get(key, {})
             sale = sale_map.get(key, {})
 
@@ -304,8 +306,14 @@ class ProductionRepository:
             stock_qty = self._safe_non_negative_int(stock.get("qty")) if stock else 0
             production_qty = self._safe_non_negative_int(production.get("qty")) if production else 0
             secondary_qty = self._safe_non_negative_int(secondary.get("qty")) if secondary else 0
+            tertiary_qty = self._safe_non_negative_int(tertiary.get("qty")) if tertiary else 0
             sale_qty = self._safe_non_negative_int(sale.get("qty")) if sale else 0
 
+            # 재고 데이터 없을 때는 1차+2차+3차 생산 합계를 현재고 추정값으로 사용
+            total_production_qty = production_qty + secondary_qty + tertiary_qty
+            current = stock_qty if stock else total_production_qty
+            if current <= 0 and not stock and total_production_qty > 0:
+                current = total_production_qty
             # --- [POC Scale Down Logic] ---
             # 원본 데이터의 단위가 너무 크거나 중복 합산되어 비현실적인 값이 나올 경우
             # 점포 1일/시간 단위 수준(10~50 수준)으로 보정합니다.
@@ -318,7 +326,7 @@ class ProductionRepository:
                     return 25 + (val % 20)
                 else:
                     return 30 + (val % 20)
-            
+
             stock_qty = _scale_down(stock_qty)
             production_qty = _scale_down(production_qty)
             secondary_qty = _scale_down(secondary_qty)
@@ -397,6 +405,7 @@ class ProductionRepository:
     async def list_items(self, store_id: str | None = None, business_date: str | None = None) -> list[dict]:
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
+        tertiary_map: dict[str, dict[str, object]] = {}
         stock_map: dict[str, dict[str, object]] = {}
         sale_map: dict[str, dict[str, object]] = {}
 
@@ -417,7 +426,16 @@ class ProductionRepository:
                 ("prod_dt",),
                 ("item_nm", "item_name"),
                 ("item_cd", "item_code", "sku_id"),
-                ("prod_qty_2", "reprod_qty", "prod_qty_3"),
+                ("prod_qty_2",),
+                store_id=store_id,
+                window_days=28,
+            )
+            tertiary_map = self._fetch_metric_map(
+                "raw_production_extract",
+                ("prod_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("prod_qty_3",),
                 store_id=store_id,
                 window_days=28,
                 reference_date=business_date,
@@ -447,7 +465,7 @@ class ProductionRepository:
         else:
             logger.warning("list_items: raw_inventory_extract 테이블 없음 (engine=%s)", bool(self.engine))
 
-        items = self._build_new_items(production_map, secondary_map, stock_map, sale_map)
+        items = self._build_new_items(production_map, secondary_map, tertiary_map, stock_map, sale_map)
         if items:
             logger.debug("list_items: raw 테이블 기준 %d건 반환 (store_id=%s)", len(items), store_id)
             return items
@@ -468,7 +486,7 @@ class ProductionRepository:
                 else ""
             )
             fallback_params: dict = {"store_id": store_id} if store_id else {}
-            
+
             # 기준 날짜 처리
             if business_date:
                 target_date_sql = f"'{business_date.replace('-', '')}'"
