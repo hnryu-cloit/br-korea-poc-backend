@@ -901,6 +901,8 @@ class AnalyticsRepository:
 
     def get_sales_trend(self, store_id: str | None = None) -> dict:
         """이번 달 vs 지난달 누적 매출 + 요일별/시간대별 추이"""
+        from calendar import monthrange
+        from datetime import date as date_type
         today = datetime.utcnow().date()
         this_month_start = today.replace(day=1)
         last_month_end = this_month_start - timedelta(days=1)
