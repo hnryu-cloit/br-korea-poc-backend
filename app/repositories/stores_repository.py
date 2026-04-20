@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-
-from app.infrastructure.db.utils import has_table
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class StoresRepository:
@@ -12,7 +11,7 @@ class StoresRepository:
 
     async def list_stores(self) -> list[dict]:
         """raw_store_master에서 점포 목록 반환"""
-        if not self.engine or not has_table(self.engine, "raw_store_master"):
+        if not self.engine:
             return []
         try:
             with self.engine.connect() as conn:
@@ -37,5 +36,5 @@ class StoresRepository:
                     .all()
                 )
             return [dict(r) for r in rows]
-        except Exception:
+        except SQLAlchemyError:
             return []
