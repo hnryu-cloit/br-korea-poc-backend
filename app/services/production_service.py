@@ -133,8 +133,8 @@ class ProductionService:
             material_alert_message=None,
         )
 
-    async def _get_sku_items(self, store_id: str | None = None) -> list[ProductionSkuItem]:
-        raw_items = await self.repository.list_items(store_id=store_id)
+    async def _get_sku_items(self, store_id: str | None = None, business_date: str | None = None) -> list[ProductionSkuItem]:
+        raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
         items = [self._sku_item_from_row(raw) for raw in raw_items]
         return await self._enrich_items_with_ai(items)
 
@@ -184,8 +184,8 @@ class ProductionService:
 
         return enriched
 
-    async def get_overview(self, store_id: str | None = None) -> ProductionOverviewResponse:
-        raw_items = await self.repository.list_items(store_id=store_id)
+    async def get_overview(self, store_id: str | None = None, business_date: str | None = None) -> ProductionOverviewResponse:
+        raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
         sku_items = [self._sku_item_from_row(raw) for raw in raw_items]
         danger_count = sum(1 for item in sku_items if item.status == "danger")
         warning_count = sum(1 for item in sku_items if item.status == "warning")
@@ -232,8 +232,9 @@ class ProductionService:
         page: int = 1,
         page_size: int = 20,
         store_id: str | None = None,
+        business_date: str | None = None,
     ) -> GetProductionSkuListResponse:
-        items = await self._get_sku_items(store_id=store_id)
+        items = await self._get_sku_items(store_id=store_id, business_date=business_date)
 
         start = max(0, (page - 1) * page_size)
         end = start + page_size
@@ -248,8 +249,8 @@ class ProductionService:
 
         return GetProductionSkuListResponse(items=paged_items, pagination=pagination)
 
-    async def get_sku_detail(self, sku_id: str, store_id: str | None = None) -> ProductionSkuDetailResponse:
-        items = await self._get_sku_items(store_id=store_id)
+    async def get_sku_detail(self, sku_id: str, store_id: str | None = None, business_date: str | None = None) -> ProductionSkuDetailResponse:
+        items = await self._get_sku_items(store_id=store_id, business_date=business_date)
         target = next((item for item in items if item.sku_id == sku_id), None)
         if target is None and store_id is not None:
             # store_id 필터로 매칭 결과가 없으면 전체 조회로 재시도

@@ -345,7 +345,7 @@ def test_home_overview_matches_frontend_contract() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert set(payload.keys()) == {"updated_at", "priority_actions", "stats", "cards"}
+    assert set(payload.keys()) == {"updated_at", "priority_actions", "stats", "cards", "imminent_deadlines"}
     assert isinstance(payload["priority_actions"], list)
     assert len(payload["stats"]) == 4
     assert len(payload["cards"]) == 3

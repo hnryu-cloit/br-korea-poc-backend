@@ -108,11 +108,12 @@ class ProductionRepository:
         metric_candidates: tuple[str, ...],
         store_id: str | None = None,
         window_days: int = 0,
+        reference_date: str | None = None,
     ) -> dict[str, dict[str, object]]:
         """품목별 지표 집계를 반환.
 
-        window_days=0이면 최신 날짜 단일 기준 합산,
-        window_days>0이면 최신 날짜 기준 window_days일 동안 발생한
+        window_days=0이면 기준 날짜 단일 기준 합산,
+        window_days>0이면 기준 날짜 기준 window_days일 동안 발생한
         날짜별 합산을 생산 발생일 수로 나눈 일평균을 반환한다.
         """
         columns = self._table_columns(relation)
@@ -136,7 +137,7 @@ class ProductionRepository:
         item_code_expr = (
             f"COALESCE(NULLIF(TRIM(CAST({item_code_column} AS TEXT)), ''), NULLIF(TRIM(CAST({item_name_column} AS TEXT)), ''))"
             if item_code_column
-            else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
+            else f"NULLIF(TRIM(CAST({item_code_column} AS TEXT)), '')"
         )
         metric_expr = f"COALESCE(NULLIF(TRIM(CAST({metric_column} AS TEXT)), '')::numeric, 0)"
 
@@ -150,21 +151,25 @@ class ProductionRepository:
 
         try:
             with self.engine.connect() as connection:
-                latest_date = connection.execute(
-                    text(
-                        f"""
-                        SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
-                        FROM {relation}
-                        WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
-                        {store_filter}
-                        ORDER BY date_value DESC
-                        LIMIT 1
-                        """
-                    ),
-                    params_date,
-                ).scalar_one_or_none()
+                if reference_date:
+                    latest_date = reference_date.replace("-", "")
+                else:
+                    latest_date = connection.execute(
+                        text(
+                            f"""
+                            SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
+                            FROM {relation}
+                            WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
+                            {store_filter}
+                            ORDER BY date_value DESC
+                            LIMIT 1
+                            """
+                        ),
+                        params_date,
+                    ).scalar_one_or_none()
+
                 if not latest_date:
-                    logger.debug("_fetch_metric_map 최신 날짜 없음: relation=%s store_id=%s", relation, store_id)
+                    logger.debug("_fetch_metric_map 기준 날짜 없음: relation=%s store_id=%s", relation, store_id)
                     return {}
 
                 if window_days > 0:
@@ -389,7 +394,7 @@ class ProductionRepository:
 
         return ranked_rows
 
-    async def list_items(self, store_id: str | None = None) -> list[dict]:
+    async def list_items(self, store_id: str | None = None, business_date: str | None = None) -> list[dict]:
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
         stock_map: dict[str, dict[str, object]] = {}
@@ -405,6 +410,7 @@ class ProductionRepository:
                 ("prod_qty",),
                 store_id=store_id,
                 window_days=28,
+                reference_date=business_date,
             )
             secondary_map = self._fetch_metric_map(
                 "raw_production_extract",
@@ -414,6 +420,7 @@ class ProductionRepository:
                 ("prod_qty_2", "reprod_qty", "prod_qty_3"),
                 store_id=store_id,
                 window_days=28,
+                reference_date=business_date,
             )
         else:
             logger.warning("list_items: raw_production_extract 테이블 없음 (engine=%s)", bool(self.engine))
@@ -426,6 +433,7 @@ class ProductionRepository:
                 ("item_cd", "item_code", "sku_id"),
                 ("stock_qty",),
                 store_id=store_id,
+                reference_date=business_date,
             )
             sale_map = self._fetch_metric_map(
                 "raw_inventory_extract",
@@ -434,6 +442,7 @@ class ProductionRepository:
                 ("item_cd", "item_code", "sku_id"),
                 ("sale_qty",),
                 store_id=store_id,
+                reference_date=business_date,
             )
         else:
             logger.warning("list_items: raw_inventory_extract 테이블 없음 (engine=%s)", bool(self.engine))
@@ -459,17 +468,19 @@ class ProductionRepository:
                 else ""
             )
             fallback_params: dict = {"store_id": store_id} if store_id else {}
+            
+            # 기준 날짜 처리
+            if business_date:
+                target_date_sql = f"'{business_date.replace('-', '')}'"
+            else:
+                target_date_sql = f"(SELECT MAX(sale_dt) FROM {source_relation} WHERE sale_dt IS NOT NULL {store_where})"
+
             try:
                 with self.engine.connect() as connection:
                     rows = connection.execute(
                         text(
                             f"""
-                            WITH latest_day AS (
-                                SELECT MAX(sale_dt) AS sale_dt
-                                FROM {source_relation}
-                                WHERE sale_dt IS NOT NULL {store_where}
-                            ),
-                            ranked AS (
+                            WITH ranked AS (
                                 SELECT
                                     item_cd,
                                     item_nm,
@@ -478,7 +489,7 @@ class ProductionRepository:
                                         ORDER BY SUM(sale_qty) DESC, item_nm
                                     ) AS row_num
                                 FROM {source_relation}
-                                WHERE sale_dt = (SELECT sale_dt FROM latest_day)
+                                WHERE CAST(sale_dt AS TEXT) = {target_date_sql}
                                 {store_where}
                                 GROUP BY item_cd, item_nm
                             )

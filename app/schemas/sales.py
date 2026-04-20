@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,9 @@ class SalesQueryResponse(BaseModel):
     confidence_score: Optional[float] = 1.0
     semantic_logic: Optional[str] = None
     sources: Optional[list[str]] = None
-    visual_data: Optional[dict] = None
+    visual_data: Optional[dict[str, Any]] = None
+    data_lineage: Optional[list[dict[str, Any]]] = Field(default_factory=list, description="AI가 생성 및 실행한 쿼리 히스토리 (투명성 검증용)")
+
 
 
 class SalesInsightMetric(BaseModel):

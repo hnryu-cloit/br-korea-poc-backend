@@ -25,9 +25,10 @@ v1_router = APIRouter(prefix="/v1/production", tags=["production"])
 @router.get("/overview", response_model=ProductionOverviewResponse)
 async def get_production_overview(
     store_id: Optional[str] = Query(default=None),
+    business_date: Optional[str] = Query(default=None, description="기준 영업일 (YYYY-MM-DD)"),
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionOverviewResponse:
-    return await service.get_overview(store_id=store_id)
+    return await service.get_overview(store_id=store_id, business_date=business_date)
 
 
 @router.get("/skus", response_model=GetProductionSkuListResponse)
@@ -36,19 +37,21 @@ async def get_production_sku_list(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     store_id: Optional[str] = Query(default=None),
+    business_date: Optional[str] = Query(default=None, description="기준 영업일 (YYYY-MM-DD)"),
     service: ProductionService = Depends(get_production_service),
 ) -> GetProductionSkuListResponse:
-    return await service.get_sku_list(page=page, page_size=page_size, store_id=store_id)
+    return await service.get_sku_list(page=page, page_size=page_size, store_id=store_id, business_date=business_date)
 
 
 @router.get("/items/{sku_id}", response_model=ProductionSkuDetailResponse)
 async def get_production_sku_detail(
     sku_id: str,
     store_id: Optional[str] = Query(default=None),
+    business_date: Optional[str] = Query(default=None, description="기준 영업일 (YYYY-MM-DD)"),
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionSkuDetailResponse:
     try:
-        return await service.get_sku_detail(sku_id=sku_id, store_id=store_id)
+        return await service.get_sku_detail(sku_id=sku_id, store_id=store_id, business_date=business_date)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
