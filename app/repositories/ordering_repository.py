@@ -11,6 +11,13 @@ from app.infrastructure.db.utils import has_table
 
 class OrderingRepository:
     @staticmethod
+    def _normalize_yyyymmdd(value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        text_value = str(value).strip().replace("-", "")
+        return text_value if len(text_value) == 8 and text_value.isdigit() else None
+
+    @staticmethod
     def _build_history_filters(store_id: str | None = None, date_from: str | None = None, date_to: str | None = None) -> tuple[str, dict]:
         clauses: list[str] = []
         params: dict[str, str | int | None] = {}
@@ -457,6 +464,101 @@ class OrderingRepository:
                     """
                         ),
                         {"store_id": store_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
+
+        ratio_map: dict[str, int] = {str(r["auto_ord_yn"]): int(r["cnt"]) for r in ratio_rows}
+        auto_count = ratio_map.get("1", 0)
+        manual_count = ratio_map.get("0", 0)
+        total_count = auto_count + manual_count
+        auto_rate = auto_count / total_count if total_count > 0 else 0.0
+        manual_rate = manual_count / total_count if total_count > 0 else 0.0
+
+        items = [
+            {
+                "item_nm": str(r["item_nm"]) if r["item_nm"] is not None else "",
+                "dlv_dt": str(r["dlv_dt"]) if r["dlv_dt"] is not None else None,
+                "ord_qty": int(r["ord_qty"]) if r["ord_qty"] is not None else None,
+                "confrm_qty": int(r["confrm_qty"]) if r["confrm_qty"] is not None else None,
+                "is_auto": str(r["auto_ord_yn"]) == "1",
+                "ord_grp_nm": str(r["ord_grp_nm"]) if r["ord_grp_nm"] is not None else None,
+            }
+            for r in rows
+        ]
+        return {
+            "items": items,
+            "auto_rate": round(auto_rate, 4),
+            "manual_rate": round(manual_rate, 4),
+            "total_count": total_count,
+        }
+
+    def get_history_filtered(
+        self,
+        *,
+        store_id: str | None = None,
+        limit: int = 100,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        item_nm: str | None = None,
+        is_auto: bool | None = None,
+    ) -> dict:
+        if not self.engine or not store_id:
+            return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
+
+        date_from_norm = self._normalize_yyyymmdd(date_from)
+        date_to_norm = self._normalize_yyyymmdd(date_to)
+
+        where_clauses = ["masked_stor_cd = :store_id"]
+        params: dict[str, object] = {"store_id": store_id, "limit": limit}
+        if date_from_norm:
+            where_clauses.append("REPLACE(CAST(dlv_dt AS TEXT), '-', '') >= :date_from")
+            params["date_from"] = date_from_norm
+        if date_to_norm:
+            where_clauses.append("REPLACE(CAST(dlv_dt AS TEXT), '-', '') <= :date_to")
+            params["date_to"] = date_to_norm
+        if item_nm:
+            where_clauses.append("CAST(item_nm AS TEXT) ILIKE :item_nm")
+            params["item_nm"] = f"%{item_nm.strip()}%"
+        if is_auto is not None:
+            where_clauses.append("CAST(auto_ord_yn AS TEXT) = :auto_ord_yn")
+            params["auto_ord_yn"] = "1" if is_auto else "0"
+
+        where_sql = " AND ".join(where_clauses)
+
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                        SELECT item_nm, dlv_dt, ord_qty, confrm_qty, auto_ord_yn, ord_grp_nm
+                        FROM raw_order_extract
+                        WHERE {where_sql}
+                        ORDER BY REPLACE(CAST(dlv_dt AS TEXT), '-', '') DESC, item_nm
+                        LIMIT :limit
+                    """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+
+                ratio_rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                        SELECT auto_ord_yn, COUNT(*) AS cnt
+                        FROM raw_order_extract
+                        WHERE {where_sql}
+                        GROUP BY auto_ord_yn
+                    """
+                        ),
+                        params,
                     )
                     .mappings()
                     .all()

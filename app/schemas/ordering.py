@@ -118,3 +118,32 @@ class OrderingHistoryResponse(BaseModel):
     auto_rate: float
     manual_rate: float
     total_count: int
+
+
+class OrderingHistoryInsightKpi(BaseModel):
+    key: str
+    label: str
+    value: str
+    tone: str = "default"
+
+
+class OrderingHistoryAnomalyItem(BaseModel):
+    id: str
+    severity: str
+    kind: str
+    message: str
+    recommended_action: str
+    related_items: list[str] = []
+
+
+class OrderingHistoryChangedItem(BaseModel):
+    item_nm: str
+    avg_ord_qty: float
+    latest_ord_qty: int
+    change_ratio: float
+
+
+class OrderingHistoryInsightsResponse(BaseModel):
+    kpis: list[OrderingHistoryInsightKpi]
+    anomalies: list[OrderingHistoryAnomalyItem]
+    top_changed_items: list[OrderingHistoryChangedItem]
