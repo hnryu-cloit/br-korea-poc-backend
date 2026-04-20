@@ -170,6 +170,66 @@ class EstimatedSalesSummary(BaseModel):
     weekend_ratio: float
 
 
+class IndustryBusinessTrendPoint(BaseModel):
+    period: str
+    business_count: int
+
+
+class IndustryBusinessAgeItem(BaseModel):
+    bucket: str
+    business_count: int
+
+
+class IndustryAnalysis(BaseModel):
+    business_count_trend: list[IndustryBusinessTrendPoint]
+    business_age_5y: list[IndustryBusinessAgeItem]
+
+
+class SalesMonthlyTrendPoint(BaseModel):
+    period: str
+    sales_count: float
+    sales_amount: float
+
+
+class SalesAnalysis(BaseModel):
+    monthly_sales_trend: list[SalesMonthlyTrendPoint]
+    monthly_average_sales: float
+
+
+class PopulationTrendPoint(BaseModel):
+    period: str
+    floating_population: int
+    residential_population: int
+    worker_population: int
+
+
+class IncomeConsumptionItem(BaseModel):
+    segment: str
+    estimated_customers: int
+    sales_share_ratio: float
+
+
+class PopulationAnalysis(BaseModel):
+    population_trend: list[PopulationTrendPoint]
+    income_consumption: list[IncomeConsumptionItem]
+
+
+class RegionalStatus(BaseModel):
+    household_count: int
+    apartment_household_count: int
+    major_facilities_count: int
+    transport_access_index: float
+
+
+class CustomerCharacteristics(BaseModel):
+    male_ratio: float
+    female_ratio: float
+    new_customer_ratio: float | None = None
+    regular_customer_ratio: float | None = None
+    top_age_group: str | None = None
+    top_visit_time: str | None = None
+
+
 class MarketIntelligenceResponse(BaseModel):
     radius_km: float
     category_sales_pie: list[TradeAreaSalesSlice]
@@ -183,3 +243,8 @@ class MarketIntelligenceResponse(BaseModel):
     floating_population_trend: list[FloatingPopulationTrendPoint]
     floating_population_analysis: str
     data_sources: list[str]
+    industry_analysis: IndustryAnalysis
+    sales_analysis: SalesAnalysis
+    population_analysis: PopulationAnalysis
+    regional_status: RegionalStatus
+    customer_characteristics: CustomerCharacteristics
