@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from app.repositories.notifications_repository import NotificationsRepository
 from app.schemas.notifications import NotificationItem, NotificationListResponse
 from app.services.ordering_service import OrderingService
@@ -14,17 +12,17 @@ class NotificationsService:
         ordering_service: OrderingService,
         production_service: ProductionService,
         repository: NotificationsRepository,
-        ai_client: Optional[object] = None,
+        ai_client: object | None = None,
     ) -> None:
         self.ordering_service = ordering_service
         self.production_service = production_service
         self.repository = repository
         self.ai_client = ai_client
 
-    async def list_notifications(self, store_id: Optional[str] = None) -> NotificationListResponse:
+    async def list_notifications(self, store_id: str | None = None) -> NotificationListResponse:
         items: list[NotificationItem] = []
 
-        production_alerts = await self.production_service.get_alerts()
+        production_alerts = await self.production_service.get_alerts(store_id=store_id)
         if production_alerts.alerts:
             alert = production_alerts.alerts[0]
             items.append(
@@ -40,7 +38,10 @@ class NotificationsService:
                 )
             )
 
-        ordering_alerts = await self.ordering_service.list_deadline_alerts(before_minutes=20)
+        ordering_alerts = await self.ordering_service.list_deadline_alerts(
+            before_minutes=20,
+            store_id=store_id,
+        )
         if ordering_alerts.alerts:
             alert = ordering_alerts.alerts[0]
             items.append(
@@ -52,7 +53,11 @@ class NotificationsService:
                     created_at="4분 전",
                     unread=True,
                     link_to=alert.target_path,
-                    link_state={"source": "notification", "notificationId": alert.notification_id, "focusOptionId": alert.focus_option_id},
+                    link_state={
+                        "source": "notification",
+                        "notificationId": alert.notification_id,
+                        "focusOptionId": alert.focus_option_id,
+                    },
                 )
             )
 
@@ -77,7 +82,21 @@ class NotificationsService:
             except Exception:
                 pass  # AI 서비스 연결 실패 시 무시
 
-        sales_item = await self.repository.get_recent_sales_notification()
+        sales_item = await self.repository.get_recent_sales_notification(store_id=store_id)
+        ai_client: object | None = None,
+    async def list_notifications(self, store_id: str | None = None) -> NotificationListResponse:
+        production_alerts = await self.production_service.get_alerts(store_id=store_id)
+        ordering_alerts = await self.ordering_service.list_deadline_alerts(
+            before_minutes=20,
+            store_id=store_id,
+        )
+                    link_state={
+                        "source": "notification",
+                        "notificationId": alert.notification_id,
+                        "focusOptionId": alert.focus_option_id,
+                    },
+                push_alerts = await self.ai_client.get_production_push_alerts(store_id=store_id)
+        sales_item = await self.repository.get_recent_sales_notification(store_id=store_id)
         if sales_item is not None:
             items.append(NotificationItem(**sales_item))
 

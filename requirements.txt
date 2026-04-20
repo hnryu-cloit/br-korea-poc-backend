@@ -8,6 +8,8 @@ openpyxl
 httpx
 python-dotenv
 pytest
-openpyxl
 pytest-asyncio
 respx
+ruff
+black
+mypy

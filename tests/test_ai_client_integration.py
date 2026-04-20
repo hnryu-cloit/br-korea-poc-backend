@@ -3,14 +3,14 @@
 - httpx를 mock하여 AI 서비스 API 계약을 검증합니다.
 - 실제 AI 서비스 없이 실행 가능합니다.
 """
+
 from __future__ import annotations
 
 import json
 
-import pytest
-import pytest_asyncio
-import respx
 import httpx
+import pytest
+import respx
 
 from app.services.ai_client import AIServiceClient
 
@@ -25,6 +25,7 @@ def client() -> AIServiceClient:
 
 # ── query_sales ───────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_query_sales_success(client: AIServiceClient) -> None:
@@ -38,9 +39,7 @@ async def test_query_sales_success(client: AIServiceClient) -> None:
         "channel_analysis": {},
         "profit_simulation": {},
     }
-    respx.post(f"{AI_BASE_URL}/sales/query").mock(
-        return_value=httpx.Response(200, json=stub)
-    )
+    respx.post(f"{AI_BASE_URL}/sales/query").mock(return_value=httpx.Response(200, json=stub))
 
     result = await client.query_sales("배달 매출 분석해줘")
 
@@ -91,6 +90,7 @@ async def test_query_sales_sends_bearer_token(client: AIServiceClient) -> None:
 
 # ── predict_production ────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_predict_production_success(client: AIServiceClient) -> None:
@@ -130,6 +130,7 @@ async def test_predict_production_returns_none_on_error(client: AIServiceClient)
 
 
 # ── recommend_ordering ────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @respx.mock
@@ -179,6 +180,7 @@ async def test_recommend_ordering_campaign_flag_passed(client: AIServiceClient) 
     )
 
     import json
+
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["is_campaign"] is True
 

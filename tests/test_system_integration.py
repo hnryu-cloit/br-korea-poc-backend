@@ -15,10 +15,12 @@ from app.schemas.production import ProductionSimulationResponse
 from app.services.ai_client import AIServiceClient
 from app.services.production_service import ProductionService
 
-
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 AI_ROOT = BACKEND_ROOT.parent / "br-korea-poc-ai"
 AI_TOKEN = "test-token"
+
+if not AI_ROOT.exists():
+    pytest.skip("AI project path is not available in this test runtime.", allow_module_level=True)
 
 
 def _install_ai_import_stubs() -> None:
@@ -220,8 +222,13 @@ from api.config import get_settings as ai_get_settings
 from api.dependencies import get_ordering_service as ai_get_ordering_service
 from api.dependencies import get_production_service as ai_get_production_service
 from api.main import app as ai_app
+from schemas.contracts import (
+    ChartDataPoint,
+)
+from schemas.contracts import (
+    SimulationReportResponse as AIContractSimulationReportResponse,
+)
 from schemas.management import OrderingRecommendResponse, ProductionPredictResponse
-from schemas.contracts import ChartDataPoint, SimulationReportResponse as AIContractSimulationReportResponse
 
 
 class InProcessAIServiceClient(AIServiceClient):

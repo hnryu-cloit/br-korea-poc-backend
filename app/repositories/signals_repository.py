@@ -18,29 +18,39 @@ class SignalsRepository:
             return []
 
         items: list[dict] = []
-        if has_table(self.engine, "core_channel_sales") and has_table(self.engine, "core_store_master"):
+        if has_table(self.engine, "core_channel_sales") and has_table(
+            self.engine, "core_store_master"
+        ):
             try:
                 items.extend(self._get_channel_signals())
             except SQLAlchemyError:
                 pass
-        if has_table(self.engine, "production_registrations") and has_table(self.engine, "core_store_master"):
+        if has_table(self.engine, "production_registrations") and has_table(
+            self.engine, "core_store_master"
+        ):
             try:
                 items.extend(self._get_production_signals())
             except SQLAlchemyError:
                 pass
-        if has_table(self.engine, "core_daily_item_sales") and has_table(self.engine, "core_store_master"):
+        if has_table(self.engine, "core_daily_item_sales") and has_table(
+            self.engine, "core_store_master"
+        ):
             try:
                 items.extend(self._get_menu_signals())
             except SQLAlchemyError:
                 pass
-        if has_table(self.engine, "raw_settlement_master") and has_table(self.engine, "raw_telecom_discount_policy"):
+        if has_table(self.engine, "raw_settlement_master") and has_table(
+            self.engine, "raw_telecom_discount_policy"
+        ):
             try:
                 items.extend(self._get_discount_signals())
             except SQLAlchemyError:
                 pass
         if items:
             priority_rank = {"high": 0, "medium": 1, "low": 2}
-            return sorted(items, key=lambda item: (priority_rank.get(item["priority"], 3), item["id"]))[:6]
+            return sorted(
+                items, key=lambda item: (priority_rank.get(item["priority"], 3), item["id"])
+            )[:6]
         return []
 
     @staticmethod
@@ -53,16 +63,23 @@ class SignalsRepository:
         if not has_table(self.engine, "raw_daily_store_pay_way"):
             return self._normalize_date(None)
         with self.engine.connect() as connection:
-            row = connection.execute(text("SELECT MAX(sale_dt) AS max_sale_dt FROM raw_daily_store_pay_way")).mappings().first()
+            row = (
+                connection.execute(
+                    text("SELECT MAX(sale_dt) AS max_sale_dt FROM raw_daily_store_pay_way")
+                )
+                .mappings()
+                .first()
+            )
         if not row or not row["max_sale_dt"]:
             return self._normalize_date(None)
         return str(row["max_sale_dt"])
 
     def _get_channel_signals(self) -> list[dict]:
         with self.engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    """
+            rows = (
+                connection.execute(
+                    text(
+                        """
                     WITH daily AS (
                         SELECT
                             c.masked_stor_cd,
@@ -93,8 +110,11 @@ class SignalsRepository:
                     ORDER BY ((SUM(CASE WHEN rn <= 7 THEN online_orders ELSE 0 END) - SUM(CASE WHEN rn > 7 AND rn <= 14 THEN online_orders ELSE 0 END)) / NULLIF(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN online_orders ELSE 0 END), 0)) ASC
                     LIMIT 2
                     """
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         items = []
         for index, row in enumerate(rows, start=1):
             recent = float(row["recent_orders"] or 0)
@@ -122,9 +142,10 @@ class SignalsRepository:
 
     def _get_production_signals(self) -> list[dict]:
         with self.engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    """
+            rows = (
+                connection.execute(
+                    text(
+                        """
                     SELECT
                         COALESCE(sm.region, pr.store_id, '전체') AS region,
                         COUNT(*) AS registration_count,
@@ -136,8 +157,11 @@ class SignalsRepository:
                     ORDER BY COUNT(*) DESC, COALESCE(SUM(pr.qty), 0) DESC
                     LIMIT 2
                     """
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         items = []
         for index, row in enumerate(rows, start=1):
             count = int(row["registration_count"] or 0)
@@ -160,9 +184,10 @@ class SignalsRepository:
 
     def _get_menu_signals(self) -> list[dict]:
         with self.engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    """
+            rows = (
+                connection.execute(
+                    text(
+                        """
                     WITH region_sales AS (
                         SELECT
                             COALESCE(sm.region, '전체') AS region,
@@ -183,8 +208,11 @@ class SignalsRepository:
                     ORDER BY coffee_ratio DESC
                     LIMIT 2
                     """
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         items = []
         for index, row in enumerate(rows, start=1):
             ratio = float(row["coffee_ratio"] or 0)
@@ -208,9 +236,10 @@ class SignalsRepository:
     def _get_discount_signals(self) -> list[dict]:
         target_date = self._resolve_reference_date()
         with self.engine.connect() as connection:
-            row = connection.execute(
-                text(
-                    """
+            row = (
+                connection.execute(
+                    text(
+                        """
                     WITH active_settlement AS (
                         SELECT
                             pay_dc_ty_cd_nm,
@@ -249,9 +278,12 @@ class SignalsRepository:
                         COALESCE((SELECT dc_apply_trgt_nm FROM active_policy ORDER BY row_count DESC, pay_dc_nm LIMIT 1), '') AS top_policy_target,
                         COALESCE((SELECT item_count FROM active_policy ORDER BY row_count DESC, pay_dc_nm LIMIT 1), 0) AS top_policy_item_count
                     """
-                ),
-                {"target_date": target_date},
-            ).mappings().first()
+                    ),
+                    {"target_date": target_date},
+                )
+                .mappings()
+                .first()
+            )
 
         if not row:
             return []

@@ -12,7 +12,11 @@ dependencies:
       - pydantic-settings==2.5.2
       - sqlalchemy
       - psycopg[binary]
+      - psycopg
       - openpyxl
       - httpx
       - python-dotenv
       - pytest
+      - ruff
+      - black
+      - mypy

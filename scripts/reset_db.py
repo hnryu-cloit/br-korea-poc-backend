@@ -1,18 +1,21 @@
 from __future__ import annotations
+
 import os
-import sys
-from sqlalchemy import text
 import re
+import sys
+
+from sqlalchemy import text
 
 # Add backend directory to sys.path to import config
-sys.path.insert(0, os.path.abspath('br-korea-poc-backend'))
+sys.path.insert(0, os.path.abspath("br-korea-poc-backend"))
 from app.infrastructure.db.connection import get_database_engine
+
 
 def reset_db():
     engine = get_database_engine()
     if engine is None:
         raise RuntimeError("PostgreSQL driver not installed.")
-        
+
     # Drop all tables in public schema
     with engine.begin() as conn:
         print("Dropping all existing tables...")
@@ -23,19 +26,19 @@ def reset_db():
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
 
     # Execute the DDL file provided by the user
-    ddl_path = 'resources/data/POC_TABLE_DDL.sql'
-    with open(ddl_path, 'r', encoding='utf-8') as f:
+    ddl_path = "resources/data/POC_TABLE_DDL.sql"
+    with open(ddl_path, encoding="utf-8") as f:
         ddl_sql = f.read()
 
     # Convert Oracle syntax to PostgreSQL
-    ddl_sql = re.sub(r'(?i)\bVARCHAR2\b', 'VARCHAR', ddl_sql)
-    ddl_sql = re.sub(r'(?i)\bNUMBER\b', 'NUMERIC', ddl_sql)
+    ddl_sql = re.sub(r"(?i)\bVARCHAR2\b", "VARCHAR", ddl_sql)
+    ddl_sql = re.sub(r"(?i)\bNUMBER\b", "NUMERIC", ddl_sql)
 
     print("Creating new tables from POC_TABLE_DDL.sql (with PostgreSQL adjustments)...")
-    
+
     # Run each statement in autocommit mode so one failure doesn't abort everything
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        for statement in ddl_sql.split(';'):
+        for statement in ddl_sql.split(";"):
             stmt = statement.strip()
             if stmt:
                 try:
@@ -45,5 +48,6 @@ def reset_db():
 
     print("Database reset complete.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     reset_db()

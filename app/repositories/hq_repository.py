@@ -18,14 +18,18 @@ class HQRepository:
         return self._fetch_inspection_rows(limit=limit)
 
     def _fetch_coaching_rows(self, limit: int = 5) -> list[dict]:
-        if not self.engine or not (has_table(self.engine, "ordering_selections") and has_table(self.engine, "core_store_master")):
+        if not self.engine or not (
+            has_table(self.engine, "ordering_selections")
+            and has_table(self.engine, "core_store_master")
+        ):
             return []
 
         try:
             with self.engine.connect() as connection:
-                rows = connection.execute(
-                    text(
-                        """
+                rows = (
+                    connection.execute(
+                        text(
+                            """
                         WITH latest_orders AS (
                             SELECT DISTINCT ON (NULLIF(TRIM(CAST(store_id AS TEXT)), ''))
                                 NULLIF(TRIM(CAST(store_id AS TEXT)), '') AS store_id,
@@ -89,23 +93,31 @@ class HQRepository:
                             store
                         LIMIT :limit
                         """
-                    ),
-                    {"limit": limit},
-                ).mappings().all()
+                        ),
+                        {"limit": limit},
+                    )
+                    .mappings()
+                    .all()
+                )
         except SQLAlchemyError:
             return []
 
         return [dict(row) for row in rows]
 
     def _fetch_inspection_rows(self, limit: int = 5) -> list[dict]:
-        if not self.engine or not (has_table(self.engine, "core_store_master") and has_table(self.engine, "ordering_selections") and has_table(self.engine, "production_registrations")):
+        if not self.engine or not (
+            has_table(self.engine, "core_store_master")
+            and has_table(self.engine, "ordering_selections")
+            and has_table(self.engine, "production_registrations")
+        ):
             return []
 
         try:
             with self.engine.connect() as connection:
-                rows = connection.execute(
-                    text(
-                        """
+                rows = (
+                    connection.execute(
+                        text(
+                            """
                         WITH order_7d AS (
                             SELECT
                                 NULLIF(TRIM(CAST(store_id AS TEXT)), '') AS store_id,
@@ -167,9 +179,12 @@ class HQRepository:
                             store
                         LIMIT :limit
                         """
-                    ),
-                    {"limit": limit},
-                ).mappings().all()
+                        ),
+                        {"limit": limit},
+                    )
+                    .mappings()
+                    .all()
+                )
         except SQLAlchemyError:
             return []
 

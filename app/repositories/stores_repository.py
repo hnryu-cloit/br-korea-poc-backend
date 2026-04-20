@@ -16,18 +16,26 @@ class StoresRepository:
             return []
         try:
             with self.engine.connect() as conn:
-                rows = conn.execute(
-                    text("""
+                rows = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT
                             masked_stor_cd AS store_id,
                             maked_stor_nm  AS store_name,
                             sido,
                             region,
-                            store_type
+                            store_type,
+                            business_type,
+                            store_area_pyeong
                         FROM raw_store_master
                         ORDER BY masked_stor_cd
-                    """)
-                ).mappings().all()
+                    """
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
             return [dict(r) for r in rows]
         except Exception:
             return []

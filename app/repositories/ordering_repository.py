@@ -422,3 +422,69 @@ class OrderingRepository:
             "filtered_date_from": date_from,
             "filtered_date_to": date_to,
         }
+
+    def get_history(self, store_id: str | None = None, limit: int = 30) -> dict:
+        if not self.engine or store_id is None:
+            return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
+
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                        SELECT item_nm, dlv_dt, ord_qty, confrm_qty, auto_ord_yn, ord_grp_nm
+                        FROM raw_order_extract
+                        WHERE masked_stor_cd = :store_id
+                        ORDER BY dlv_dt DESC
+                        LIMIT :limit
+                    """
+                        ),
+                        {"store_id": store_id, "limit": limit},
+                    )
+                    .mappings()
+                    .all()
+                )
+
+                ratio_rows = (
+                    conn.execute(
+                        text(
+                            """
+                        SELECT auto_ord_yn, COUNT(*) AS cnt
+                        FROM raw_order_extract
+                        WHERE masked_stor_cd = :store_id
+                        GROUP BY auto_ord_yn
+                    """
+                        ),
+                        {"store_id": store_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
+
+        ratio_map: dict[str, int] = {str(r["auto_ord_yn"]): int(r["cnt"]) for r in ratio_rows}
+        auto_count = ratio_map.get("1", 0)
+        manual_count = ratio_map.get("0", 0)
+        total_count = auto_count + manual_count
+        auto_rate = auto_count / total_count if total_count > 0 else 0.0
+        manual_rate = manual_count / total_count if total_count > 0 else 0.0
+
+        items = [
+            {
+                "item_nm": str(r["item_nm"]) if r["item_nm"] is not None else "",
+                "dlv_dt": str(r["dlv_dt"]) if r["dlv_dt"] is not None else None,
+                "ord_qty": int(r["ord_qty"]) if r["ord_qty"] is not None else None,
+                "confrm_qty": int(r["confrm_qty"]) if r["confrm_qty"] is not None else None,
+                "is_auto": str(r["auto_ord_yn"]) == "1",
+                "ord_grp_nm": str(r["ord_grp_nm"]) if r["ord_grp_nm"] is not None else None,
+            }
+            for r in rows
+        ]
+        return {
+            "items": items,
+            "auto_rate": round(auto_rate, 4),
+            "manual_rate": round(manual_rate, 4),
+            "total_count": total_count,
+        }

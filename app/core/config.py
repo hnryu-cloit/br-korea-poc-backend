@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc"
     EXTERNAL_API_KEY: str = "stub-key"
 
-    MOCK_NOW_STR: str = "2026-03-10 14:00:00"
-
     AI_SERVICE_URL: str = ""
     AI_SERVICE_TOKEN: str = ""
+    ALLOW_CLIENT_ROLE_HEADER_NON_LOCAL: bool = False
+    ROLE_OVERRIDE_TOKEN: str = ""
 
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:6003"
 
@@ -55,6 +55,25 @@ class Settings(BaseSettings):
         if self.APP_ENV == "production" and not self.AI_SERVICE_TOKEN:
             warnings.warn(
                 "운영 환경에서 AI_SERVICE_TOKEN이 설정되지 않았습니다.",
+                stacklevel=2,
+            )
+        if self.APP_ENV != "local" and self.MOCK_NOW_STR:
+            warnings.warn(
+                f"운영 환경에서 MOCK_NOW_STR이 설정되어 있습니다: {self.MOCK_NOW_STR}. 실제 시각 대신 고정 시각이 사용됩니다.",
+                stacklevel=2,
+            )
+        if self.APP_ENV != "local" and self.EXTERNAL_API_KEY == "stub-key":
+            warnings.warn(
+                "운영 환경에서 EXTERNAL_API_KEY가 stub-key 기본값으로 설정되어 있습니다.",
+                stacklevel=2,
+            )
+        if (
+            self.APP_ENV != "local"
+            and self.ALLOW_CLIENT_ROLE_HEADER_NON_LOCAL
+            and not self.ROLE_OVERRIDE_TOKEN
+        ):
+            warnings.warn(
+                "non-local 환경에서 role header 허용 시 ROLE_OVERRIDE_TOKEN 설정을 권장합니다.",
                 stacklevel=2,
             )
         return self

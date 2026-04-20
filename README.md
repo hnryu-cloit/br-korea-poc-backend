@@ -98,10 +98,14 @@ br-korea-poc-backend/
 │       ├── 0004_add_store_id_to_operational_tables.sql
 │       ├── 0005_create_new_workbook_raw_tables.sql
 │       ├── 0006_create_campaign_raw_tables.sql
-│       └── 0007_create_settlement_and_telecom_raw_tables.sql
+│       ├── 0007_create_settlement_and_telecom_raw_tables.sql
+│       ├── 0011_create_raw_weather_daily.sql
+│       └── 0012_create_raw_seoul_market_reference.sql
 ├── scripts/
 │   ├── migrate_db.py                   # SQL 마이그레이션 실행
 │   ├── load_resource_to_db.py          # resource 파일 → DB 적재
+│   ├── load_weather_data.py            # Open-Meteo 일별 기온/강수 적재
+│   ├── load_market_reference_data.py   # reference 상권 추정매출/유동인구 CSV 적재
 │   ├── inspect_resource_db.py          # 적재 상태 조회
 │   └── test_ai_client_integration.py   # AI 클라이언트 통합 테스트
 ├── tests/
@@ -120,6 +124,7 @@ br-korea-poc-backend/
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc` | PostgreSQL 연결 URL |
+| `EXTERNAL_API_KEY` | `stub-key` | 공공데이터포털 API 키 (소진공 SmallShop 실시간 조회용) |
 | `AI_SERVICE_URL` | `http://localhost:6001` | AI 서비스 URL (미설정 시 repository/fallback 계산 사용) |
 | `AI_SERVICE_TOKEN` | (빈 값) | AI 서비스 인증 토큰 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:6003` | 허용 Origin (쉼표 구분) |
@@ -142,10 +147,16 @@ python scripts/migrate_db.py
 # 2) resource 데이터 적재
 python scripts/load_resource_to_db.py
 
-# 3) 적재 상태 확인
+# 3) 외부 날씨 데이터 적재(Open-Meteo)
+python scripts/load_weather_data.py --start-date 2026-01-01 --end-date 2026-04-19
+
+# 4) 상권 reference 데이터 적재 (서울시 우리마을가게 CSV)
+python scripts/load_market_reference_data.py
+
+# 5) 적재 상태 확인
 python scripts/inspect_resource_db.py
 
-# 4) 개발 서버 실행
+# 6) 개발 서버 실행
 uvicorn app.main:app --reload --port 6002
 ```
 
@@ -155,9 +166,14 @@ uvicorn app.main:app --reload --port 6002
    `db/migrations` 아래 SQL을 적용해 raw/core/운영 테이블과 뷰를 생성합니다.
 2. `python scripts/load_resource_to_db.py`
    `db/manifests/resource_load_manifest.json` 기준으로 `resource/` 파일을 raw 테이블에 적재합니다.
-3. `python scripts/inspect_resource_db.py`
+3. `python scripts/load_weather_data.py`
+   Open-Meteo Archive API에서 시도별 일평균 기온/강수량을 수집해 `raw_weather_daily`에 upsert 합니다.
+4. `python scripts/load_market_reference_data.py`
+   `reference/dss_eda_seoul_market_area-main/data`의 추정매출/추정유동인구 CSV를
+   `raw_seoul_market_sales`, `raw_seoul_market_floating_population`에 적재합니다.
+5. `python scripts/inspect_resource_db.py`
    현재 DB에 적재된 raw/운영 테이블 row count와 상태를 확인합니다.
-4. `uvicorn app.main:app --reload`
+6. `uvicorn app.main:app --reload`
    FastAPI 개발 서버를 실행합니다.
 
 - Swagger UI: `http://localhost:6002/docs`
@@ -170,6 +186,21 @@ docker build -t br-korea-poc-backend .
 docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 ```
 
+## 코드 컨벤션 (ruff / black / mypy)
+
+```bash
+# Lint
+ruff check .
+
+# Format
+black .
+
+# Type check
+mypy .
+```
+
+`mypy`는 `pyproject.toml` 설정에 따라 `tests/`, `scripts/` 디렉터리를 제외하고 검사합니다.
+
 ## API 엔드포인트
 
 | 경로 | 설명 |
@@ -181,6 +212,8 @@ docker run -p 6002:6002 --env-file .env br-korea-poc-backend
 | `GET /api/data/catalog` | raw/core 테이블 목록 |
 | `GET /api/data/preview/{table_name}` | 테이블 미리보기 |
 | `GET /api/analytics/metrics` | 상단 운영 지표 |
+| `GET /api/analytics/market-intelligence` | 상권 인텔리전스(구/동/업종/연도/분기/반경 스코프 지원, `EXTERNAL_API_KEY` 설정 시 소진공 SmallShop 실시간 경쟁사 반경 조회 포함) |
+| `GET /api/analytics/weather-impact` | 날씨(기온/강수)와 매출 지표 상관 분석 |
 | `GET /api/signals` | 매출 시그널 목록 |
 | `GET /api/notifications` | 알림 인박스 |
 | `GET /api/audit/logs` | 감사 로그 조회 |

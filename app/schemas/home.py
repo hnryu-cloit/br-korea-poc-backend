@@ -4,8 +4,26 @@ from pydantic import BaseModel
 
 
 class HomeOverviewRequest(BaseModel):
-    store_id: Optional[str] = None
-    business_date: Optional[str] = None
+    store_id: str | None = None
+    business_date: str | None = None
+
+
+class HomeCta(BaseModel):
+    label: str
+    path: str
+
+
+class HomePriorityActionBasisData(BaseModel):
+    selection_rule: str
+    sku_id: str | None = None
+    name: str | None = None
+    current: int | None = None
+    forecast: int | None = None
+    recommended: int | None = None
+    depletion_time: str | None = None
+    summary_status: str | None = None
+    recent_selection_count_7d: int | None = None
+    total: int | None = None
 
 
 class HomePriorityAction(BaseModel):
@@ -22,18 +40,22 @@ class HomePriorityAction(BaseModel):
     ai_reasoning: Optional[str] = None
     confidence_score: Optional[float] = None
     is_finished_good: bool = False
+    basis_data: HomePriorityActionBasisData | None = None
 
 
 class HomeStatItem(BaseModel):
     key: Literal["production_risk_count", "ordering_deadline_minutes", "today_profit_estimate", "alert_count"]
     label: str
-    value: str
+    value: int | str
+    unit: Literal["count", "minutes"] | None = None
     tone: Literal["danger", "primary", "success", "default"]
 
 
 class HomeCardMetric(BaseModel):
+    key: str
     label: str
-    value: str
+    value: int | str
+    unit: Literal["count", "minutes"] | None = None
     tone: Literal["danger", "primary", "success", "default"] = "default"
 
 
@@ -41,14 +63,14 @@ class HomeSummaryCard(BaseModel):
     domain: Literal["production", "ordering", "sales"]
     title: str
     description: str
-    highlights: list[str]
+    highlights_text: list[str]
+    highlights_data: list[dict[str, Any]]
     metrics: list[HomeCardMetric]
-    cta_label: str
-    cta_path: str
+    cta: HomeCta
     prompts: list[str]
-    status_label: Optional[str] = None
-    deadline_minutes: Optional[int] = None
-    delivery_scheduled: Optional[bool] = None
+    status_label: str | None = None
+    deadline_minutes: int | None = None
+    delivery_scheduled: bool | None = None
 
 
 class HomeOrderingDeadline(BaseModel):
@@ -67,3 +89,30 @@ class HomeOverviewResponse(BaseModel):
     cards: list[HomeSummaryCard]
     imminent_deadlines: list[HomeOrderingDeadline]
 
+class ScheduleEvent(BaseModel):
+    date: str  # YYYYMMDD
+    title: str
+    type: str  # campaign | telecom | notice
+    description: str
+
+
+class ScheduleNotice(BaseModel):
+    id: str
+    title: str
+    description: str
+    tag: str
+    tone: Literal["blue", "green", "orange", "rose"] = "blue"
+
+
+class ScheduleTodoItem(BaseModel):
+    id: str
+    label: str
+    recurring: bool = False
+
+
+class ScheduleResponse(BaseModel):
+    updated_at: str
+    source: str
+    events: list[ScheduleEvent]
+    notices: list[ScheduleNotice] = []
+    todos: list[ScheduleTodoItem] = []

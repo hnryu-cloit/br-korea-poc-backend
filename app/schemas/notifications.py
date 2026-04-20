@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -10,8 +10,8 @@ class NotificationItem(BaseModel):
     description: str
     created_at: str
     unread: bool
-    link_to: Optional[str] = None
-    link_state: Optional[dict[str, Any]] = None
+    link_to: str | None = None
+    link_state: dict[str, Any] | None = None
 
 
 class NotificationListResponse(BaseModel):

@@ -12,7 +12,4 @@ async def list_channel_drafts(
     service: BootstrapService = Depends(get_bootstrap_service),
 ) -> dict[str, ChannelDraft]:
     data = await service.get_channel_drafts()
-    return {
-        key: ChannelDraft(**value)
-        for key, value in data.items()
-    }
+    return {key: ChannelDraft(**value) for key, value in data.items()}

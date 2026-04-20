@@ -11,4 +11,6 @@ class SignalsService:
     async def list_signals(self) -> SignalsResponse:
         items = await self.repository.list_signals()
         parsed = [SalesSignal(**item) for item in items]
-        return SignalsResponse(items=parsed, high_count=sum(1 for item in parsed if item.priority == "high"))
+        return SignalsResponse(
+            items=parsed, high_count=sum(1 for item in parsed if item.priority == "high")
+        )

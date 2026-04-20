@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 
+from app.core.utils import get_now
 from app.repositories.ordering_repository import OrderingRepository
 from app.schemas.ordering import (
     OrderingAlertsResponse,
     OrderingContextResponse,
     OrderingDeadlineAlert,
+    OrderingHistoryItem,
+    OrderingHistoryResponse,
+    OrderingOptionsResponse,
     OrderOption,
     OrderSelectionHistoryItem,
     OrderSelectionHistoryResponse,
-    OrderSelectionSummaryResponse,
-    OrderingOptionsResponse,
     OrderSelectionRequest,
     OrderSelectionResponse,
+    OrderSelectionSummaryResponse,
 )
 from app.schemas.simulation import SimulationInput, SimulationResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
-
-from app.core.utils import get_now
 
 _KST = timezone(timedelta(hours=9))
 _DEFAULT_DEADLINE_HOUR = 14
@@ -47,8 +47,8 @@ class OrderingService:
     def __init__(
         self,
         repository: OrderingRepository,
-        audit_service: Optional[AuditService] = None,
-        ai_client: Optional[AIServiceClient] = None,
+        audit_service: AuditService | None = None,
+        ai_client: AIServiceClient | None = None,
     ) -> None:
         self.repository = repository
         self.audit_service = audit_service
@@ -70,18 +70,18 @@ class OrderingService:
 
     async def _get_ai_ordering_recommendation(
         self,
-        store_id: str | None,
+        store_id: str,
         current_date: str,
     ) -> dict | None:
-        if not self.ai_client or not store_id:
+        if not self.ai_client:
             return None
         return await self.ai_client.recommend_ordering(
             store_id=store_id,
             current_date=current_date,
         )
 
-    async def _get_ai_deadline_alert(self, store_id: str | None) -> dict | None:
-        if not self.ai_client or not store_id:
+    async def _get_ai_deadline_alert(self, store_id: str) -> dict | None:
+        if not self.ai_client:
             return None
         return await self.ai_client.get_ordering_deadline_alert(store_id)
 
@@ -142,7 +142,10 @@ class OrderingService:
             deadline_minutes = int(ai_payload.get("deadline_minutes") or deadline_minutes)
             deadline_at = self._safe_str(ai_payload.get("deadline_at"))
             purpose_text = self._safe_str(ai_payload.get("purpose_text")) or purpose_text
-            caution_text = self._safe_str(ai_payload.get("caution_text") or ai_payload.get("guardrail_note")) or caution_text
+            caution_text = (
+                self._safe_str(ai_payload.get("caution_text") or ai_payload.get("guardrail_note"))
+                or caution_text
+            )
             weather_summary = self._safe_str(ai_payload.get("weather_summary"))
             trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
 
@@ -331,4 +334,13 @@ class OrderingService:
             break_even_patients=break_even_patients,
             allowed_ad_budget=allowed_ad_budget,
             breakeven_reached=expected_patients >= break_even_patients,
+        )
+
+    def get_history(self, store_id: str | None = None, limit: int = 30):
+        data = self.repository.get_history(store_id=store_id, limit=limit)
+        return OrderingHistoryResponse(
+            items=[OrderingHistoryItem(**item) for item in data["items"]],
+            auto_rate=data["auto_rate"],
+            manual_rate=data["manual_rate"],
+            total_count=data["total_count"],
         )

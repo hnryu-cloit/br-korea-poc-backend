@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 from fastapi.encoders import jsonable_encoder
@@ -20,11 +19,13 @@ class AIServiceClient:
             return {"Authorization": f"Bearer {self._token}"}
         return {}
 
-    async def _post(self, path: str, body: dict) -> dict | None:
+    async def _post(self, path: str, body: dict, timeout: float = 30.0) -> dict | None:
         url = f"{self._base_url}{path}"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=jsonable_encoder(body), headers=self._headers)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url, json=jsonable_encoder(body), headers=self._headers
+                )
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as exc:
@@ -34,9 +35,20 @@ class AIServiceClient:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
 
-    async def query_sales(self, prompt: str, store_id: Optional[str] = None) -> dict | None:
+    async def query_sales(
+        self,
+        prompt: str,
+        store_id: str | None = None,
+        domain: str | None = None,
+        system_instruction: str | None = None,
+    ) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
-        result = await self._post("/sales/query", {"store_id": store_id, "query": prompt})
+        body: dict[str, object] = {"store_id": store_id, "query": prompt}
+        if domain:
+            body["domain"] = domain
+        if system_instruction:
+            body["system_instruction"] = system_instruction
+        result = await self._post("/sales/query", body, timeout=90.0)
         if result is None:
             return None
 
@@ -63,6 +75,28 @@ class AIServiceClient:
                 "profit_simulation": result.get("profit_simulation"),
             },
         }
+
+    async def suggest_sales_prompts(
+        self,
+        store_id: str,
+        domain: str,
+        context_prompts: list[dict],
+        system_instruction: str | None = None,
+    ) -> list[dict] | None:
+        body: dict[str, object] = {
+            "store_id": store_id,
+            "domain": domain,
+            "context_prompts": context_prompts,
+        }
+        if system_instruction:
+            body["system_instruction"] = system_instruction
+        result = await self._post("/sales/prompts/suggest", body)
+        if result is None:
+            return None
+        prompts = result.get("prompts")
+        if isinstance(prompts, list):
+            return prompts
+        return None
 
     async def predict_production(
         self,
@@ -114,7 +148,7 @@ class AIServiceClient:
             logger.warning("AI 서비스 연결 실패: %s", exc)
             return None
 
-    async def get_production_push_alerts(self, store_id: Optional[str]) -> list[dict]:
+    async def get_production_push_alerts(self, store_id: str | None) -> list[dict]:
         """AI 서비스에서 생산 PUSH 알림 페이로드 목록을 조회합니다."""
         if not store_id:
             return []

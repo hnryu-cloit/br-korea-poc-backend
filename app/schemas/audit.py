@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -18,4 +18,4 @@ class AuditLogEntry(BaseModel):
 class AuditLogListResponse(BaseModel):
     items: list[AuditLogEntry]
     total: int
-    filtered_domain: Optional[str] = None
+    filtered_domain: str | None = None

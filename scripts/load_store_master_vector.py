@@ -1,11 +1,12 @@
-import os
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import psycopg
-from pathlib import Path
-from datetime import datetime
 
 # DB Connection Settings
 DB_URL = "postgresql://postgres:postgres@localhost:5435/br_korea_poc"
+
 
 def load_store_master():
     # File Path (Updated to new location)
@@ -23,27 +24,35 @@ def load_store_master():
     print(f"Loaded {len(df)} rows from {excel_path}")
 
     # Column mapping (Excel to DB)
-    # The Excel file 'STOR_MST.xlsx' should match these columns. 
+    # The Excel file 'STOR_MST.xlsx' should match these columns.
     # If the column names differ, they should be mapped here.
-    
-    # Existing columns in raw_store_master: 
-    # row_no, masked_stor_cd, maked_stor_nm, actual_sales_amt, 
-    # campaign_sales_ratio, store_type, business_type, sido, region, shipment_center, 
+
+    # Existing columns in raw_store_master:
+    # row_no, masked_stor_cd, maked_stor_nm, actual_sales_amt,
+    # campaign_sales_ratio, store_type, business_type, sido, region, shipment_center,
     # store_area_pyeong, source_file, source_sheet, loaded_at, embedding
-    
+
     # Let's check the actual columns in the DataFrame first
     print(f"Actual columns in Excel: {df.columns.tolist()}")
-    
+
     # If the number of columns matches our expectation (11 columns for data)
     if len(df.columns) >= 11:
         cols = [
-            "row_no", "masked_stor_cd", "maked_stor_nm", "actual_sales_amt",
-            "campaign_sales_ratio", "store_type", "business_type", "sido",
-            "region", "shipment_center", "store_area_pyeong"
+            "row_no",
+            "masked_stor_cd",
+            "maked_stor_nm",
+            "actual_sales_amt",
+            "campaign_sales_ratio",
+            "store_type",
+            "business_type",
+            "sido",
+            "region",
+            "shipment_center",
+            "store_area_pyeong",
         ]
         # Assign names to the first 11 columns
         df.columns = cols + df.columns.tolist()[11:]
-    
+
     # Metadata
     source_file = "resources/data/STOR_MST.xlsx"
     source_sheet = "Sheet1"
@@ -54,7 +63,7 @@ def load_store_master():
         with conn.cursor() as cur:
             # Clear existing data for this table (instead of filtering by source_file to be safe)
             cur.execute("TRUNCATE TABLE raw_store_master")
-            
+
             # Insert rows
             for _, row in df.iterrows():
                 # Prepare data
@@ -73,19 +82,20 @@ def load_store_master():
                     "source_file": source_file,
                     "source_sheet": source_sheet,
                     "loaded_at": loaded_at,
-                    "embedding": None
+                    "embedding": None,
                 }
-                
+
                 # Construct query
                 fields = data.keys()
                 placeholders = [f"%({f})s" for f in fields]
                 query = f"INSERT INTO raw_store_master ({', '.join(fields)}) VALUES ({', '.join(placeholders)})"
-                
+
                 cur.execute(query, data)
-            
+
             conn.commit()
-    
+
     print(f"Successfully uploaded {len(df)} rows to raw_store_master.")
+
 
 if __name__ == "__main__":
     load_store_master()

@@ -14,6 +14,7 @@ from app.infrastructure.db.connection import get_database_engine, get_safe_datab
 # 이 스크립트는 db/migrations 아래 SQL을 적용해 테이블/뷰를 만들고,
 # resource 파일 적재는 수행하지 않는다.
 
+
 def split_statements(sql: str) -> list[str]:
     return [statement.strip() for statement in sql.split(";") if statement.strip()]
 
@@ -21,7 +22,9 @@ def split_statements(sql: str) -> list[str]:
 def main() -> None:
     engine = get_database_engine()
     if engine is None:
-        raise RuntimeError("PostgreSQL driver is not installed. Install psycopg before running migrations.")
+        raise RuntimeError(
+            "PostgreSQL driver is not installed. Install psycopg before running migrations."
+        )
     migration_root = settings.migration_root
 
     with engine.begin() as connection:
@@ -36,8 +39,7 @@ def main() -> None:
             )
         )
         applied = {
-            row[0]
-            for row in connection.execute(text("SELECT version FROM schema_migrations"))
+            row[0] for row in connection.execute(text("SELECT version FROM schema_migrations"))
         }
 
         for migration_path in sorted(migration_root.glob("*.sql")):
@@ -48,7 +50,9 @@ def main() -> None:
             for statement in split_statements(sql):
                 connection.execute(text(statement))
             connection.execute(
-                text("INSERT INTO schema_migrations(version, applied_at) VALUES (:version, :applied_at)"),
+                text(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (:version, :applied_at)"
+                ),
                 {"version": version, "applied_at": datetime.now()},
             )
 

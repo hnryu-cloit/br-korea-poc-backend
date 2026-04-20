@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -26,14 +26,15 @@ class AuditRepository:
         route: str,
         outcome: str,
         message: str,
-        metadata: Optional[dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self.engine and has_table(self.engine, "audit_logs"):
             try:
                 with self.engine.begin() as connection:
-                    row = connection.execute(
-                        text(
-                            """
+                    row = (
+                        connection.execute(
+                            text(
+                                """
                             INSERT INTO audit_logs(
                                 domain, event_type, actor_role, route, outcome, message, metadata
                             ) VALUES (
@@ -50,17 +51,20 @@ class AuditRepository:
                                 message,
                                 metadata
                             """
-                        ),
-                        {
-                            "domain": domain,
-                            "event_type": event_type,
-                            "actor_role": actor_role,
-                            "route": route,
-                            "outcome": outcome,
-                            "message": message,
-                            "metadata": json.dumps(metadata or {}, ensure_ascii=False),
-                        },
-                    ).mappings().one()
+                            ),
+                            {
+                                "domain": domain,
+                                "event_type": event_type,
+                                "actor_role": actor_role,
+                                "route": route,
+                                "outcome": outcome,
+                                "message": message,
+                                "metadata": json.dumps(metadata or {}, ensure_ascii=False),
+                            },
+                        )
+                        .mappings()
+                        .one()
+                    )
                     return dict(row)
             except SQLAlchemyError:
                 pass
@@ -79,7 +83,12 @@ class AuditRepository:
         self.entries.append(entry)
         return entry
 
-    async def list_entries(self, domain: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
+    async def list_entries(
+        self,
+        domain: str | None = None,
+        limit: int = 50,
+        store_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         if self.engine and has_table(self.engine, "audit_logs"):
             try:
                 query = """
@@ -96,9 +105,15 @@ class AuditRepository:
                     FROM audit_logs
                 """
                 params: dict[str, Any] = {"limit": limit}
+                conditions: list[str] = []
                 if domain:
-                    query += " WHERE domain = :domain"
+                    conditions.append("domain = :domain")
                     params["domain"] = domain
+                if store_id:
+                    conditions.append("metadata ->> 'store_id' = :store_id")
+                    params["store_id"] = store_id
+                if conditions:
+                    query += f" WHERE {' AND '.join(conditions)}"
                 query += " ORDER BY timestamp DESC LIMIT :limit"
                 with self.engine.connect() as connection:
                     rows = connection.execute(text(query), params).mappings().all()
@@ -109,4 +124,11 @@ class AuditRepository:
         items = self.entries
         if domain:
             items = [entry for entry in items if entry["domain"] == domain]
+        if store_id:
+            items = [
+                entry
+                for entry in items
+                if isinstance(entry.get("metadata"), dict)
+                and entry["metadata"].get("store_id") == store_id
+            ]
         return list(reversed(items))[:limit]

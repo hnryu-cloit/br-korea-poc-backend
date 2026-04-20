@@ -4,9 +4,10 @@ print("SCRIPT STARTING")
 import csv
 import json
 import sys
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from openpyxl import load_workbook
 from sqlalchemy import text
@@ -18,6 +19,7 @@ from app.infrastructure.db.connection import get_database_engine, get_safe_datab
 
 # Migration은 raw/운영 테이블을 만들고, 이 스크립트는 manifest 정의대로
 # resource 파일을 해당 테이블에 적재한다.
+
 
 def normalize_cell(value: Any) -> str | None:
     if value is None:
@@ -46,7 +48,9 @@ def iter_xlsx_rows(path: Path, sheet_name: str | None = None) -> tuple[str, list
     try:
         target_sheet = sheet_name or workbook.sheetnames[0]
         worksheet = workbook[target_sheet]
-        rows = [[normalize_cell(cell) for cell in row] for row in worksheet.iter_rows(values_only=True)]
+        rows = [
+            [normalize_cell(cell) for cell in row] for row in worksheet.iter_rows(values_only=True)
+        ]
         return target_sheet, rows
     finally:
         workbook.close()
@@ -95,7 +99,10 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
         source_path = (backend_root / relative_path).resolve()
         source_file = str(source_path.relative_to(settings.project_root))
         table = dataset["table"]
-        connection.execute(text(f'DELETE FROM "{table}" WHERE source_file = :source_file'), {"source_file": source_file})
+        connection.execute(
+            text(f'DELETE FROM "{table}" WHERE source_file = :source_file'),
+            {"source_file": source_file},
+        )
 
         row_count = 0
         message = "loaded"
@@ -116,7 +123,9 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                     loaded_at=loaded_at,
                 )
             elif dataset["loader"] == "xlsx":
-                source_sheet, rows = iter_xlsx_rows(source_path, sheet_name=dataset.get("sheet") or dataset.get("sheet_name"))
+                source_sheet, rows = iter_xlsx_rows(
+                    source_path, sheet_name=dataset.get("sheet") or dataset.get("sheet_name")
+                )
                 row_count = insert_tabular_rows(
                     connection,
                     table=table,
@@ -131,7 +140,9 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                 try:
                     for sheet in workbook.sheetnames:
                         connection.execute(
-                            text("DELETE FROM raw_workbook_rows WHERE source_file = :source_file AND sheet_name = :sheet_name"),
+                            text(
+                                "DELETE FROM raw_workbook_rows WHERE source_file = :source_file AND sheet_name = :sheet_name"
+                            ),
                             {"source_file": source_file, "sheet_name": sheet},
                         )
                         worksheet = workbook[sheet]
@@ -203,7 +214,9 @@ def main() -> None:
     engine = get_database_engine()
     print(f"Engine created: {engine}")
     if engine is None:
-        raise RuntimeError("PostgreSQL driver is not installed. Install psycopg before loading resource data.")
+        raise RuntimeError(
+            "PostgreSQL driver is not installed. Install psycopg before loading resource data."
+        )
 
     print("Beginning transaction...")
     with engine.begin() as connection:

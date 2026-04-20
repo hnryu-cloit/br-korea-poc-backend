@@ -1,6 +1,6 @@
-from typing import Any, Optional
+from typing import Any
 
-from pydantic import BaseModel, Field, AliasChoices
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class ProductionItem(BaseModel):
@@ -28,8 +28,8 @@ class ProductionOverviewAlert(BaseModel):
     severity: str
     title: str
     description: str
-    sku_id: Optional[str] = None
-    ingredient_id: Optional[str] = None
+    sku_id: str | None = None
+    ingredient_id: str | None = None
 
 
 class ProductionOverviewResponse(BaseModel):
@@ -48,9 +48,9 @@ class ProductionSkuDecision(BaseModel):
     tags: list[str]
     alert_message: str
     can_produce: bool
-    predicted_stockout_time: Optional[str] = None
+    predicted_stockout_time: str | None = None
     suggested_production_qty: int
-    chance_loss_prevented_amount: Optional[int] = None
+    chance_loss_prevented_amount: int | None = None
 
 
 class ProductionSkuItem(BaseModel):
@@ -64,19 +64,19 @@ class ProductionSkuItem(BaseModel):
     avg_second_production_time_4w: str
     status: str
     chance_loss_saving_pct: int
-    speed_alert: Optional[bool] = False
-    speed_alert_message: Optional[str] = None
-    material_alert: Optional[bool] = False
-    material_alert_message: Optional[str] = None
-    depletion_eta_minutes: Optional[int] = None
+    speed_alert: bool | None = False
+    speed_alert_message: str | None = None
+    material_alert: bool | None = False
+    material_alert_message: str | None = None
+    depletion_eta_minutes: int | None = None
     recommended_production_qty: int
     chance_loss_basis_text: str
     decision: ProductionSkuDecision
-    predicted_stockout_time: Optional[str] = None
-    can_produce: Optional[bool] = True
-    sales_velocity: Optional[float] = None
-    tags: Optional[list[str]] = Field(default_factory=list)
-    alert_message: Optional[str] = None
+    predicted_stockout_time: str | None = None
+    can_produce: bool | None = True
+    sales_velocity: float | None = None
+    tags: list[str] | None = Field(default_factory=list)
+    alert_message: str | None = None
 
 
 class Pagination(BaseModel):
@@ -99,13 +99,13 @@ class ProductionSkuDetailResponse(BaseModel):
     recommended_qty: int
     chance_loss_saving_pct: int
     chance_loss_basis_text: str
-    predicted_stockout_time: Optional[str] = None
-    can_produce: Optional[bool] = None
-    sales_velocity: Optional[float] = None
+    predicted_stockout_time: str | None = None
+    can_produce: bool | None = None
+    sales_velocity: float | None = None
     tags: list[str] = Field(default_factory=list)
-    alert_message: Optional[str] = None
-    material_alert: Optional[bool] = False
-    material_alert_message: Optional[str] = None
+    alert_message: str | None = None
+    material_alert: bool | None = False
+    material_alert_message: str | None = None
 
 
 class ProductionAlertItem(BaseModel):
@@ -133,7 +133,7 @@ class ProductionRegistrationRequest(BaseModel):
     sku_id: str
     qty: int
     registered_by: str = "store_owner"
-    store_id: Optional[str] = None
+    store_id: str | None = None
 
 
 class ProductionRegistrationResponse(BaseModel):
@@ -142,7 +142,7 @@ class ProductionRegistrationResponse(BaseModel):
     registered_by: str
     feedback_type: str
     feedback_message: str
-    store_id: Optional[str] = None
+    store_id: str | None = None
 
 
 class ProductionRegistrationHistoryItem(BaseModel):
@@ -152,29 +152,29 @@ class ProductionRegistrationHistoryItem(BaseModel):
     feedback_type: str
     feedback_message: str
     registered_at: str
-    store_id: Optional[str] = None
+    store_id: str | None = None
 
 
 class ProductionRegistrationHistoryResponse(BaseModel):
     items: list[ProductionRegistrationHistoryItem]
     total: int
-    filtered_store_id: Optional[str] = None
-    filtered_date_from: Optional[str] = None
-    filtered_date_to: Optional[str] = None
+    filtered_store_id: str | None = None
+    filtered_date_from: str | None = None
+    filtered_date_to: str | None = None
 
 
 class ProductionRegistrationSummaryResponse(BaseModel):
     total: int
-    latest: Optional[ProductionRegistrationHistoryItem] = None
+    latest: ProductionRegistrationHistoryItem | None = None
     total_registered_qty: int
     recent_registered_by: list[str]
     recent_registration_count_7d: int
     recent_registered_qty_7d: int
     affected_sku_count: int
     summary_status: str
-    filtered_store_id: Optional[str] = None
-    filtered_date_from: Optional[str] = None
-    filtered_date_to: Optional[str] = None
+    filtered_store_id: str | None = None
+    filtered_date_from: str | None = None
+    filtered_date_to: str | None = None
 
 
 class ProductionSimulationRequest(BaseModel):
@@ -198,7 +198,7 @@ class SimulationSummaryMetrics(BaseModel):
     additional_waste_cost: int
     net_profit_change: int
     performance_status: str
-    chance_loss_reduction: Optional[float] = None
+    chance_loss_reduction: float | None = None
 
 
 class ProductionSimulationResponse(BaseModel):
@@ -219,8 +219,8 @@ class ProductionRegistrationFormItem(BaseModel):
     current_stock: int
     forecast_stock_1h: int
     basis_text: str
-    last_registered_at: Optional[str] = None
-    last_registered_qty: Optional[int] = None
+    last_registered_at: str | None = None
+    last_registered_qty: int | None = None
 
 
 class ProductionRegistrationFormResponse(BaseModel):
@@ -233,3 +233,25 @@ SimulationRequest = ProductionSimulationRequest
 SimulationReportResponse = ProductionSimulationResponse
 SimulationSummary = SimulationSummaryMetrics
 ChartDataPoint = SimulationChartPoint
+
+
+class WasteItem(BaseModel):
+    item_nm: str
+    total_disuse_qty: float
+    loss_amount: float
+
+
+class WasteSummaryResponse(BaseModel):
+    items: list[WasteItem]
+    total_loss_amount: float
+
+
+class InventoryStatusItem(BaseModel):
+    item_nm: str
+    total_stock: float
+    total_sold: float
+    status: str
+
+
+class InventoryStatusResponse(BaseModel):
+    items: list[InventoryStatusItem]

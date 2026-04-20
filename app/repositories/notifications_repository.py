@@ -27,8 +27,12 @@ class NotificationsRepository:
     def __init__(self, audit_repository: AuditRepository) -> None:
         self.audit_repository = audit_repository
 
-    async def get_recent_sales_notification(self) -> dict[str, Any] | None:
-        entries = await self.audit_repository.list_entries(domain="sales", limit=1)
+    async def get_recent_sales_notification(
+        self, store_id: str | None = None
+    ) -> dict[str, Any] | None:
+        entries = await self.audit_repository.list_entries(
+            domain="sales", limit=1, store_id=store_id
+        )
         if not entries:
             return None
         entry = entries[0]
@@ -47,5 +51,9 @@ class NotificationsRepository:
             "created_at": _relative_time(timestamp),
             "unread": False,
             "link_to": "/sales",
-            "link_state": {"source": "notification", "notificationId": entry_id, "prompt": description},
+            "link_state": {
+                "source": "notification",
+                "notificationId": entry_id,
+                "prompt": description,
+            },
         }

@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.repositories.sales_repository import SalesRepository
+from app.schemas.sales import (
+    SalesCampaignEffectResponse,
+    SalesInsightsResponse,
+    SalesPrompt,
+    SalesQueryRequest,
+    SalesQueryResponse,
+    SalesSummaryResponse,
+)
 from app.schemas.sales import SalesComparison, SalesInsightsResponse, SalesPrompt, SalesQueryRequest, SalesQueryResponse, SalesSummaryResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
+from app.services.prompt_settings_service import PromptSettingsService
 
 _COMPARISON_KEYWORDS = ["배달", "매출", "전년 동월", "채널"]
 _FAQ_KEYWORDS = ["무엇", "어떻게", "왜", "설명", "가이드"]
 _DATA_LOOKUP_KEYWORDS = ["조회", "건수", "수치", "비율", "얼마", "몇"]
 _SENSITIVE_KEYWORDS = ["이익", "이익률", "원가", "손익", "마진", "타점포", "점포 성과"]
-_HQ_ROLES = {"hq_operator", "hq_planner"}
+_HQ_ROLES = {"hq_admin", "hq_operator", "hq_planner"}
 
 # 한국 전화번호 패턴 (010-XXXX-XXXX, 0X0-XXXXXXXX 등 변형 포함)
 _PHONE_RE = re.compile(r"0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}")
@@ -31,12 +39,14 @@ class SalesService:
     def __init__(
         self,
         repository: SalesRepository,
-        ai_client: Optional[AIServiceClient] = None,
-        audit_service: Optional[AuditService] = None,
+        ai_client: AIServiceClient | None = None,
+        audit_service: AuditService | None = None,
+        prompt_settings_service: PromptSettingsService | None = None,
     ) -> None:
         self.repository = repository
         self.ai_client = ai_client
         self.audit_service = audit_service
+        self.prompt_settings_service = prompt_settings_service
 
     async def list_prompts(self) -> list[SalesPrompt]:
         prompts = await self.repository.list_prompts()

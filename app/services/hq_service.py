@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from app.repositories.hq_repository import HQRepository
-from app.schemas.hq import CoachingTip, HQCoachingResponse, HQInspectionResponse, StoreInspectionItem, StoreOrderItem
+from app.schemas.hq import (
+    CoachingTip,
+    HQCoachingResponse,
+    HQInspectionResponse,
+    StoreInspectionItem,
+    StoreOrderItem,
+)
 
 
 class HQService:
@@ -24,7 +30,11 @@ class HQService:
             recommended_count_7d = int(row.get("recommended_count_7d") or 0)
             production_count_7d = int(row.get("production_count_7d") or 0)
             fallback_status = str(row.get("status") or "")
-            if order_count_7d == 0 and production_count_7d == 0 and fallback_status in {"normal", "review", "risk"}:
+            if (
+                order_count_7d == 0
+                and production_count_7d == 0
+                and fallback_status in {"normal", "review", "risk"}
+            ):
                 status = fallback_status
             else:
                 status = self._resolve_status(
@@ -75,11 +85,21 @@ class HQService:
             production_count_7d = int(row.get("production_count_7d") or 0)
             production_qty_7d = float(row.get("production_qty_7d") or 0)
             production_qty_prev_7d = float(row.get("production_qty_prev_7d") or 0)
-            alert_response_rate = self._calculate_alert_response_rate(order_count_7d=order_count_7d, recommended_count_7d=recommended_count_7d, production_count_7d=production_count_7d)
+            alert_response_rate = self._calculate_alert_response_rate(
+                order_count_7d=order_count_7d,
+                recommended_count_7d=recommended_count_7d,
+                production_count_7d=production_count_7d,
+            )
             production_total = max(4, order_count_7d + production_count_7d)
-            chance_loss_change = self.repository._format_percentage_delta(production_qty_7d, production_qty_prev_7d)
+            chance_loss_change = self.repository._format_percentage_delta(
+                production_qty_7d, production_qty_prev_7d
+            )
             fallback_status = str(row.get("status") or "")
-            if order_count_7d == 0 and production_count_7d == 0 and fallback_status in {"compliant", "partial", "noncompliant"}:
+            if (
+                order_count_7d == 0
+                and production_count_7d == 0
+                and fallback_status in {"compliant", "partial", "noncompliant"}
+            ):
                 status = fallback_status
             else:
                 status = self._resolve_inspection_status(
@@ -152,7 +172,9 @@ class HQService:
         return None
 
     @staticmethod
-    def _calculate_alert_response_rate(*, order_count_7d: int, recommended_count_7d: int, production_count_7d: int) -> int:
+    def _calculate_alert_response_rate(
+        *, order_count_7d: int, recommended_count_7d: int, production_count_7d: int
+    ) -> int:
         if order_count_7d <= 0:
             return 0
         response_rate = round((recommended_count_7d / order_count_7d) * 100)
@@ -161,8 +183,18 @@ class HQService:
         return max(0, min(100, response_rate))
 
     @staticmethod
-    def _resolve_inspection_status(*, alert_response_rate: int, production_registered: int, production_total: int, chance_loss_change: str) -> str:
-        if alert_response_rate >= 90 and production_registered >= max(1, int(round(production_total * 0.75))) and chance_loss_change.startswith("-"):
+    def _resolve_inspection_status(
+        *,
+        alert_response_rate: int,
+        production_registered: int,
+        production_total: int,
+        chance_loss_change: str,
+    ) -> str:
+        if (
+            alert_response_rate >= 90
+            and production_registered >= max(1, int(round(production_total * 0.75)))
+            and chance_loss_change.startswith("-")
+        ):
             return "compliant"
         if alert_response_rate >= 70 or production_registered > 0:
             return "partial"

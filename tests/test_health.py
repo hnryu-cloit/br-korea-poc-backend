@@ -10,7 +10,6 @@ from app.schemas.production import ProductionSimulationResponse
 from app.services.bootstrap_service import BootstrapService
 from app.services.hq_service import HQService
 
-
 client = TestClient(app)
 
 
@@ -168,6 +167,32 @@ def test_home_overview() -> None:
     assert isinstance(ordering_card["delivery_scheduled"], bool)
 
 
+def test_home_schedule() -> None:
+    response = client.get("/api/home/schedule")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "updated_at" in payload
+    assert "source" in payload
+    assert isinstance(payload["events"], list)
+    assert isinstance(payload["notices"], list)
+    assert isinstance(payload["todos"], list)
+    if payload["events"]:
+        first = payload["events"][0]
+        assert "date" in first
+        assert "title" in first
+        assert "type" in first
+        assert "description" in first
+    if payload["notices"]:
+        first_notice = payload["notices"][0]
+        assert "id" in first_notice
+        assert "title" in first_notice
+        assert "description" in first_notice
+    if payload["todos"]:
+        first_todo = payload["todos"][0]
+        assert "id" in first_todo
+        assert "label" in first_todo
+
+
 def test_production_overview() -> None:
     response = client.get("/api/production/overview")
     assert response.status_code == 200
@@ -176,6 +201,7 @@ def test_production_overview() -> None:
     assert payload["refresh_interval_minutes"] in (3, 5, 10)
     assert isinstance(payload["summary_stats"], list)
     assert isinstance(payload["alerts"], list)
+
 
 def test_production_items() -> None:
     response = client.get("/api/production/items?page=1&page_size=20&store_id=POC_001")
@@ -300,7 +326,9 @@ def test_production_registration_history_filters_by_date_range() -> None:
         "/api/production/registrations",
         json={"sku_id": "sku-1", "qty": 10, "registered_by": "store_owner", "store_id": "POC_001"},
     )
-    matched = client.get("/api/production/registrations/history?date_from=2026-03-31&date_to=2026-03-31")
+    matched = client.get(
+        "/api/production/registrations/history?date_from=2026-03-31&date_to=2026-03-31"
+    )
     assert matched.status_code == 200
     matched_payload = matched.json()
     assert matched_payload["total"] >= 0
@@ -418,6 +446,34 @@ def test_analytics_metrics_endpoint_returns_response_shape() -> None:
         assert {"label", "value", "change", "trend", "detail"} <= set(payload["items"][0].keys())
 
 
+def test_analytics_store_profile_endpoint_returns_response_shape() -> None:
+    response = client.get("/api/analytics/store-profile?store_id=POC_001")
+    assert response.status_code in (200, 404)
+    if response.status_code == 200:
+        payload = response.json()
+        assert {
+            "store_cd",
+            "store_nm",
+            "sido",
+            "region",
+            "store_type",
+            "area_pyeong",
+            "business_type",
+            "peer_count",
+            "actual_sales_amt",
+        } <= set(payload.keys())
+
+
+def test_analytics_customer_profile_endpoint_returns_response_shape() -> None:
+    response = client.get("/api/analytics/customer-profile?store_id=POC_001")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "customer_segments" in payload
+    assert "telecom_discounts" in payload
+    assert isinstance(payload["customer_segments"], list)
+    assert isinstance(payload["telecom_discounts"], list)
+
+
 def test_signals_endpoint_returns_response_shape() -> None:
     response = client.get("/api/signals")
     assert response.status_code == 200
@@ -427,7 +483,17 @@ def test_signals_endpoint_returns_response_shape() -> None:
     assert isinstance(payload["items"], list)
     assert payload["high_count"] >= 0
     if payload["items"]:
-        assert {"id", "title", "metric", "value", "change", "trend", "priority", "region", "insight"} <= set(payload["items"][0].keys())
+        assert {
+            "id",
+            "title",
+            "metric",
+            "value",
+            "change",
+            "trend",
+            "priority",
+            "region",
+            "insight",
+        } <= set(payload["items"][0].keys())
 
 
 def test_bootstrap_endpoint_returns_minimal_payload() -> None:
@@ -482,6 +548,7 @@ async def test_repository_and_service_empty_fallbacks_without_engine() -> None:
 
 # ── 역할 기반 접근 제어 테스트 ────────────────────────────────────────────
 
+
 def test_hq_coaching_forbidden_for_store_role() -> None:
     response = client.get("/api/hq/coaching", headers={"X-User-Role": "store_owner"})
     assert response.status_code == 403
@@ -515,6 +582,7 @@ def test_audit_logs_allowed_for_hq_admin() -> None:
 
 # ── 민감 질의 차단 회귀 테스트 ───────────────────────────────────────────
 
+
 def test_sales_query_blocks_sensitive_fields_for_store_role() -> None:
     # store_owner 역할은 순이익·원가 질의가 차단됨
     response = client.post(
@@ -540,6 +608,7 @@ def test_sales_query_not_blocked_for_general_question() -> None:
 
 # ── 주문 마감 시간 계산 테스트 ────────────────────────────────────────────
 
+
 def test_ordering_deadline_returns_expected_shape() -> None:
     response = client.get("/api/ordering/deadline?store_id=POC_001")
     assert response.status_code == 200
@@ -561,6 +630,7 @@ def test_ordering_deadline_without_store_id() -> None:
 
 
 # ── 생산 등록 폼 테스트 ───────────────────────────────────────────────────
+
 
 def test_production_registration_form_returns_items() -> None:
     response = client.get("/api/production/registrations/form")
@@ -612,9 +682,7 @@ def test_production_store_id_consistency() -> None:
     assert overview_resp.status_code == 200
     assert items_resp.status_code == 200
     overview_danger = overview_resp.json()["danger_count"]
-    items_danger = sum(
-        1 for it in items_resp.json()["items"] if it["status"] == "danger"
-    )
+    items_danger = sum(1 for it in items_resp.json()["items"] if it["status"] == "danger")
     # items와 overview의 위험 건수가 일치해야 함
     assert overview_danger == items_danger
 
@@ -626,6 +694,7 @@ def test_production_overview_has_store_id_param() -> None:
 
 
 # ── 공통 예외 처리 테스트 ─────────────────────────────────────────────────
+
 
 def test_unknown_route_returns_404() -> None:
     response = client.get("/api/nonexistent-endpoint")
