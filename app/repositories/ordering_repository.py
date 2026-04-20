@@ -135,7 +135,7 @@ class OrderingRepository:
                     filter_params,
                 ).scalars().all()
                 options: list[dict] = []
-                for idx, date_value in enumerate(dates[:3]):
+                for date_idx, date_value in enumerate(dates[:3]):
                     rows = connection.execute(
                         text(
                             f"""
@@ -178,12 +178,12 @@ class OrderingRepository:
                         {
                             "sku_name": bucket["name"],
                             "quantity": int(bucket["qty"]),
-                            "note": "추천 상위 SKU" if row_index == 0 and idx == 0 else None,
+                            "note": "추천 상위 SKU" if date_idx == 0 and idx == 0 else None,
                         }
                         for idx, bucket in enumerate(sorted_items)
                     ]
                     if items:
-                        raw_notes = notes_map[idx]
+                        raw_notes = notes_map[date_idx] if date_idx < len(notes_map) else None
                         total_qty = sum(int(b["qty"]) for b in aggregated.values())
                         top_item = sorted_items[0] if sorted_items else None
                         reasoning_metrics: list[dict] = [
@@ -195,11 +195,11 @@ class OrderingRepository:
                             reasoning_metrics.append({"key": "주요 품목", "value": str(top_item["name"])})
                         options.append(
                             {
-                                "option_id": f"opt-{chr(97 + idx)}",
-                                "title": labels[idx],
+                                "option_id": f"opt-{chr(97 + date_idx)}",
+                                "title": labels[date_idx],
                                 "basis": self._format_basis_date(date_value),
-                                "description": descriptions[idx],
-                                "recommended": idx == 0,
+                                "description": descriptions[date_idx],
+                                "recommended": date_idx == 0,
                                 "reasoning_text": raw_notes[0] if raw_notes else "",
                                 "reasoning_metrics": reasoning_metrics,
                                 "special_factors": raw_notes[1:],

@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.core.utils import get_now
 from app.schemas.home import (
     HomeCardMetric,
+    HomeOrderingDeadline,
     HomeOverviewRequest,
     HomeOverviewResponse,
     HomePriorityAction,
@@ -28,16 +29,23 @@ class HomeService:
         ordering_options = await self.ordering_service.list_options(notification_entry=False)
         sales_status = self._build_sales_status(ordering_summary=ordering_summary, production_danger_count=production.danger_count)
 
+        # 발주처별/메뉴별 다중 마감 시간 생성 로직
+        deadlines = self._build_detailed_deadlines()
+        
+        # 가장 임박한 마감 시간 찾기 (완료되지 않았고 양수인 시간 중 최소값)
+        active_deadlines = [d.remaining_minutes for d in deadlines if d.remaining_minutes >= 0]
+        most_imminent_deadline = min(active_deadlines) if active_deadlines else 0
+
         priority_actions = self._build_priority_actions(production=production, ordering_summary=ordering_summary)
         stats = self._build_stats(
             danger_count=production.danger_count,
-            ordering_deadline_minutes=ordering_options.deadline_minutes,
+            ordering_deadline_minutes=most_imminent_deadline,
             alert_count=production.danger_count + (1 if ordering_summary.summary_status != "recommended_selected" else 0),
         )
         cards = self._build_cards(
             production=production,
             ordering_summary=ordering_summary,
-            ordering_deadline_minutes=ordering_options.deadline_minutes,
+            ordering_deadline_minutes=most_imminent_deadline,
             ordering_option_count=len(ordering_options.options),
             sales_status=sales_status,
         )
@@ -47,7 +55,39 @@ class HomeService:
             priority_actions=priority_actions,
             stats=stats,
             cards=cards,
+            imminent_deadlines=deadlines,
         )
+
+    def _build_detailed_deadlines(self) -> list[HomeOrderingDeadline]:
+        # 현재는 POC 목적이므로, 복수 발주처/메뉴 타입 시나리오에 맞는 하드코딩 데이터를 반환합니다.
+        # 운영 환경에서는 발주처(Store-Supplier Mapping) 테이블에서 불러오게 됩니다.
+        now = get_now()
+        
+        # 임의로 오늘 기준 14:00 (생지), 17:00 (완제품)으로 설정하여 남은 시간 계산
+        raw_dough_time = now.replace(hour=14, minute=0, second=0, microsecond=0)
+        finished_goods_time = now.replace(hour=17, minute=0, second=0, microsecond=0)
+        
+        raw_dough_remaining = int((raw_dough_time - now).total_seconds() / 60)
+        finished_goods_remaining = int((finished_goods_time - now).total_seconds() / 60)
+        
+        return [
+            HomeOrderingDeadline(
+                supplier_name="평택 베이커리 공장",
+                menu_type="베이커리류 (생지/반제품)",
+                deadline_time="14:00",
+                remaining_minutes=max(0, raw_dough_remaining),
+                is_imminent=0 <= raw_dough_remaining <= 60,  # 1시간 이내 임박
+                order_type="stock"
+            ),
+            HomeOrderingDeadline(
+                supplier_name="본사 익일 물류센터",
+                menu_type="완제품 (익일 배송)",
+                deadline_time="17:00",
+                remaining_minutes=max(0, finished_goods_remaining),
+                is_imminent=0 <= finished_goods_remaining <= 60,
+                order_type="finished_good"
+            )
+        ]
 
     def _build_priority_actions(self, production, ordering_summary) -> list[HomePriorityAction]:
         danger_item = next((item for item in production.items if item.status == "danger"), production.items[0] if production.items else None)

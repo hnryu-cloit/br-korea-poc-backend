@@ -51,8 +51,19 @@ class HomeSummaryCard(BaseModel):
     delivery_scheduled: Optional[bool] = None
 
 
+class HomeOrderingDeadline(BaseModel):
+    supplier_name: str
+    menu_type: str
+    deadline_time: str
+    remaining_minutes: int
+    is_imminent: bool
+    order_type: Literal["stock", "finished_good"]
+
+
 class HomeOverviewResponse(BaseModel):
     updated_at: str
     priority_actions: list[HomePriorityAction]
     stats: list[HomeStatItem]
     cards: list[HomeSummaryCard]
+    imminent_deadlines: list[HomeOrderingDeadline]
+
