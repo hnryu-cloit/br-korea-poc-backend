@@ -849,6 +849,10 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | `GET /api/hq/inspection` | DB 직접 참조 없음 | 현재는 정적 응답 기반 생산 점검 데이터다. |
 | `GET /api/signals` | `core_channel_sales`, `core_store_master`, `production_registrations`, `core_daily_item_sales`, `raw_settlement_master`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_daily_store_pay_way` | 지역별 배달 감소, 생산 대응 집중, 커피 동반 구매 강세, 활성 제휴 할인 운영 점검 시그널을 계산한다. |
 
+- `GET /api/analytics/metrics`는 `store_id`가 `STORE_DEMO`이거나 `raw_store_master.masked_stor_cd`에 없는 값이면 점포 필터를 제거하고 전체 매장 집계로 폴백한다.
+- `GET /api/analytics/metrics`는 `date_from/date_to` 선택 구간에 데이터가 전혀 없으면 최근 가용 7일 집계로 자동 폴백한다.
+- `GET /api/analytics/metrics`의 `할인 결제 비중`은 0.1% 미만 값을 `0.00%` 정밀도로 표시해 미세 할인 집계가 `0.0%`로만 보이는 문제를 완화한다.
+
 ## 해석 메모
 
 - "우선 참조"는 코드상 `has_table(...)` 확인 뒤 가장 먼저 사용하는 소스를 의미한다.
@@ -872,3 +876,9 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - 요청한 `year/quarter`에 데이터가 없을 때는 동일 스코프에서 연도/분기 조건만 제거한 가용 실데이터로 폴백한다(합성값 사용 없음).
 - 동일 API에서 `industry_analysis`/`sales_analysis`/`population_analysis`/`regional_status`/`customer_characteristics`를 함께 생성하며, 일부 항목은 원천 컬럼 한계로 reference 기반 프록시 집계(예: 직장·주거 인구, 소득소비, 교통접근지수)를 사용한다.
 - `customer_characteristics.new_customer_ratio/regular_customer_ratio`는 `raw_daily_store_item/raw_daily_store_pay_way/raw_order_extract`의 고객식별 컬럼(존재 시)을 자동탐지해 계산하고, 미존재 시 `raw_daily_store_cpi_tmzon` 키워드 보조추출을 시도한 뒤 최종적으로 null 처리한다.
+- `GET /api/ordering/history`, `GET /api/ordering/history/insights`는 `store_id` 필수이며, 누락/오입력은 4xx 에러를 반환한다.
+- `GET /api/ordering/options`의 `weather_summary`는 AI 응답이 비어 있으면 Open-Meteo 예보 API 폴백 결과를 사용한다.
+
+- 프론트 글로벌 에러 배너 정책: `/analytics/market`는 `/api/analytics/market-intelligence` 실패를 1차 기준으로 표시하고, `store-profile/customer-profile/sales-trend` 실패는 보조 데이터 결손으로 분리한다.
+
+- `/api/analytics/market-intelligence`는 repository 예외 발생 시에도 기본 구조(빈 집계 + data_sources 안내)로 200 응답을 반환하도록 서비스 계층에서 예외를 흡수한다.

@@ -449,3 +449,14 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 - `raw_daily_store_cpi_tmzon`의 `cpi_nm/bill_cnt` 실데이터에서 신규/재방문 키워드가 식별되면 `customer_characteristics.new_customer_ratio / regular_customer_ratio`를 자동 계산합니다(미식별 시 null 유지).
 - 현재 샘플 데이터의 `cpi_nm/cpi_cd`는 프로모션 중심 코드로 확인되어 신규/재방문 식별값이 없어, 해당 비율은 `null` + `data_sources` 안내 문구로 반환됩니다.
 - 추가로 `raw_daily_store_item/raw_daily_store_pay_way/raw_order_extract`에서 고객 식별 컬럼(`customer_id/member_id/phone_no/card_no` 등)이 발견되면 자동탐지로 신규/단골 비율을 계산하도록 템플릿을 확장했습니다.
+- `GET /api/ordering/history`, `GET /api/ordering/history/insights`는 `store_id` 필수 정책으로 전환했고, 누락/오입력 시 4xx 에러를 반환하도록 정비했습니다.
+- 주문 추천 옵션 응답(`GET /api/ordering/options`)은 AI 날씨 요약이 비어 있을 때 Open-Meteo 예보 API를 폴백으로 호출해 `weather_summary`를 채웁니다.
+- `GET /api/analytics/metrics`는 `store_id=STORE_DEMO` 또는 미존재 점포 ID 요청 시 전체 매장 집계로 자동 폴백하도록 보정해 KPI가 0값으로 고정되는 케이스를 줄였습니다.
+- `GET /api/analytics/metrics`에서 사용자가 선택한 기간(`date_from/date_to`)에 데이터가 전혀 없으면, 자동으로 최근 가용 7일 구간으로 폴백해 0집계 고정 현상을 완화했습니다.
+- 프론트 기본 환경값을 `VITE_DEFAULT_STORE_ID=POC_012`로 정리해, backend `analytics/metrics`의 점포 필터가 초기 실행부터 온라인/할인 KPI 검증 가능한 점포를 사용하도록 동기화했습니다.
+- `할인 결제 비중`은 0.1% 미만의 소수값도 `0.03%` 형태로 표시하도록 포맷을 보정해, 실제 할인 결제 집계가 `0.0%`로만 보이는 표시 한계를 줄였습니다.
+
+- 상권 화면의 글로벌 실패 문구는 메인 분석 API(`/api/analytics/market-intelligence`) 오류 기준으로만 노출되도록 프론트 표시 정책이 조정되었습니다(보조 API 오류와 분리).
+
+- `AnalyticsService.get_market_intelligence()`에 예외 안전 처리를 추가해 repository 내부 오류가 발생해도 `/api/analytics/market-intelligence`는 200 + 기본 구조를 반환합니다.
+- `tests/test_health.py`에 `market-intelligence` 응답 형태(200/status shape) 검증 테스트를 추가했습니다.

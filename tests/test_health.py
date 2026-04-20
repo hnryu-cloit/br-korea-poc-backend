@@ -154,6 +154,16 @@ def test_ordering_selection_summary_filters_by_date_range() -> None:
     assert payload["summary_status"] == "empty"
 
 
+def test_ordering_history_requires_store_id() -> None:
+    response = client.get("/api/ordering/history")
+    assert response.status_code == 422
+
+
+def test_ordering_history_insights_requires_store_id() -> None:
+    response = client.get("/api/ordering/history/insights")
+    assert response.status_code == 422
+
+
 def test_home_overview() -> None:
     response = client.get("/api/home/overview")
     assert response.status_code == 200
@@ -446,6 +456,26 @@ def test_analytics_metrics_endpoint_returns_response_shape() -> None:
         assert {"label", "value", "change", "trend", "detail"} <= set(payload["items"][0].keys())
 
 
+def test_analytics_metrics_endpoint_fallbacks_invalid_store_id() -> None:
+    default_response = client.get("/api/analytics/metrics")
+    invalid_store_response = client.get("/api/analytics/metrics?store_id=STORE_DEMO")
+
+    assert default_response.status_code == 200
+    assert invalid_store_response.status_code == 200
+    assert invalid_store_response.json() == default_response.json()
+
+
+def test_analytics_metrics_endpoint_fallbacks_empty_date_period() -> None:
+    default_response = client.get("/api/analytics/metrics?store_id=POC_012")
+    empty_period_response = client.get(
+        "/api/analytics/metrics?store_id=POC_012&date_from=2099-01-01&date_to=2099-01-07"
+    )
+
+    assert default_response.status_code == 200
+    assert empty_period_response.status_code == 200
+    assert empty_period_response.json() == default_response.json()
+
+
 def test_analytics_store_profile_endpoint_returns_response_shape() -> None:
     response = client.get("/api/analytics/store-profile?store_id=POC_001")
     assert response.status_code in (200, 404)
@@ -472,6 +502,17 @@ def test_analytics_customer_profile_endpoint_returns_response_shape() -> None:
     assert "telecom_discounts" in payload
     assert isinstance(payload["customer_segments"], list)
     assert isinstance(payload["telecom_discounts"], list)
+
+
+def test_analytics_market_intelligence_endpoint_returns_response_shape() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence"
+        "?store_id=POC_001&gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "radius_km" in payload
+    assert "data_sources" in payload
 
 
 def test_signals_endpoint_returns_response_shape() -> None:
