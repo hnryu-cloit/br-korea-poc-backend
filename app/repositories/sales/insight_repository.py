@@ -35,59 +35,33 @@ class InsightRepositoryMixin:
             return insights
 
         try:
-            # 시간대 운영 코칭: core → raw_daily_store_item_tmzon 순으로 시도
-            if has_table(self.engine, "core_hourly_item_sales"):
-                peak_hours = self._fetch_peak_hours_insight(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if peak_hours:
-                    insights["peak_hours"] = peak_hours
-            elif has_table(self.engine, "raw_daily_store_item_tmzon"):
-                peak_hours = self._fetch_peak_hours_from_tmzon(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if peak_hours:
-                    insights["peak_hours"] = peak_hours
+            # 시간대 운영 코칭: raw_daily_store_item_tmzon 직접 사용
+            peak_hours = self._fetch_peak_hours_from_tmzon(
+                store_id=store_id, date_from=date_from, date_to=date_to
+            )
+            if peak_hours:
+                insights["peak_hours"] = peak_hours
 
-            # 채널 전환 인사이트: core → raw_daily_store_online 순으로 시도
-            if has_table(self.engine, "core_channel_sales"):
-                channel_mix = self._fetch_channel_mix_insight(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if channel_mix:
-                    insights["channel_mix"] = channel_mix
-            elif has_table(self.engine, "raw_daily_store_online"):
-                channel_mix = self._fetch_channel_mix_from_online(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if channel_mix:
-                    insights["channel_mix"] = channel_mix
+            # 채널 전환 인사이트: raw_daily_store_online 직접 사용
+            channel_mix = self._fetch_channel_mix_from_online(
+                store_id=store_id, date_from=date_from, date_to=date_to
+            )
+            if channel_mix:
+                insights["channel_mix"] = channel_mix
 
             # 결제/할인 민감도: raw 테이블 직접 조회
-            if (
-                has_table(self.engine, "raw_daily_store_pay_way")
-                or has_table(self.engine, "raw_settlement_master")
-                or has_table(self.engine, "raw_telecom_discount_policy")
-            ):
-                payment_mix = self._fetch_payment_mix_insight(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if payment_mix:
-                    insights["payment_mix"] = payment_mix
+            payment_mix = self._fetch_payment_mix_insight(
+                store_id=store_id, date_from=date_from, date_to=date_to
+            )
+            if payment_mix:
+                insights["payment_mix"] = payment_mix
 
-            # 메뉴 믹스 추천: core → raw_daily_store_item 순으로 시도
-            if has_table(self.engine, "core_daily_item_sales"):
-                menu_mix = self._fetch_menu_mix_insight(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if menu_mix:
-                    insights["menu_mix"] = menu_mix
-            elif has_table(self.engine, "raw_daily_store_item"):
-                menu_mix = self._fetch_menu_mix_from_item(
-                    store_id=store_id, date_from=date_from, date_to=date_to
-                )
-                if menu_mix:
-                    insights["menu_mix"] = menu_mix
+            # 메뉴 믹스 추천: raw_daily_store_item 직접 사용
+            menu_mix = self._fetch_menu_mix_from_item(
+                store_id=store_id, date_from=date_from, date_to=date_to
+            )
+            if menu_mix:
+                insights["menu_mix"] = menu_mix
         except SQLAlchemyError as exc:
             logger.exception(
                 "Failed to build insights (store_id=%s, date_from=%s, date_to=%s): %s",
@@ -322,199 +296,6 @@ class InsightRepositoryMixin:
             return "", params
         return "WHERE " + " AND ".join(clauses), params
 
-    def _fetch_peak_hours_insight(
-        self, store_id: str | None, date_from: str | None, date_to: str | None
-    ) -> dict | None:
-        where_clause, params = self._build_filters(
-            "masked_stor_cd", "sale_dt", store_id, date_from, date_to
-        )
-        with self.engine.connect() as connection:
-            metrics = (
-                connection.execute(
-                    text(
-                        f"""
-                    WITH hourly AS (
-                        SELECT
-                            tmzon_div,
-                            SUM(net_sale_amt) AS net_sale_amt,
-                            SUM(sale_qty) AS sale_qty
-                        FROM core_hourly_item_sales
-                        {where_clause}
-                        GROUP BY tmzon_div
-                    ),
-                    top_items AS (
-                        SELECT
-                            tmzon_div,
-                            item_nm,
-                            SUM(net_sale_amt) AS net_sale_amt,
-                            ROW_NUMBER() OVER (PARTITION BY tmzon_div ORDER BY SUM(net_sale_amt) DESC, item_nm) AS rn
-                        FROM core_hourly_item_sales
-                        {where_clause}
-                        GROUP BY tmzon_div, item_nm
-                    )
-                    SELECT
-                        h.tmzon_div,
-                        h.net_sale_amt,
-                        h.sale_qty,
-                        ti.item_nm
-                    FROM hourly h
-                    LEFT JOIN top_items ti
-                        ON h.tmzon_div = ti.tmzon_div
-                       AND ti.rn = 1
-                    ORDER BY h.net_sale_amt DESC, h.tmzon_div
-                    LIMIT 3
-                    """
-                    ),
-                    params,
-                )
-                .mappings()
-                .all()
-            )
-            slow_slots = (
-                connection.execute(
-                    text(
-                        f"""
-                    SELECT
-                        tmzon_div,
-                        SUM(net_sale_amt) AS net_sale_amt
-                    FROM core_hourly_item_sales
-                    {where_clause}
-                    GROUP BY tmzon_div
-                    HAVING SUM(net_sale_amt) > 0
-                    ORDER BY SUM(net_sale_amt) ASC, tmzon_div
-                    LIMIT 2
-                    """
-                    ),
-                    params,
-                )
-                .mappings()
-                .all()
-            )
-
-        if not metrics:
-            return None
-
-        lead = metrics[0]
-        summary = (
-            f"{int(lead['tmzon_div']):02d}시가 가장 강하고 "
-            f"{(lead['item_nm'] or '핵심 상품')} 중심으로 매출이 집중됩니다."
-        )
-        metric_items = [
-            {
-                "label": f"{int(metric['tmzon_div']):02d}시",
-                "value": f"{int(float(metric['net_sale_amt'] or 0)):,}원",
-                "detail": f"대표 상품 {metric['item_nm'] or '-'} / 판매 {int(float(metric['sale_qty'] or 0))}개",
-            }
-            for metric in metrics[:2]
-        ]
-        if slow_slots:
-            slow = slow_slots[0]
-            metric_items.append(
-                {
-                    "label": "보완 시간대",
-                    "value": f"{int(slow['tmzon_div']):02d}시",
-                    "detail": f"순매출 {int(float(slow['net_sale_amt'] or 0)):,}원",
-                }
-            )
-
-        return {
-            "title": "시간대 운영 코칭",
-            "summary": summary,
-            "metrics": metric_items,
-            "actions": [
-                f"{int(lead['tmzon_div']):02d}시 이전에 핵심 상품 생산·진열을 완료해 주세요.",
-                "저조 시간대에는 세트 제안이나 음료 동시 노출을 강화해 주세요.",
-            ],
-            "status": "active",
-        }
-
-    def _fetch_channel_mix_insight(
-        self, store_id: str | None, date_from: str | None, date_to: str | None
-    ) -> dict | None:
-        where_clause, params = self._build_filters(
-            "masked_stor_cd", "sale_dt", store_id, date_from, date_to
-        )
-        with self.engine.connect() as connection:
-            channel_rows = (
-                connection.execute(
-                    text(
-                        f"""
-                    SELECT
-                        COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
-                        SUM(sale_amt) AS sale_amt,
-                        SUM(ord_cnt) AS ord_cnt
-                    FROM core_channel_sales
-                    {where_clause}
-                    GROUP BY COALESCE(NULLIF(ho_chnl_div, ''), '기타')
-                    ORDER BY SUM(sale_amt) DESC
-                    """
-                    ),
-                    params,
-                )
-                .mappings()
-                .all()
-            )
-            time_rows = (
-                connection.execute(
-                    text(
-                        f"""
-                    SELECT
-                        tmzon_div,
-                        SUM(CASE WHEN ho_chnl_div LIKE '온라인%' THEN sale_amt ELSE 0 END) AS online_sale_amt,
-                        SUM(CASE WHEN ho_chnl_div LIKE '오프라인%' THEN sale_amt ELSE 0 END) AS offline_sale_amt
-                    FROM core_channel_sales
-                    {where_clause}
-                    GROUP BY tmzon_div
-                    ORDER BY online_sale_amt DESC, tmzon_div
-                    LIMIT 1
-                    """
-                    ),
-                    params,
-                )
-                .mappings()
-                .first()
-            )
-
-        if not channel_rows:
-            return None
-
-        total_sales = sum(float(row["sale_amt"] or 0) for row in channel_rows)
-        metric_items = []
-        for row in channel_rows[:2]:
-            ratio = (
-                0 if total_sales == 0 else round(float(row["sale_amt"] or 0) / total_sales * 100, 1)
-            )
-            metric_items.append(
-                {
-                    "label": str(row["channel_div"]),
-                    "value": f"{ratio:.1f}%",
-                    "detail": f"매출 {int(float(row['sale_amt'] or 0)):,}원 / 주문 {int(float(row['ord_cnt'] or 0)):,}건",
-                }
-            )
-
-        if time_rows:
-            online_sale = float(time_rows["online_sale_amt"] or 0)
-            offline_sale = float(time_rows["offline_sale_amt"] or 0)
-            metric_items.append(
-                {
-                    "label": "온라인 강세 시간대",
-                    "value": f"{int(time_rows['tmzon_div']):02d}시",
-                    "detail": f"온라인 {int(online_sale):,}원 / 오프라인 {int(offline_sale):,}원",
-                }
-            )
-
-        top_channel = channel_rows[0]
-        return {
-            "title": "채널 전환 인사이트",
-            "summary": f"{top_channel['channel_div']} 비중이 가장 높고 채널별 집중 시간대 차이가 보입니다.",
-            "metrics": metric_items,
-            "actions": [
-                "온라인 강세 시간대에는 배달/픽업 전용 구성을 노출해 주세요.",
-                "오프라인 강세 시간대에는 회전율 중심으로 진열 우선순위를 유지해 주세요.",
-            ],
-            "status": "active",
-        }
-
     def _fetch_payment_mix_insight(
         self, store_id: str | None, date_from: str | None, date_to: str | None
     ) -> dict | None:
@@ -663,88 +444,3 @@ class InsightRepositoryMixin:
             "status": "active" if discount_context else "normal",
         }
 
-    def _fetch_menu_mix_insight(
-        self, store_id: str | None, date_from: str | None, date_to: str | None
-    ) -> dict | None:
-        where_clause, params = self._build_filters(
-            "masked_stor_cd", "sale_dt", store_id, date_from, date_to
-        )
-        with self.engine.connect() as connection:
-            top_rows = (
-                connection.execute(
-                    text(
-                        f"""
-                    SELECT
-                        item_nm,
-                        SUM(sale_qty) AS sale_qty,
-                        SUM(net_sale_amt) AS net_sale_amt
-                    FROM core_daily_item_sales
-                    {where_clause}
-                    GROUP BY item_nm
-                    ORDER BY SUM(net_sale_amt) DESC, SUM(sale_qty) DESC
-                    LIMIT 3
-                    """
-                    ),
-                    params,
-                )
-                .mappings()
-                .all()
-            )
-            low_rows = (
-                connection.execute(
-                    text(
-                        f"""
-                    SELECT
-                        item_nm,
-                        SUM(net_sale_amt) AS net_sale_amt
-                    FROM core_daily_item_sales
-                    {where_clause}
-                    GROUP BY item_nm
-                    HAVING SUM(net_sale_amt) > 0
-                    ORDER BY SUM(net_sale_amt) ASC, item_nm
-                    LIMIT 1
-                    """
-                    ),
-                    params,
-                )
-                .mappings()
-                .all()
-            )
-
-        if not top_rows:
-            return None
-
-        metric_items = [
-            {
-                "label": "대표 상품",
-                "value": str(top_rows[0]["item_nm"] or "-"),
-                "detail": f"순매출 {int(float(top_rows[0]['net_sale_amt'] or 0)):,}원 / 판매 {int(float(top_rows[0]['sale_qty'] or 0)):,}개",
-            }
-        ]
-        if len(top_rows) > 1:
-            metric_items.append(
-                {
-                    "label": "보완 후보",
-                    "value": str(top_rows[1]["item_nm"] or "-"),
-                    "detail": f"순매출 {int(float(top_rows[1]['net_sale_amt'] or 0)):,}원",
-                }
-            )
-        if low_rows:
-            metric_items.append(
-                {
-                    "label": "저성과 점검",
-                    "value": str(low_rows[0]["item_nm"] or "-"),
-                    "detail": f"순매출 {int(float(low_rows[0]['net_sale_amt'] or 0)):,}원",
-                }
-            )
-
-        return {
-            "title": "메뉴 믹스 추천",
-            "summary": f"{top_rows[0]['item_nm']} 중심으로 매출이 형성되고 있어 동반 제안 상품 운영 여지가 있습니다.",
-            "metrics": metric_items,
-            "actions": [
-                "대표 상품과 음료 또는 세트 상품을 함께 제안해 주세요.",
-                "저성과 상품은 피크타임보다 비피크 시간대 테스트로 노출해 주세요.",
-            ],
-            "status": "active",
-        }

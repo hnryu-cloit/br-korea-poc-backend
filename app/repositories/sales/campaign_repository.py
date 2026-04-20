@@ -85,12 +85,7 @@ class CampaignRepositoryMixin:
         start_date: date | None,
         end_date: date | None,
     ) -> float:
-        if (
-            not self.engine
-            or not has_table(self.engine, "core_daily_item_sales")
-            or not start_date
-            or not end_date
-        ):
+        if not self.engine or not start_date or not end_date:
             return 0.0
 
         clauses = ["sale_dt BETWEEN :start_dt AND :end_dt"]
@@ -111,21 +106,24 @@ class CampaignRepositoryMixin:
             clauses.append(f"item_cd IN ({', '.join(code_params)})")
 
         where_clause = " AND ".join(clauses)
-        with self.engine.connect() as connection:
-            row = (
-                connection.execute(
-                    text(
-                        f"""
-                    SELECT COALESCE(SUM(net_sale_amt), 0) AS total_revenue
-                    FROM core_daily_item_sales
-                    WHERE {where_clause}
-                    """
-                    ),
-                    params,
+        try:
+            with self.engine.connect() as connection:
+                row = (
+                    connection.execute(
+                        text(
+                            f"""
+                        SELECT COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)), 0) AS total_revenue
+                        FROM raw_daily_store_item
+                        WHERE {where_clause}
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .first()
                 )
-                .mappings()
-                .first()
-            )
+        except Exception:
+            return 0.0
         return float((row or {}).get("total_revenue") or 0)
 
     def _sum_campaign_discount_cost(
@@ -173,8 +171,8 @@ class CampaignRepositoryMixin:
         if not campaign_context:
             return {
                 "campaign_code": "",
-                "campaign_name": "캠페인 데이터 없음",
-                "benefit_type": "캠페인",
+                "campaign_name": "",
+                "benefit_type": "",
                 "item_group_count": 0,
                 "item_count": 0,
                 "discount_cost": 0.0,

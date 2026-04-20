@@ -18,9 +18,7 @@ class PromptRepositoryMixin:
         date_to: str | None = None,
     ) -> list[dict]:
         if not self.engine:
-            return self._build_contextual_fallback_prompts(
-                store_id=store_id, date_from=date_from, date_to=date_to
-            )
+            return []
 
         top_item_name = self._fetch_top_item_name(store_id) if store_id else None
         top_channel_name = self._fetch_top_channel_name(store_id) if store_id else None
@@ -222,7 +220,7 @@ class PromptRepositoryMixin:
         ]
 
     def _fetch_top_item_name(self, store_id: str) -> str | None:
-        if not self.engine or not has_table(self.engine, "raw_daily_store_item"):
+        if not self.engine:
             return None
         try:
             with self.engine.connect() as connection:
@@ -252,7 +250,7 @@ class PromptRepositoryMixin:
         return None
 
     def _fetch_top_channel_name(self, store_id: str) -> str | None:
-        if not self.engine or not has_table(self.engine, "raw_daily_store_pay_way"):
+        if not self.engine:
             return None
         try:
             with self.engine.connect() as connection:
@@ -670,64 +668,11 @@ class PromptRepositoryMixin:
             return None
 
         context: dict[str, object] = {}
-        if has_table(self.engine, "core_channel_sales"):
-            where_clause, params = self._build_filters(
-                "masked_stor_cd", "sale_dt", store_id, date_from, date_to
-            )
-            with self.engine.connect() as connection:
-                channel_rows = (
-                    connection.execute(
-                        text(
-                            f"""
-                        WITH base AS (
-                            SELECT
-                                sale_dt,
-                                COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
-                                SUM(sale_amt) AS sale_amt
-                            FROM core_channel_sales
-                            {where_clause}
-                            GROUP BY sale_dt, COALESCE(NULLIF(ho_chnl_div, ''), '기타')
-                        ),
-                        ranked AS (
-                            SELECT
-                                channel_div,
-                                sale_dt,
-                                sale_amt,
-                                ROW_NUMBER() OVER (PARTITION BY channel_div ORDER BY sale_dt DESC) AS rn
-                            FROM base
-                        )
-                        SELECT
-                            channel_div,
-                            COALESCE(SUM(CASE WHEN rn <= 7 THEN sale_amt END), 0) AS recent_amt,
-                            COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN sale_amt END), 0) AS prior_amt
-                        FROM ranked
-                        GROUP BY channel_div
-                        """
-                        ),
-                        params,
-                    )
-                    .mappings()
-                    .all()
-                )
 
-            drop_candidate: tuple[str, float] | None = None
-            for row in channel_rows:
-                recent_amt = float(row["recent_amt"] or 0)
-                prior_amt = float(row["prior_amt"] or 0)
-                if prior_amt <= 0:
-                    continue
-                change_pct = round(((recent_amt - prior_amt) / prior_amt) * 100, 1)
-                channel = str(row["channel_div"])
-                if drop_candidate is None or change_pct < drop_candidate[1]:
-                    drop_candidate = (channel, change_pct)
-            if drop_candidate:
-                context["drop_channel"] = drop_candidate[0]
-                context["drop_pct"] = drop_candidate[1]
-
-        if has_table(self.engine, "core_daily_item_sales"):
-            where_clause, params = self._build_filters(
-                "masked_stor_cd", "sale_dt", store_id, date_from, date_to
-            )
+        where_clause, params = self._build_filters(
+            "masked_stor_cd", "sale_dt", store_id, date_from, date_to
+        )
+        try:
             with self.engine.connect() as connection:
                 risk_row = (
                     connection.execute(
@@ -737,8 +682,8 @@ class PromptRepositoryMixin:
                             SELECT
                                 item_nm,
                                 sale_dt,
-                                SUM(net_sale_amt) AS net_sale_amt
-                            FROM core_daily_item_sales
+                                SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS sale_amt
+                            FROM raw_daily_store_item
                             {where_clause}
                             GROUP BY item_nm, sale_dt
                         ),
@@ -746,15 +691,15 @@ class PromptRepositoryMixin:
                             SELECT
                                 item_nm,
                                 sale_dt,
-                                net_sale_amt,
+                                sale_amt,
                                 ROW_NUMBER() OVER (PARTITION BY item_nm ORDER BY sale_dt DESC) AS rn
                             FROM item_daily
                         ),
                         item_compare AS (
                             SELECT
                                 item_nm,
-                                COALESCE(SUM(CASE WHEN rn <= 7 THEN net_sale_amt END), 0) AS recent_amt,
-                                COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN net_sale_amt END), 0) AS prior_amt
+                                COALESCE(SUM(CASE WHEN rn <= 7 THEN sale_amt END), 0) AS recent_amt,
+                                COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN sale_amt END), 0) AS prior_amt
                             FROM ranked
                             GROUP BY item_nm
                         )
@@ -772,6 +717,8 @@ class PromptRepositoryMixin:
                 )
             if risk_row and risk_row.get("item_nm"):
                 context["top_risk_item"] = str(risk_row["item_nm"])
+        except SQLAlchemyError:
+            pass
 
         return context or None
 
@@ -783,7 +730,7 @@ class PromptRepositoryMixin:
     ) -> str | None:
         if date_to:
             return self._normalize_date(date_to)
-        if not self.engine or not has_table(self.engine, "raw_daily_store_pay_way"):
+        if not self.engine:
             return None
 
         where_clause, params = self._build_filters(
@@ -809,11 +756,7 @@ class PromptRepositoryMixin:
         return str(row["max_sale_dt"])
 
     async def get_query_response(self, prompt: str) -> dict:
-        source_relation = None
-        if self.engine and has_table(self.engine, "core_channel_sales"):
-            source_relation = "core_channel_sales"
-        elif self.engine and has_table(self.engine, "raw_daily_store_online"):
-            source_relation = "raw_daily_store_online"
+        source_relation = "raw_daily_store_online" if self.engine else None
 
         campaign_context = self._fetch_campaign_context()
         if campaign_context and self._is_campaign_prompt(prompt):
@@ -957,13 +900,9 @@ class PromptRepositoryMixin:
 
     def _query_yoy_comparison(self) -> dict | None:
         """전년 동월 대비 이번 달 매출 비교 (C-05)"""
-        relation, amt_col = None, None
-        if has_table(self.engine, "core_daily_item_sales"):
-            relation, amt_col = "core_daily_item_sales", "net_sale_amt"
-        elif has_table(self.engine, "raw_daily_store_item"):
-            relation, amt_col = "raw_daily_store_item", "sale_amt"
-        if not relation:
+        if not self.engine:
             return None
+        relation, amt_col = "raw_daily_store_item", "sale_amt"
         try:
             with self.engine.connect() as connection:
                 rows = (
@@ -1049,13 +988,9 @@ class PromptRepositoryMixin:
 
     def _query_item_ranking(self) -> dict | None:
         """상품별 매출 순위 조회 (C-08)"""
-        relation, amt_col = None, None
-        if has_table(self.engine, "core_daily_item_sales"):
-            relation, amt_col = "core_daily_item_sales", "net_sale_amt"
-        elif has_table(self.engine, "raw_daily_store_item"):
-            relation, amt_col = "raw_daily_store_item", "sale_amt"
-        if not relation:
+        if not self.engine:
             return None
+        relation, amt_col = "raw_daily_store_item", "sale_amt"
         try:
             with self.engine.connect() as connection:
                 rows = (
