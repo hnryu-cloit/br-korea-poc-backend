@@ -2,7 +2,54 @@
 
 BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
-## 최근 업데이트 (2026-04-21)
+## 최근 업데이트 (2026-04-22)
+
+- QA 안정화 패치 반영
+  - `AuditService`가 저장소 비가용 시에도 감사 로그 안전 payload를 생성해 요청 플로우를 중단하지 않도록 보강했습니다.
+  - `SalesService.list_prompts`는 DB/AI 장애 시에도 기본 추천 질문 10건을 반환하도록 폴백을 추가했습니다.
+  - `tests/test_system_integration.py`의 AI import stub 계약을 최신 라우터 의존성(`get_*`, `APP_ENV`, ordering 응답 스키마)에 맞게 정비했습니다.
+
+- `/api/analytics/market-intelligence/insights` no-fallback 정책 반영
+  - 상권 인사이트 fallback 응답을 제거하고, AI 생성 실패 시 오류를 반환합니다.
+  - `MarketInsightsResponse.source`를 `"ai"` 단일 값으로 고정했습니다.
+  - 인사이트 캐시를 추가해 캐시 hit 시 즉시 반환 후 백그라운드 refresh를 수행합니다.
+
+- `/api/sales/*` 서술형 RAG+Gemini 강화
+  - `/api/sales/prompts`는 AI 추천 질문 경로를 강제하고 실패 시 오류를 반환합니다.
+  - `/api/sales/insights`는 실데이터 지표 기반으로 섹션 summary를 AI로 재생성합니다.
+  - `/api/sales/campaign-effect`는 실데이터 기반 summary/actions를 AI로 생성합니다.
+
+- AI 연동 fail-fast 정책 보강
+  - 상권 인사이트 AI 호출 timeout을 `60s → 20s`로 단축했습니다.
+
+- 이번 세션의 생산 예측 모델 우선 적용은 AI 서비스 `/predict` 내부 변경이며 backend API 코드는 변경하지 않았습니다.
+
+- 이번 세션의 `/production/status` 주문 마감 시간 표기 보정은 frontend 레이어 변경이며 backend API 코드는 변경하지 않았습니다.
+
+- `/api/ordering/history/insights`를 AI 기반으로 전환했습니다.
+  - 백엔드는 주문 이력 원천 + 집계 요약을 AI 서비스로 전달하고, AI 응답을 기존 화면 계약(`kpis/anomalies/top_changed_items`)으로 반환합니다.
+  - 응답 메타 필드 `sources`, `retrieved_contexts`, `confidence`를 추가했습니다.
+  - AI 생성 실패/비정상 payload는 `502 AI ordering insights generation failed`로 반환합니다.
+
+- `/api/sales/summary` fallback 제거
+  - DB 엔진 미구성/데이터 없음/쿼리 오류 시 0값 기본 응답 대신 오류를 반환하도록 정비했습니다.
+- `/api/sales/insights` fallback 제거
+  - no-data 섹션 자동 생성을 제거하고, 핵심 인사이트 실데이터가 부족하면 오류를 반환합니다.
+- `/api/sales/campaign-effect` fallback 제거
+  - 캠페인 컨텍스트가 없을 때 빈 구조를 반환하지 않고 오류를 반환합니다.
+- `sales` 엔드포인트(`summary/insights/campaign-effect`)에 422/404/500 예외 매핑을 추가했습니다.
+
+- 이번 세션의 프론트 빌드 오류 복구 작업은 frontend 레이어 변경이며 backend API 코드 변경은 없습니다.
+
+- `/api/analytics/metrics` fallback 제거
+  - 잘못된 `store_id`를 전체 점포 집계로 대체하지 않고 422 오류를 반환하도록 변경했습니다.
+  - DB 엔진 미구성 시 빈 배열 fallback 대신 500 오류를 반환합니다.
+- `/api/analytics/sales-trend` fallback 제거
+  - DB 엔진 미구성/쿼리 실패 시 빈 구조 응답 대신 오류를 반환하도록 변경했습니다.
+
+- 생산 화면 응답 지연 완화를 위해 `GET /api/production/waste-summary`, `GET /api/production/inventory-status`의 AI 근거 요약 대기시간을 제한했습니다.
+  - AI 요약 생성은 1.2초 내 완료 시에만 포함하고, 시간 초과/오류 시 기본 근거(`evidence`)로 즉시 응답합니다.
+- 두 API의 서비스 캐시 TTL을 `45초 → 300초`로 상향해 동일 점포 재조회 시 응답 지연을 줄였습니다.
 
 - 발주 이력 점포 검증 로직을 보완했습니다.
   - `raw_store_master`에 점포가 없더라도 `raw_order_extract`에 주문 데이터가 있으면 유효 점포로 인정합니다.
@@ -126,6 +173,7 @@ br-korea-poc-backend/
 │   └── test_ai_client_integration.py   # AI 클라이언트 통합 테스트
 ├── tests/
 │   ├── test_health.py
+│   ├── test_ordering_history_insights_ai.py
 │   └── test_system_integration.py      # backend ↔ AI contract/system integration
 ├── Dockerfile
 ├── docker-compose.yml                  # PostgreSQL 컨테이너 (포트 5435)
@@ -510,3 +558,8 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 - `AnalyticsRepository.get_metrics()`의 "선택 기간 데이터 없음 시 최근 7일 자동 폴백" 분기를 제거해, 요청 기간 기준으로만 지표를 조회하도록 정리했습니다.
 - 상권/고객 분석 레퍼런스 payload 생성(`_build_reference_market_payload`)에서 연/분기 조건 자동 완화(period fallback) 재조회 로직을 제거했습니다.
+
+## Session Update (2026-04-22)
+
+- Docker 실행 시 backend 컨테이너가 메뉴 이미지 인덱스를 읽을 수 있도록 `/menu-images` 경로 후보를 추가했습니다.
+- `docker-compose.yml`의 backend 서비스에 `./br-korea-poc-front/public/images:/menu-images:ro` 볼륨을 연결해 `/api/production/items`의 `image_url` 누락을 완화했습니다.

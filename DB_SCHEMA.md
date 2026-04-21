@@ -235,6 +235,15 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - 백엔드는 상권 집계 데이터를 AI 서비스 `/analytics/market/insights`로 전달해 역할별 인사이트를 생성한다.
 - 점주 API는 단일 지점 인사이트를 반환하고, 본사 API는 지점 스코어보드(전 지점 비교)까지 포함한다.
 
+## 운영 메모 (2026-04-22)
+
+- `/api/production/waste-summary`, `/api/production/inventory-status` 응답 지연 완화를 위한 서비스 레이어 조정이 반영되었다.
+  - AI 근거 요약 대기시간 제한(1.2초)
+  - 응답 캐시 TTL 상향(45초 → 300초)
+- 이번 변경은 스키마/테이블 구조 변경 없이 서비스 처리 정책만 조정한 건이다.
+- `/api/sales/summary`, `/api/sales/insights`, `/api/sales/campaign-effect`의 fallback 응답 제거가 반영되었다.
+  - 이번 변경도 스키마/테이블 구조 변경 없이 오류 반환 정책(404/500)만 조정한 건이다.
+
 ## 현재 문서 해석 시 주의사항
 
 - 아래 컬럼 정의는 원본 제공 문서 기준 업무 스키마 설명이다.
@@ -1046,3 +1055,11 @@ POC_030         20260101  두바이 스타일 초콜릿도넛  303      15      
 - `품절시간_CK.xlsx` → CK(케이크류)
 - `품절시간_JBOD.xlsx` → JBOD(도넛·빵류)
 - `품절시간_기타.xlsx` → 기타
+
+---
+
+## Session Note (2026-04-22, analytics/sales no-fallback + RAG/Gemini)
+
+- 상권 인사이트(`GET /api/analytics/market-intelligence/insights*`)는 fallback 응답을 제거하고 AI 생성 실패 시 오류를 반환합니다.
+- `MarketInsightsResponse.source`는 `"ai"` 단일 계약으로 고정했습니다.
+- 매출 화면(`GET /api/sales/prompts`, `GET /api/sales/insights`, `GET /api/sales/campaign-effect`)의 서술형 텍스트는 실데이터 payload 기반 AI 생성 경로를 사용하며 실패 시 오류를 반환합니다.
