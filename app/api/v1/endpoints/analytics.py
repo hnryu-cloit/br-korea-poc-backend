@@ -6,11 +6,14 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
+from app.core.auth import require_roles
 from app.core.deps import get_analytics_service
 from app.schemas.analytics import (
     AnalyticsMetricsResponse,
     CustomerProfileResponse,
+    HQMarketInsightsResponse,
     MarketIntelligenceResponse,
+    MarketInsightsResponse,
     SalesTrendResponse,
     StoreProfileResponse,
     WeatherImpactResponse,
@@ -18,6 +21,7 @@ from app.schemas.analytics import (
 from app.services.analytics_service import AnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+_HQ_ROLES = ("hq_admin", "hq_operator")
 
 
 @router.get("/metrics", response_model=AnalyticsMetricsResponse)
@@ -67,7 +71,7 @@ def get_market_intelligence(
     quarter: str | None = Query(default=None),
     radius_m: int | None = Query(default=None, ge=100, le=3000),
     service: AnalyticsService = Depends(get_analytics_service),
-) -> MarketIntelligenceResponse:
+    ) -> MarketIntelligenceResponse:
     return service.get_market_intelligence(
         store_id=store_id,
         gu=gu,
@@ -76,6 +80,54 @@ def get_market_intelligence(
         year=year,
         quarter=quarter,
         radius_m=radius_m,
+    )
+
+
+@router.get("/market-intelligence/insights", response_model=MarketInsightsResponse)
+async def get_market_intelligence_insights(
+    store_id: str | None = Query(default=None),
+    gu: str | None = Query(default=None),
+    dong: str | None = Query(default=None),
+    industry: str | None = Query(default=None),
+    year: int | None = Query(default=None),
+    quarter: str | None = Query(default=None),
+    radius_m: int | None = Query(default=None, ge=100, le=3000),
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> MarketInsightsResponse:
+    return await service.get_market_insights(
+        store_id=store_id,
+        gu=gu,
+        dong=dong,
+        industry=industry,
+        year=year,
+        quarter=quarter,
+        radius_m=radius_m,
+    )
+
+
+@router.get(
+    "/market-intelligence/insights/hq",
+    response_model=HQMarketInsightsResponse,
+    dependencies=[Depends(require_roles(*_HQ_ROLES))],
+)
+async def get_market_intelligence_insights_hq(
+    gu: str | None = Query(default=None),
+    dong: str | None = Query(default=None),
+    industry: str | None = Query(default=None),
+    year: int | None = Query(default=None),
+    quarter: str | None = Query(default=None),
+    radius_m: int | None = Query(default=None, ge=100, le=3000),
+    limit: int = Query(default=20, ge=1, le=100),
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> HQMarketInsightsResponse:
+    return await service.get_hq_market_insights(
+        gu=gu,
+        dong=dong,
+        industry=industry,
+        year=year,
+        quarter=quarter,
+        radius_m=radius_m,
+        limit=limit,
     )
 
 
@@ -90,7 +142,7 @@ async def get_weather_impact(
 
 
 @router.get("/market-intelligence/weekly-report")
-def download_market_weekly_report(
+async def download_market_weekly_report(
     store_id: str | None = Query(default=None),
     gu: str | None = Query(default=None),
     dong: str | None = Query(default=None),
@@ -110,6 +162,17 @@ def download_market_weekly_report(
         quarter=quarter,
         radius_m=radius_m,
     )
+    insights = await service.get_market_insights(
+        store_id=store_id,
+        gu=gu,
+        dong=dong,
+        industry=industry,
+        year=year,
+        quarter=quarter,
+        radius_m=radius_m,
+    )
+    if insights.report_markdown:
+        markdown = insights.report_markdown
     if format == "pdf":
         pdf_filename, pdf_bytes = service.render_weekly_market_report_pdf(markdown, filename)
         encoded = quote(pdf_filename)
