@@ -882,3 +882,5 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - 프론트 글로벌 에러 배너 정책: `/analytics/market`는 `/api/analytics/market-intelligence` 실패를 1차 기준으로 표시하고, `store-profile/customer-profile/sales-trend` 실패는 보조 데이터 결손으로 분리한다.
 
 - `/api/analytics/market-intelligence`는 repository 예외 발생 시에도 기본 구조(빈 집계 + data_sources 안내)로 200 응답을 반환하도록 서비스 계층에서 예외를 흡수한다.
+- `EXTERNAL_API_KEY` 기본값은 빈 값이며, `stub-key` 센티넬 없이 실키 설정 여부로만 외부 연동을 판단한다.
+- `POST /api/sales/query`의 저장 경로 표기는 `stub_repository`가 아닌 `repository`로 기록된다.
