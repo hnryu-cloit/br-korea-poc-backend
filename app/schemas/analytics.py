@@ -288,7 +288,7 @@ class MarketInsightsResponse(BaseModel):
     report_markdown: str
     evidence_refs: list[str]
     audience: Literal["store_owner", "hq_admin"] = "store_owner"
-    source: Literal["ai", "fallback"] = "fallback"
+    source: Literal["ai"] = "ai"
     trace_id: str | None = None
 
 

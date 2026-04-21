@@ -57,16 +57,13 @@ class AnalyticsRepository:
         date_to: str | None = None,
     ) -> list[dict]:
         if not self.engine:
-            return []
+            raise RuntimeError("analytics database engine is not configured")
 
         period = self._resolve_period(date_from=date_from, date_to=date_to)
         resolved_store_id = self._resolve_metrics_store_id(store_id)
 
         items: list[dict] = []
-        try:
-            channel_metrics = self._get_channel_metrics(store_id=resolved_store_id, period=period)
-        except SQLAlchemyError:
-            channel_metrics = None
+        channel_metrics = self._get_channel_metrics(store_id=resolved_store_id, period=period)
         if channel_metrics:
             items.extend(
                 [
@@ -77,17 +74,11 @@ class AnalyticsRepository:
                 ]
             )
 
-        try:
-            sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
-        except SQLAlchemyError:
-            sales_metrics = None
+        sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
         if sales_metrics:
             items.extend([sales_metrics["total_sales"], sales_metrics["coffee_attach_ratio"]])
 
-        try:
-            discount_metrics = self._get_discount_metrics(store_id=resolved_store_id, period=period)
-        except SQLAlchemyError:
-            discount_metrics = None
+        discount_metrics = self._get_discount_metrics(store_id=resolved_store_id, period=period)
         if discount_metrics:
             items.append(discount_metrics["discount_ratio"])
 
@@ -298,8 +289,10 @@ class AnalyticsRepository:
             return None
 
         normalized = store_id.strip()
-        if not normalized or normalized == "STORE_DEMO":
-            return None
+        if not normalized:
+            raise ValueError("store_id is invalid")
+        if normalized == "STORE_DEMO":
+            raise ValueError("store_id STORE_DEMO is not allowed")
 
         if not self.engine or not has_table(self.engine, "raw_store_master"):
             return normalized
@@ -326,11 +319,7 @@ class AnalyticsRepository:
         if exists:
             return normalized
 
-        logger.info(
-            "analytics metrics store_id fallback: invalid store_id=%s, aggregate all stores",
-            normalized,
-        )
-        return None
+        raise ValueError(f"store_id not found in raw_store_master: {normalized}")
 
     def _get_channel_metrics(
         self, store_id: str | None, period: dict[str, str] | None
@@ -984,14 +973,7 @@ class AnalyticsRepository:
         dow_labels = ["월", "화", "수", "목", "금", "토", "일"]
 
         if not self.engine:
-            return {
-                "headline": "",
-                "headline_trend": "flat",
-                "points": [],
-                "insight_chips": [],
-                "dow_points": [],
-                "hour_points": [],
-            }
+            raise RuntimeError("analytics database engine is not configured")
 
         daily_table = "raw_daily_store_item"
         amount_col = "sale_amt"
@@ -999,16 +981,15 @@ class AnalyticsRepository:
         def _fmt(d) -> str:
             return d.strftime("%Y%m%d")
 
-        try:
-            with self.engine.connect() as conn:
-                store_filter = "AND masked_stor_cd = :store_id" if store_id else ""
-                params: dict = {"store_id": store_id} if store_id else {}
+        with self.engine.connect() as conn:
+            store_filter = "AND masked_stor_cd = :store_id" if store_id else ""
+            params: dict = {"store_id": store_id} if store_id else {}
 
-                # 1. 이번 달 일별 매출
-                this_rows = (
-                    conn.execute(
-                        text(
-                            f"""
+            # 1. 이번 달 일별 매출
+            this_rows = (
+                conn.execute(
+                    text(
+                        f"""
                         SELECT CAST(sale_dt AS TEXT) AS d,
                                SUM(CAST({amount_col} AS NUMERIC)) AS amt
                         FROM {daily_table}
@@ -1016,18 +997,18 @@ class AnalyticsRepository:
                           {store_filter}
                         GROUP BY d ORDER BY d
                     """
-                        ),
-                        {**params, "this_start": _fmt(this_month_start), "this_end": _fmt(today)},
-                    )
-                    .mappings()
-                    .all()
+                    ),
+                    {**params, "this_start": _fmt(this_month_start), "this_end": _fmt(today)},
                 )
+                .mappings()
+                .all()
+            )
 
-                # 2. 지난달 일별 매출
-                last_rows = (
-                    conn.execute(
-                        text(
-                            f"""
+            # 2. 지난달 일별 매출
+            last_rows = (
+                conn.execute(
+                    text(
+                        f"""
                         SELECT CAST(sale_dt AS TEXT) AS d,
                                SUM(CAST({amount_col} AS NUMERIC)) AS amt
                         FROM {daily_table}
@@ -1035,6 +1016,84 @@ class AnalyticsRepository:
                           {store_filter}
                         GROUP BY d ORDER BY d
                     """
+                    ),
+                    {
+                        **params,
+                        "last_start": _fmt(last_month_start),
+                        "last_end": _fmt(last_month_end),
+                    },
+                )
+                .mappings()
+                .all()
+            )
+
+            # 3. 요일별 평균 매출 (이번달/지난달)
+            dow_this: dict[int, list[float]] = {i: [] for i in range(7)}
+            dow_last: dict[int, list[float]] = {i: [] for i in range(7)}
+            for r in this_rows:
+                d_str = str(r["d"])
+                try:
+                    d = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
+                    dow_this[d.weekday()].append(float(r["amt"] or 0))
+                except (ValueError, IndexError):
+                    pass
+            for r in last_rows:
+                d_str = str(r["d"])
+                try:
+                    d = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
+                    dow_last[d.weekday()].append(float(r["amt"] or 0))
+                except (ValueError, IndexError):
+                    pass
+
+            dow_points = [
+                {
+                    "dow": i,
+                    "label": dow_labels[i],
+                    "this_month_avg": (
+                        round(sum(dow_this[i]) / len(dow_this[i]), 0) if dow_this[i] else 0
+                    ),
+                    "last_month_avg": (
+                        round(sum(dow_last[i]) / len(dow_last[i]), 0) if dow_last[i] else 0
+                    ),
+                }
+                for i in range(7)
+            ]
+
+            # 4. 시간대별 평균 매출 (raw_daily_store_item_tmzon)
+            hour_points: list[dict] = []
+            try:
+                h_this = (
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT CAST(tmzon_div AS INTEGER) AS hr,
+                                   AVG(CAST(sale_amt AS NUMERIC)) AS avg_amt
+                            FROM raw_daily_store_item_tmzon
+                            WHERE sale_dt >= :this_start AND sale_dt <= :this_end
+                              {store_filter}
+                            GROUP BY hr ORDER BY hr
+                        """
+                        ),
+                        {
+                            **params,
+                            "this_start": _fmt(this_month_start),
+                            "this_end": _fmt(today),
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+                h_last = (
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT CAST(tmzon_div AS INTEGER) AS hr,
+                                   AVG(CAST(sale_amt AS NUMERIC)) AS avg_amt
+                            FROM raw_daily_store_item_tmzon
+                            WHERE sale_dt >= :last_start AND sale_dt <= :last_end
+                              {store_filter}
+                            GROUP BY hr ORDER BY hr
+                        """
                         ),
                         {
                             **params,
@@ -1045,138 +1104,46 @@ class AnalyticsRepository:
                     .mappings()
                     .all()
                 )
-
-                # 3. 요일별 평균 매출 (이번달/지난달)
-                dow_this: dict[int, list[float]] = {i: [] for i in range(7)}
-                dow_last: dict[int, list[float]] = {i: [] for i in range(7)}
-                for r in this_rows:
-                    d_str = str(r["d"])
-                    try:
-                        d = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
-                        dow_this[d.weekday()].append(float(r["amt"] or 0))
-                    except (ValueError, IndexError):
-                        pass
-                for r in last_rows:
-                    d_str = str(r["d"])
-                    try:
-                        d = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
-                        dow_last[d.weekday()].append(float(r["amt"] or 0))
-                    except (ValueError, IndexError):
-                        pass
-
-                dow_points = [
+                this_by_hour = {int(r["hr"]): float(r["avg_amt"] or 0) for r in h_this}
+                last_by_hour = {int(r["hr"]): float(r["avg_amt"] or 0) for r in h_last}
+                all_hours = sorted(set(this_by_hour) | set(last_by_hour))
+                hour_points = [
                     {
-                        "dow": i,
-                        "label": dow_labels[i],
-                        "this_month_avg": (
-                            round(sum(dow_this[i]) / len(dow_this[i]), 0) if dow_this[i] else 0
-                        ),
-                        "last_month_avg": (
-                            round(sum(dow_last[i]) / len(dow_last[i]), 0) if dow_last[i] else 0
-                        ),
+                        "hour": h,
+                        "this_month_avg": round(this_by_hour.get(h, 0), 0),
+                        "last_month_avg": round(last_by_hour.get(h, 0), 0),
                     }
-                    for i in range(7)
+                    for h in all_hours
                 ]
+            except SQLAlchemyError:
+                raise
 
-                # 4. 시간대별 평균 매출 (raw_daily_store_item_tmzon)
-                hour_points: list[dict] = []
-                try:
-                    h_this = (
-                        conn.execute(
-                            text(
-                                f"""
-                            SELECT CAST(tmzon_div AS INTEGER) AS hr,
-                                   AVG(CAST(sale_amt AS NUMERIC)) AS avg_amt
-                            FROM raw_daily_store_item_tmzon
-                            WHERE sale_dt >= :this_start AND sale_dt <= :this_end
-                              {store_filter}
-                            GROUP BY hr ORDER BY hr
+            # 5. 채널별 인사이트 chip
+            channel_chips: list[dict] = []
+            ch_rows = (
+                conn.execute(
+                    text(
                         """
-                            ),
-                            {
-                                **params,
-                                "this_start": _fmt(this_month_start),
-                                "this_end": _fmt(today),
-                            },
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    h_last = (
-                        conn.execute(
-                            text(
-                                f"""
-                            SELECT CAST(tmzon_div AS INTEGER) AS hr,
-                                   AVG(CAST(sale_amt AS NUMERIC)) AS avg_amt
-                            FROM raw_daily_store_item_tmzon
-                            WHERE sale_dt >= :last_start AND sale_dt <= :last_end
-                              {store_filter}
-                            GROUP BY hr ORDER BY hr
-                        """
-                            ),
-                            {
-                                **params,
-                                "last_start": _fmt(last_month_start),
-                                "last_end": _fmt(last_month_end),
-                            },
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    this_by_hour = {int(r["hr"]): float(r["avg_amt"] or 0) for r in h_this}
-                    last_by_hour = {int(r["hr"]): float(r["avg_amt"] or 0) for r in h_last}
-                    all_hours = sorted(set(this_by_hour) | set(last_by_hour))
-                    hour_points = [
-                        {
-                            "hour": h,
-                            "this_month_avg": round(this_by_hour.get(h, 0), 0),
-                            "last_month_avg": round(last_by_hour.get(h, 0), 0),
-                        }
-                        for h in all_hours
-                    ]
-                except SQLAlchemyError:
-                    pass
-
-                # 5. 채널별 인사이트 chip
-                channel_chips: list[dict] = []
-                try:
-                    ch_rows = (
-                        conn.execute(
-                            text(
-                                """
                             SELECT online_div_cd,
                                    SUM(CAST(sale_amt AS NUMERIC)) AS amt
                             FROM raw_daily_store_online
                             WHERE sale_dt >= :this_start
                             GROUP BY online_div_cd ORDER BY amt DESC LIMIT 3
                         """
-                            ),
-                            {"this_start": _fmt(this_month_start)},
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    for r in ch_rows:
-                        channel_chips.append(
-                            {
-                                "label": r["online_div_cd"] or "기타",
-                                "value": f'{int(float(r["amt"] or 0)):,}원',
-                                "trend": "up",
-                            }
-                        )
-                except SQLAlchemyError:
-                    pass
-
-        except SQLAlchemyError as exc:
-            logger.warning("get_sales_trend 쿼리 실패: %s", exc)
-            return {
-                "headline": "",
-                "headline_trend": "flat",
-                "points": [],
-                "insight_chips": [],
-                "dow_points": [],
-                "hour_points": [],
-            }
+                    ),
+                    {"this_start": _fmt(this_month_start)},
+                )
+                .mappings()
+                .all()
+            )
+            for r in ch_rows:
+                channel_chips.append(
+                    {
+                        "label": r["online_div_cd"] or "기타",
+                        "value": f'{int(float(r["amt"] or 0)):,}원',
+                        "trend": "up",
+                    }
+                )
 
         # 누적합 계산
         this_daily: dict[int, float] = {}

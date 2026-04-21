@@ -31,7 +31,12 @@ async def get_analytics_metrics(
     date_to: str | None = Query(default=None),
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> AnalyticsMetricsResponse:
-    return await service.get_metrics(store_id=store_id, date_from=date_from, date_to=date_to)
+    try:
+        return await service.get_metrics(store_id=store_id, date_from=date_from, date_to=date_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"매출 지표 조회 오류: {str(exc)}") from exc
 
 
 @router.get("/store-profile", response_model=StoreProfileResponse)
@@ -58,7 +63,12 @@ def get_sales_trend(
     store_id: str | None = Query(default=None),
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> SalesTrendResponse:
-    return service.get_sales_trend(store_id=store_id)
+    try:
+        return service.get_sales_trend(store_id=store_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"매출 추이 조회 오류: {str(exc)}") from exc
 
 
 @router.get("/market-intelligence", response_model=MarketIntelligenceResponse)

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Literal
 
+from app.core.ttl_cache import TTLMemoryCache
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.schemas.analytics import (
     AnalyticsMetric,
@@ -50,6 +53,10 @@ logger = logging.getLogger(__name__)
 
 
 class AnalyticsService:
+    _market_insights_cache = TTLMemoryCache(max_size=128)
+    _market_insights_ttl_sec = 60
+    _market_insights_refreshing: set[str] = set()
+
     def __init__(
         self,
         repository: AnalyticsRepository,
@@ -134,7 +141,7 @@ class AnalyticsService:
                 quarter=quarter,
                 radius_m=radius_m,
             )
-        except Exception as exc:  # noqa: BLE001 - 상권 화면 전체 장애 방지
+        except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "get_market_intelligence failed (store_id=%s, gu=%s, dong=%s, industry=%s, year=%s, quarter=%s, radius_m=%s): %s",
                 store_id,
@@ -146,12 +153,7 @@ class AnalyticsService:
                 radius_m,
                 exc,
             )
-            data = {
-                "radius_km": float((radius_m or 3000) / 1000.0),
-                "data_sources": [
-                    "market-intelligence 조회 실패: 백엔드 로그를 확인하세요.",
-                ],
-            }
+            raise RuntimeError("상권 원천 실데이터 조회에 실패했습니다.") from exc
         return MarketIntelligenceResponse(
             radius_km=float(data.get("radius_km", 3.0)),
             category_sales_pie=[TradeAreaSalesSlice(**item) for item in data.get("category_sales_pie", [])],
@@ -272,6 +274,9 @@ class AnalyticsService:
         quarter: str | None = None,
         radius_m: int | None = None,
     ) -> MarketInsightsResponse:
+        if not self.ai_client:
+            raise RuntimeError("상권 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
+
         market = self.get_market_intelligence(
             store_id=store_id,
             gu=gu,
@@ -292,37 +297,32 @@ class AnalyticsService:
             "quarter": quarter,
             "radius_m": radius_m,
         }
-        if self.ai_client:
-            ai_result = await self.ai_client.generate_market_insights(
+        cache_key = self._build_market_insights_cache_key("store_owner", scope)
+        cached = self._market_insights_cache.get(cache_key)
+        if isinstance(cached, dict):
+            self._schedule_market_insights_refresh(
+                cache_key=cache_key,
                 audience="store_owner",
                 scope=scope,
                 market_data=self._build_market_payload(market, sales_trend),
+                branch_snapshots=[],
                 store_name=store_profile.store_nm if store_profile else None,
             )
-            if isinstance(ai_result, dict):
-                return MarketInsightsResponse(
-                    **{
-                        "executive_summary": str(ai_result.get("executive_summary") or ""),
-                        "key_insights": ai_result.get("key_insights") or [],
-                        "risk_warnings": ai_result.get("risk_warnings") or [],
-                        "action_plan": ai_result.get("action_plan") or [],
-                        "branch_scoreboard": ai_result.get("branch_scoreboard") or [],
-                        "report_markdown": str(ai_result.get("report_markdown") or ""),
-                        "evidence_refs": ai_result.get("evidence_refs") or [],
-                        "audience": "store_owner",
-                        "source": (
-                            str(ai_result.get("source"))
-                            if str(ai_result.get("source")) in {"ai", "fallback"}
-                            else "ai"
-                        ),
-                        "trace_id": ai_result.get("trace_id"),
-                    }
-                )
-        return self._fallback_market_insights(
+            return self._to_market_insights_response(cached, audience="store_owner")
+
+        ai_result = await self._generate_market_insights_or_raise(
             audience="store_owner",
-            market=market,
+            scope=scope,
+            market_data=self._build_market_payload(market, sales_trend),
+            branch_snapshots=[],
             store_name=store_profile.store_nm if store_profile else None,
         )
+        self._market_insights_cache.set(
+            cache_key,
+            ai_result,
+            ttl_sec=self._market_insights_ttl_sec,
+        )
+        return self._to_market_insights_response(ai_result, audience="store_owner")
 
     async def get_hq_market_insights(
         self,
@@ -335,6 +335,9 @@ class AnalyticsService:
         radius_m: int | None = None,
         limit: int = 20,
     ) -> HQMarketInsightsResponse:
+        if not self.ai_client:
+            raise RuntimeError("상권 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
+
         store_rows = self.repository.list_store_candidates(limit=limit)
         branch_snapshots: list[dict] = []
         for row in store_rows:
@@ -374,48 +377,45 @@ class AnalyticsService:
             "radius_m": radius_m,
             "limit": limit,
         }
-        if self.ai_client:
-            ai_result = await self.ai_client.generate_market_insights(
+        cache_key = self._build_market_insights_cache_key("hq_admin", scope)
+        cached = self._market_insights_cache.get(cache_key)
+        if isinstance(cached, dict):
+            self._schedule_market_insights_refresh(
+                cache_key=cache_key,
                 audience="hq_admin",
                 scope=scope,
                 market_data={"branch_count": len(branch_snapshots)},
                 branch_snapshots=branch_snapshots,
                 store_name=None,
             )
-            if isinstance(ai_result, dict):
-                summary = MarketInsightsResponse(
-                    **{
-                        "executive_summary": str(ai_result.get("executive_summary") or ""),
-                        "key_insights": ai_result.get("key_insights") or [],
-                        "risk_warnings": ai_result.get("risk_warnings") or [],
-                        "action_plan": ai_result.get("action_plan") or [],
-                        "branch_scoreboard": ai_result.get("branch_scoreboard") or [],
-                        "report_markdown": str(ai_result.get("report_markdown") or ""),
-                        "evidence_refs": ai_result.get("evidence_refs") or [],
-                        "audience": "hq_admin",
-                        "source": (
-                            str(ai_result.get("source"))
-                            if str(ai_result.get("source")) in {"ai", "fallback"}
-                            else "ai"
-                        ),
-                        "trace_id": ai_result.get("trace_id"),
-                    }
-                )
-                branches = (
-                    summary.branch_scoreboard
-                    if summary.branch_scoreboard
-                    else [self._to_branch_score(item) for item in branch_snapshots]
-                )
-                return HQMarketInsightsResponse(summary=summary, branches=branches)
+            summary = self._to_market_insights_response(cached, audience="hq_admin")
+            branches = (
+                summary.branch_scoreboard
+                if summary.branch_scoreboard
+                else [self._to_branch_score(item) for item in branch_snapshots]
+            )
+            return HQMarketInsightsResponse(summary=summary, branches=branches)
 
-        fallback_summary = self._fallback_market_insights(
+        ai_result = await self._generate_market_insights_or_raise(
             audience="hq_admin",
-            market=None,
+            scope=scope,
+            market_data={"branch_count": len(branch_snapshots)},
+            branch_snapshots=branch_snapshots,
             store_name=None,
         )
+        self._market_insights_cache.set(
+            cache_key,
+            ai_result,
+            ttl_sec=self._market_insights_ttl_sec,
+        )
+        summary = self._to_market_insights_response(ai_result, audience="hq_admin")
         return HQMarketInsightsResponse(
-            summary=fallback_summary,
-            branches=[self._to_branch_score(item) for item in branch_snapshots],
+            summary=summary,
+            branches=(
+                summary.branch_scoreboard
+                if summary.branch_scoreboard
+                else [self._to_branch_score(item) for item in branch_snapshots]
+            ),
         )
 
     @staticmethod
@@ -450,54 +450,98 @@ class AnalyticsService:
         )
 
     @staticmethod
-    def _fallback_market_insights(
+    def _build_market_insights_cache_key(audience: str, scope: dict) -> str:
+        return f"market-insights:{audience}:{json.dumps(scope, ensure_ascii=False, sort_keys=True)}"
+
+    async def _generate_market_insights_or_raise(
+        self,
         *,
         audience: str,
-        market: MarketIntelligenceResponse | None,
+        scope: dict,
+        market_data: dict,
+        branch_snapshots: list[dict],
         store_name: str | None,
-    ) -> MarketInsightsResponse:
-        target = store_name or "전체 지점"
-        monthly = (
-            f"{int(market.estimated_sales_summary.monthly_estimated_sales):,}원"
-            if market
-            else "미확인"
+    ) -> dict:
+        if not self.ai_client:
+            raise RuntimeError("상권 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
+        ai_result = await self.ai_client.generate_market_insights(
+            audience=audience,
+            scope=scope,
+            market_data=market_data,
+            branch_snapshots=branch_snapshots,
+            store_name=store_name,
         )
+        if not isinstance(ai_result, dict):
+            raise RuntimeError("상권 인사이트 생성에 실패했습니다.")
+        return ai_result
+
+    def _schedule_market_insights_refresh(
+        self,
+        *,
+        cache_key: str,
+        audience: str,
+        scope: dict,
+        market_data: dict,
+        branch_snapshots: list[dict],
+        store_name: str | None,
+    ) -> None:
+        if cache_key in self._market_insights_refreshing:
+            return
+        self._market_insights_refreshing.add(cache_key)
+        asyncio.create_task(
+            self._refresh_market_insights_cache(
+                cache_key=cache_key,
+                audience=audience,
+                scope=scope,
+                market_data=market_data,
+                branch_snapshots=branch_snapshots,
+                store_name=store_name,
+            )
+        )
+
+    async def _refresh_market_insights_cache(
+        self,
+        *,
+        cache_key: str,
+        audience: str,
+        scope: dict,
+        market_data: dict,
+        branch_snapshots: list[dict],
+        store_name: str | None,
+    ) -> None:
+        try:
+            ai_result = await self._generate_market_insights_or_raise(
+                audience=audience,
+                scope=scope,
+                market_data=market_data,
+                branch_snapshots=branch_snapshots,
+                store_name=store_name,
+            )
+            self._market_insights_cache.set(
+                cache_key,
+                ai_result,
+                ttl_sec=self._market_insights_ttl_sec,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("상권 인사이트 캐시 백그라운드 갱신 실패: %s", exc)
+        finally:
+            self._market_insights_refreshing.discard(cache_key)
+
+    @staticmethod
+    def _to_market_insights_response(payload: dict, *, audience: str) -> MarketInsightsResponse:
         return MarketInsightsResponse(
-            executive_summary=f"{target} 기준 AI 인사이트 생성에 실패해 기본 분석을 제공합니다.",
-            key_insights=[
-                MarketInsightItem(
-                    title="기본 매출 점검",
-                    description=f"월 추정 매출은 {monthly}이며 상세 해석은 재시도 후 확인 가능합니다.",
-                    impact="medium",
-                )
-            ],
-            risk_warnings=[
-                MarketRiskWarningItem(
-                    title="분석 정확도 저하",
-                    description="서술형 인사이트가 fallback 처리되어 문맥 기반 해석이 제한됩니다.",
-                    mitigation="필터를 단순화하거나 잠시 후 다시 시도해 주세요.",
-                )
-            ],
-            action_plan=[
-                MarketActionItem(
-                    priority=1,
-                    title="핵심 지표 우선 확인",
-                    action="시간대·요일·고객 비중 차트를 먼저 점검해 운영 우선순위를 정합니다.",
-                    expected_effect="AI 리포트 부재 상황에서도 기본 의사결정이 가능합니다.",
-                )
-            ],
-            branch_scoreboard=[],
-            report_markdown=(
-                f"# 상권 분석 리포트 (fallback)\n\n"
-                f"- audience: {audience}\n"
-                f"- 대상: {target}\n"
-                f"- 월 추정매출: {monthly}\n"
-                f"- 상태: AI 인사이트 생성 실패\n"
-            ),
-            evidence_refs=["fallback"],
-            audience="hq_admin" if audience == "hq_admin" else "store_owner",
-            source="fallback",
-            trace_id=None,
+            **{
+                "executive_summary": str(payload.get("executive_summary") or ""),
+                "key_insights": payload.get("key_insights") or [],
+                "risk_warnings": payload.get("risk_warnings") or [],
+                "action_plan": payload.get("action_plan") or [],
+                "branch_scoreboard": payload.get("branch_scoreboard") or [],
+                "report_markdown": str(payload.get("report_markdown") or ""),
+                "evidence_refs": payload.get("evidence_refs") or [],
+                "audience": "hq_admin" if audience == "hq_admin" else "store_owner",
+                "source": "ai",
+                "trace_id": payload.get("trace_id"),
+            }
         )
 
     def get_weekly_market_report_markdown(
