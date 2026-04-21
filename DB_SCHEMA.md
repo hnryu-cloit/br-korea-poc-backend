@@ -837,6 +837,9 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | `GET /api/production/inventory-status` | `core_stock_rate`, `core_stockout_time` | 최신 재고율/품절시각 기준으로 과잉·부족·적정 상태를 분류하고 근거(evidence)와 가설 유통기한 지표를 함께 반환한다. |
 | `GET /api/production/waste-summary` | `core_stock_rate`, `raw_inventory_extract` | D+1 보정 로스(`당일 잉여 - 익일 흡수`)와 실폐기(`disuse_qty`)를 분리 집계하고 근거(evidence)를 반환한다. |
 
+- `inventory-status` 서비스 계층은 레포지토리 반환값을 `(rows, total_items, summary_metrics)` 형식으로 정규화해 레거시 2-튜플 반환에서도 언패킹 오류 없이 동작한다.
+- `inventory-status`는 `page`, `page_size` 쿼리를 지원하며, 요약 카운트 값은 문자열/빈값 데이터에서도 안전 정수 변환으로 처리해 422(ValueError)를 방지한다.
+
 ### 매출 분석 API
 
 | API | 주요 참조 대상 | 설명 |
