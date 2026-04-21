@@ -952,6 +952,29 @@ class AnalyticsRepository:
         from calendar import monthrange
         from datetime import date as date_type
         today = datetime.utcnow().date()
+
+        # DB 최신 데이터 기준일 조정: 데이터가 현재 월보다 과거 월까지만 있으면 그 날짜를 기준일로 사용
+        if self.engine:
+            _sf = "WHERE masked_stor_cd = :store_id" if store_id else ""
+            _pq: dict = {"store_id": store_id} if store_id else {}
+            try:
+                with self.engine.connect() as _conn:
+                    _row = (
+                        _conn.execute(
+                            text(f"SELECT MAX(sale_dt) AS latest FROM raw_daily_store_item {_sf}"),
+                            _pq,
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                if _row and _row["latest"]:
+                    _s = str(_row["latest"])
+                    _latest = date_type(int(_s[:4]), int(_s[4:6]), int(_s[6:8]))
+                    if _latest < today:
+                        today = _latest
+            except SQLAlchemyError:
+                pass
+
         this_month_start = today.replace(day=1)
         last_month_end = this_month_start - timedelta(days=1)
         last_month_start = last_month_end.replace(day=1)
