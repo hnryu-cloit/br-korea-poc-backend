@@ -218,6 +218,12 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - 통신사 제휴 할인 마스터 workbook은 데이터 시트 3개가 `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`으로 직접 적재되고, 메타 시트 보존을 위해 workbook 전체가 `raw_workbook_rows`에도 남는다.
 - 현재 앱 서비스는 새 raw 테이블을 직접 조회하지 않으므로, 기능 확장은 이후 core 뷰/서비스 연결 단계에서 이루어진다.
 
+## Backend-AI 인터페이스 메모 (2026-04-21)
+
+- 매출 질의 계약은 `store_id` 필수 기준으로 동작한다.
+- AI 호출은 `X-Request-Id`로 요청 단위 추적이 가능하다.
+- 주문 마감 알림은 단건(`/api/ordering/deadline-alerts`) 외 batch(`POST /api/ordering/deadline-alerts/batch`) 계약을 지원한다.
+
 ## 현재 문서 해석 시 주의사항
 
 - 아래 컬럼 정의는 원본 제공 문서 기준 업무 스키마 설명이다.

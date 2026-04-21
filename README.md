@@ -219,6 +219,13 @@ black .
 mypy .
 ```
 
+## Session Update (2026-04-21, Backend-AI Interface)
+
+- `AIServiceClient`에 `X-Request-Id` 헤더 자동 전송을 추가하고, AI 에러 계약(`error_code/message/retryable/trace_id`) 파싱 로깅을 반영했습니다.
+- 매출 질의 계약에서 `store_id`를 필수로 정비했습니다. (`SalesQueryRequest.store_id` required)
+- AI 주문 마감 알림 batch 인터페이스를 호출할 수 있도록 `get_ordering_deadline_alerts_batch()`를 추가했습니다.
+- AI 계약 버전 확인을 위해 `get_contract_info()` 클라이언트 메서드를 추가했습니다.
+
 `mypy`는 `pyproject.toml` 설정에 따라 `tests/`, `scripts/` 디렉터리를 제외하고 검사합니다.
 
 ## API 엔드포인트

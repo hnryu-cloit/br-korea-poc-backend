@@ -97,6 +97,30 @@ class OrderingService:
             return None
         return await self.ai_client.get_ordering_deadline_alert(store_id)
 
+    async def get_deadline_alerts_batch(self, store_ids: list[str]) -> list[dict]:
+        """여러 매장의 주문 마감 알림을 일괄 조회합니다."""
+        normalized_store_ids = [store_id.strip() for store_id in store_ids if store_id and store_id.strip()]
+        if not normalized_store_ids:
+            return []
+        if self.ai_client:
+            return await self.ai_client.get_ordering_deadline_alerts_batch(normalized_store_ids)
+        results: list[dict] = []
+        for store_id in normalized_store_ids:
+            local_deadline = await self.get_deadline(store_id=store_id)
+            results.append(
+                {
+                    "store_id": store_id,
+                    "deadline": local_deadline["deadline"],
+                    "minutes_remaining": local_deadline["minutes_remaining"],
+                    "alert_level": "passed"
+                    if local_deadline["is_passed"]
+                    else ("urgent" if local_deadline["is_urgent"] else "normal"),
+                    "message": "주문 마감 정보를 확인해 주세요.",
+                    "should_alert": bool(local_deadline["is_urgent"] and not local_deadline["is_passed"]),
+                }
+            )
+        return results
+
     def _merge_option_payloads(self, option: dict, ai_option: dict | None = None, index: int = 0) -> dict:
         fallback_id = option.get("option_id") or f"opt-{chr(97 + index)}"
         ai_reasoning = OrderingService._safe_str(ai_option.get("reasoning_text") if ai_option else None)

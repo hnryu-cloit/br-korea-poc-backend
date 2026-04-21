@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 
 import httpx
 from fastapi.encoders import jsonable_encoder
@@ -13,37 +14,68 @@ class AIServiceClient:
         self._base_url = base_url.rstrip("/")
         self._token = token
 
-    @property
-    def _headers(self) -> dict[str, str]:
+    def _build_headers(self, request_id: str) -> dict[str, str]:
+        headers = {"X-Request-Id": request_id}
         if self._token:
-            return {"Authorization": f"Bearer {self._token}"}
-        return {}
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    @staticmethod
+    def _extract_error_contract(response: httpx.Response) -> dict | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if not isinstance(detail, dict):
+            return None
+        error_code = detail.get("error_code")
+        message = detail.get("message")
+        if isinstance(error_code, str) and isinstance(message, str):
+            return detail
+        return None
 
     async def _post(self, path: str, body: dict, timeout: float = 30.0) -> dict | None:
         url = f"{self._base_url}{path}"
+        request_id = uuid4().hex
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
-                    url, json=jsonable_encoder(body), headers=self._headers
+                    url,
+                    json=jsonable_encoder(body),
+                    headers=self._build_headers(request_id),
                 )
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as exc:
-            logger.warning("AI 서비스 오류 (HTTP %s): %s", exc.response.status_code, url)
+            detail = self._extract_error_contract(exc.response) or {}
+            logger.warning(
+                "AI 서비스 오류 (HTTP %s): %s request_id=%s trace_id=%s error_code=%s retryable=%s",
+                exc.response.status_code,
+                url,
+                request_id,
+                detail.get("trace_id"),
+                detail.get("error_code"),
+                detail.get("retryable"),
+            )
             return None
         except httpx.RequestError as exc:
-            logger.warning("AI 서비스 연결 실패: %s", exc)
+            logger.warning("AI 서비스 연결 실패: request_id=%s error=%s", request_id, exc)
             return None
 
     async def query_sales(
         self,
         prompt: str,
-        store_id: str | None = None,
+        store_id: str,
         domain: str | None = None,
         system_instruction: str | None = None,
     ) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
-        body: dict[str, object] = {"store_id": store_id, "query": prompt}
+        normalized_store_id = store_id.strip() if isinstance(store_id, str) else ""
+        if not normalized_store_id:
+            raise ValueError("store_id is required")
+
+        body: dict[str, object] = {"store_id": normalized_store_id, "query": prompt}
         if domain:
             body["domain"] = domain
         if system_instruction:
@@ -136,16 +168,30 @@ class AIServiceClient:
 
     async def _get(self, path: str, params: dict | None = None) -> dict | None:
         url = f"{self._base_url}{path}"
+        request_id = uuid4().hex
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, params=params, headers=self._headers)
+                response = await client.get(
+                    url,
+                    params=params,
+                    headers=self._build_headers(request_id),
+                )
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as exc:
-            logger.warning("AI 서비스 오류 (HTTP %s): %s", exc.response.status_code, url)
+            detail = self._extract_error_contract(exc.response) or {}
+            logger.warning(
+                "AI 서비스 오류 (HTTP %s): %s request_id=%s trace_id=%s error_code=%s retryable=%s",
+                exc.response.status_code,
+                url,
+                request_id,
+                detail.get("trace_id"),
+                detail.get("error_code"),
+                detail.get("retryable"),
+            )
             return None
         except httpx.RequestError as exc:
-            logger.warning("AI 서비스 연결 실패: %s", exc)
+            logger.warning("AI 서비스 연결 실패: request_id=%s error=%s", request_id, exc)
             return None
 
     async def get_production_push_alerts(self, store_id: str | None) -> list[dict]:
@@ -160,6 +206,26 @@ class AIServiceClient:
     async def get_ordering_deadline_alert(self, store_id: str) -> dict | None:
         """AI 서비스에서 주문 마감 알림 정보를 조회합니다."""
         return await self._get("/api/ordering/deadline-alerts", params={"store_id": store_id})
+
+    async def get_ordering_deadline_alerts_batch(self, store_ids: list[str]) -> list[dict]:
+        """AI 서비스에서 여러 매장의 주문 마감 알림 정보를 일괄 조회합니다."""
+        normalized_store_ids = [store_id.strip() for store_id in store_ids if store_id and store_id.strip()]
+        if not normalized_store_ids:
+            return []
+        result = await self._post(
+            "/api/ordering/deadline-alerts/batch",
+            {"store_ids": normalized_store_ids},
+        )
+        if result is None:
+            return []
+        items = result.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        return []
+
+    async def get_contract_info(self) -> dict | None:
+        """AI 서비스 계약 버전 메타정보를 조회합니다."""
+        return await self._get("/meta/contract")
 
     async def run_simulation(
         self,
