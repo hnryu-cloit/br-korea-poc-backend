@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.core.utils import get_now
+import copy
 import math
 from pathlib import Path
 import re
@@ -41,12 +42,16 @@ import logging
 
 from app.services.audit_service import AuditService
 from app.services.ai_client import AIServiceClient
+from app.core.ttl_cache import TTLMemoryCache
 
 logger = logging.getLogger(__name__)
 
 
 class ProductionService:
     _menu_image_index: dict[str, str] | None = None
+    _response_cache = TTLMemoryCache(max_size=128)
+    _waste_ttl_sec = 45
+    _inventory_ttl_sec = 45
 
     def __init__(
         self,
@@ -57,6 +62,21 @@ class ProductionService:
         self.repository = repository
         self.audit_service = audit_service
         self.ai_client = ai_client
+
+    @staticmethod
+    def _cache_key(prefix: str, **kwargs: object) -> str:
+        ordered = "|".join(f"{key}={kwargs[key]}" for key in sorted(kwargs))
+        return f"{prefix}|{ordered}"
+
+    def _cached_payload(self, key: str) -> dict[str, Any] | None:
+        cached = self._response_cache.get(key)
+        if not isinstance(cached, dict):
+            return None
+        payload = copy.deepcopy(cached)
+        meta = payload.get("meta")
+        if isinstance(meta, dict):
+            meta["data_freshness"] = "cached"
+        return payload
 
     @staticmethod
     def _normalize_menu_key(value: str) -> str:
@@ -484,6 +504,11 @@ class ProductionService:
         if not store_id:
             raise ValueError("store_id is required")
 
+        cache_key = self._cache_key("waste-summary", store_id=store_id)
+        cached_payload = self._cached_payload(cache_key)
+        if cached_payload:
+            return WasteSummaryResponse.model_validate(cached_payload)
+
         rows = self.repository.get_stock_rate_recent_rows(store_id=store_id)
         if not rows:
             raise LookupError("해당 점포의 재고율 데이터가 없습니다.")
@@ -599,7 +624,7 @@ class ProductionService:
             evidence=base_evidence,
         )
 
-        return WasteSummaryResponse(
+        response = WasteSummaryResponse(
             items=items,
             total_adjusted_loss_amount=round(total_adjusted_loss_amount, 2),
             total_disuse_amount=round(total_disuse_amount, 2),
@@ -627,40 +652,62 @@ class ProductionService:
                 "실폐기와 보정로스 차이가 큰 품목은 재고 등록 정확도를 점검하세요.",
             ],
             evidence=evidence,
+            meta={
+                "generated_at": get_now().strftime("%Y-%m-%d %H:%M:%S"),
+                "cache_ttl_sec": self._waste_ttl_sec,
+                "data_freshness": "live",
+            },
         )
+        self._response_cache.set(
+            cache_key,
+            response.model_dump(mode="json"),
+            ttl_sec=self._waste_ttl_sec,
+        )
+        return response
 
-    async def get_inventory_status(self, store_id: str | None = None) -> InventoryStatusResponse:
+    async def get_inventory_status(
+        self,
+        store_id: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> InventoryStatusResponse:
         if not store_id:
             raise ValueError("store_id is required")
+        page = max(1, page)
+        page_size = max(1, min(page_size, 100))
 
-        rows = self.repository.get_stock_rate_recent_rows(store_id=store_id)
-        if not rows:
+        cache_key = self._cache_key(
+            "inventory-status",
+            store_id=store_id,
+            page=page,
+            page_size=page_size,
+        )
+        cached_payload = self._cached_payload(cache_key)
+        if cached_payload:
+            return InventoryStatusResponse.model_validate(cached_payload)
+
+        rows, total_items, summary_metrics = self.repository.get_inventory_status(
+            store_id=store_id,
+            page=page,
+            page_size=page_size,
+        )
+        if not rows and total_items == 0:
             raise LookupError("해당 점포의 재고 진단 데이터가 없습니다.")
 
-        latest_rows = [row for row in rows if int(row.get("dr") or 1) == 1]
-        if not latest_rows:
-            raise LookupError("해당 점포의 최신 재고율 데이터가 없습니다.")
-
-        stockout_rows = self.repository.get_stockout_latest_rows(store_id=store_id)
-        stockout_map = {
-            str(row.get("item_cd") or row.get("item_nm") or "").strip(): row for row in stockout_rows
-        }
-
         items: list[InventoryStatusItem] = []
-        shortage_count = 0
-        excess_count = 0
-        normal_count = 0
-
-        for row in latest_rows:
+        for row in rows:
             item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
             item_nm = str(row.get("item_nm") or item_cd)
             total_stock = self._safe_float(row.get("stk_avg"))
             total_sold = self._safe_float(row.get("sal_avg"))
             total_orderable = self._safe_float(row.get("ord_avg"))
             stock_rate = self._safe_float(row.get("stk_rt"))
-            stockout = stockout_map.get(item_cd) or stockout_map.get(item_nm) or {}
-            is_stockout = bool(stockout.get("is_stockout"))
-            stockout_hour = int(stockout["stockout_hour"]) if stockout.get("stockout_hour") is not None else None
+            is_stockout = bool(int(self._safe_float(row.get("is_stockout"))))
+            stockout_hour = (
+                int(self._safe_float(row.get("stockout_hour")))
+                if row.get("stockout_hour") is not None
+                else None
+            )
 
             if is_stockout or stock_rate < 0:
                 status = "부족"
@@ -668,13 +715,6 @@ class ProductionService:
                 status = "과잉"
             else:
                 status = "적정"
-
-            if status == "부족":
-                shortage_count += 1
-            elif status == "과잉":
-                excess_count += 1
-            else:
-                normal_count += 1
 
             shelf_life_days = self._assumed_shelf_life_days(item_nm)
             expiry_risk_level = (
@@ -710,6 +750,11 @@ class ProductionService:
             reverse=True,
         )[:3]
 
+        shortage_count = int(summary_metrics.get("shortage_count", 0))
+        excess_count = int(summary_metrics.get("excess_count", 0))
+        normal_count = int(summary_metrics.get("normal_count", 0))
+        avg_stock_rate = round(self._safe_float(summary_metrics.get("avg_stock_rate"), 0.0), 3)
+
         base_evidence: dict[str, Any] = {
             "summary_reason": "재고율, 품절시간, 판매가능수량을 함께 반영해 상태를 분류했습니다.",
             "processing_route": "repository",
@@ -734,15 +779,14 @@ class ProductionService:
             topic="재고 수준 진단",
             evidence=base_evidence,
         )
-
-        return InventoryStatusResponse(
+        response = InventoryStatusResponse(
             summary={
                 "store_id": store_id,
-                "item_count": len(items),
+                "item_count": total_items,
                 "shortage_count": shortage_count,
                 "excess_count": excess_count,
                 "normal_count": normal_count,
-                "avg_stock_rate": round(sum(item.stock_rate for item in items) / max(len(items), 1), 3),
+                "avg_stock_rate": avg_stock_rate,
             },
             highlights=[
                 {
@@ -765,7 +809,24 @@ class ProductionService:
             ],
             evidence=evidence,
             items=items,
+            pagination=Pagination(
+                page=page,
+                page_size=page_size,
+                total_items=total_items,
+                total_pages=max(1, math.ceil(total_items / max(page_size, 1))),
+            ),
+            meta={
+                "generated_at": get_now().strftime("%Y-%m-%d %H:%M:%S"),
+                "cache_ttl_sec": self._inventory_ttl_sec,
+                "data_freshness": "live",
+            },
         )
+        self._response_cache.set(
+            cache_key,
+            response.model_dump(mode="json"),
+            ttl_sec=self._inventory_ttl_sec,
+        )
+        return response
 
     async def register_production(self, payload: ProductionRegistrationRequest) -> ProductionRegistrationResponse:
         await self.repository.save_registration(payload.model_dump())
