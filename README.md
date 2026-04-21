@@ -460,3 +460,11 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 - `AnalyticsService.get_market_intelligence()`에 예외 안전 처리를 추가해 repository 내부 오류가 발생해도 `/api/analytics/market-intelligence`는 200 + 기본 구조를 반환합니다.
 - `tests/test_health.py`에 `market-intelligence` 응답 형태(200/status shape) 검증 테스트를 추가했습니다.
+
+## Session Update (2026-04-21)
+
+- 이번 세션의 핵심 수정은 AI 서비스(`br-korea-poc-ai`) 내부 안정화(생산 에이전트 구현/오케스트레이터 라우팅 정리)이며, 백엔드 코드 변경은 없습니다.
+
+## Session Update (2026-04-21, Round 2)
+
+- 이번 라운드의 변경은 AI 서비스(`br-korea-poc-ai`)의 오케스트레이션/예외처리/컨텍스트 전달 정비이며, 백엔드 코드 변경은 없습니다.
