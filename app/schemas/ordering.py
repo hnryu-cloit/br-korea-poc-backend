@@ -156,3 +156,6 @@ class OrderingHistoryInsightsResponse(BaseModel):
     kpis: list[OrderingHistoryInsightKpi]
     anomalies: list[OrderingHistoryAnomalyItem]
     top_changed_items: list[OrderingHistoryChangedItem]
+    sources: list[str] = []
+    retrieved_contexts: list[str] = []
+    confidence: float | None = None

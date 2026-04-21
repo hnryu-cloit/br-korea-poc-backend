@@ -435,7 +435,61 @@ class OrderingService:
             total_count=data["total_count"],
         )
 
-    def get_history_insights(
+    @staticmethod
+    def _build_history_summary_stats(
+        items: list[OrderingHistoryItem],
+        total_count: int,
+        auto_rate: float,
+        manual_rate: float,
+    ) -> dict[str, object]:
+        ord_values = [int(item.ord_qty or 0) for item in items if item.ord_qty is not None]
+        avg_ord_qty = round((sum(ord_values) / len(ord_values)) if ord_values else 0.0, 2)
+
+        confirm_gap_count = len(
+            [
+                item
+                for item in items
+                if item.ord_qty not in (None, 0)
+                and item.confrm_qty is not None
+                and abs((item.confrm_qty or 0) - (item.ord_qty or 0))
+                / max(int(item.ord_qty or 1), 1)
+                >= 0.3
+            ]
+        )
+
+        grouped: dict[str, list[int]] = {}
+        for item in items:
+            if item.item_nm and item.ord_qty is not None:
+                grouped.setdefault(item.item_nm, []).append(int(item.ord_qty))
+
+        top_changed_items: list[dict[str, object]] = []
+        for item_nm, qty_values in grouped.items():
+            latest = qty_values[0]
+            baseline_values = qty_values[1:] if len(qty_values) > 1 else qty_values
+            baseline = sum(baseline_values) / max(len(baseline_values), 1)
+            if baseline <= 0:
+                continue
+            change_ratio = round((latest - baseline) / baseline, 4)
+            top_changed_items.append(
+                {
+                    "item_nm": item_nm,
+                    "avg_ord_qty": round(baseline, 2),
+                    "latest_ord_qty": int(latest),
+                    "change_ratio": change_ratio,
+                }
+            )
+        top_changed_items.sort(key=lambda row: abs(float(row.get("change_ratio", 0))), reverse=True)
+
+        return {
+            "total_count": total_count,
+            "auto_rate": auto_rate,
+            "manual_rate": manual_rate,
+            "avg_order_qty": avg_ord_qty,
+            "confirm_gap_count": confirm_gap_count,
+            "top_changed_items_preview": top_changed_items[:10],
+        }
+
+    async def get_history_insights(
         self,
         *,
         store_id: str | None = None,
@@ -446,6 +500,9 @@ class OrderingService:
         limit: int = 200,
     ) -> OrderingHistoryInsightsResponse:
         normalized_store_id = self._require_history_store_id(store_id)
+        if not self.ai_client:
+            raise RuntimeError("AI service is unavailable")
+
         data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
             limit=limit,
@@ -455,136 +512,51 @@ class OrderingService:
             is_auto=is_auto,
         )
         items = [OrderingHistoryItem(**item) for item in data["items"]]
-
-        total_count = data["total_count"]
-        auto_rate = data["auto_rate"]
-        manual_rate = data["manual_rate"]
-        ord_values = [int(item.ord_qty or 0) for item in items if item.ord_qty is not None]
-        avg_ord_qty = (sum(ord_values) / len(ord_values)) if ord_values else 0.0
-
-        gap_rows = [
-            item
-            for item in items
-            if item.ord_qty not in (None, 0) and item.confrm_qty is not None
-            and abs((item.confrm_qty or 0) - (item.ord_qty or 0)) / max(int(item.ord_qty or 1), 1) >= 0.3
-        ]
-
-        anomalies: list[OrderingHistoryAnomalyItem] = []
-        if gap_rows:
-            anomalies.append(
-                OrderingHistoryAnomalyItem(
-                    id="anom-confirm-gap",
-                    severity="high" if len(gap_rows) >= 5 else "medium",
-                    kind="confirm_gap",
-                    message=f"발주-확정 괴리율 30% 이상 건이 {len(gap_rows)}건입니다.",
-                    recommended_action="공급사 납품 제약 또는 발주 기준 수량을 점검하고, 변동 품목의 안전재고를 재설정하세요.",
-                    related_items=list({row.item_nm for row in gap_rows[:5]}),
-                )
-            )
-
-        manual_rows = [item for item in items if not item.is_auto]
-        if total_count >= 6 and manual_rate >= 0.6 and len(manual_rows) >= 4:
-            anomalies.append(
-                OrderingHistoryAnomalyItem(
-                    id="anom-manual-heavy",
-                    severity="medium",
-                    kind="manual_ratio_spike",
-                    message=f"수동 발주 비중이 {round(manual_rate * 100)}%로 높습니다.",
-                    recommended_action="수동 조정이 반복되는 품목을 분리해 추천안 기준 수량을 재학습하거나 최소/최대 발주 룰을 설정하세요.",
-                    related_items=list({row.item_nm for row in manual_rows[:5]}),
-                )
-            )
-
-        # 자동/수동 전환 패턴 탐지 (연속 행에서 상태 변경 횟수)
-        switch_count = 0
-        for index in range(1, len(items)):
-            if items[index].is_auto != items[index - 1].is_auto:
-                switch_count += 1
-        if switch_count >= 3:
-            anomalies.append(
-                OrderingHistoryAnomalyItem(
-                    id="anom-auto-manual-switch",
-                    severity="medium",
-                    kind="mode_switch",
-                    message=f"자동/수동 발주 전환이 {switch_count}회 발생했습니다.",
-                    recommended_action="알림 기준 시간을 재조정하고, 마감 직전 수동 개입이 잦은 품목을 별도 검토 리스트로 관리하세요.",
-                    related_items=[],
-                )
-            )
-
-        # 품목별 변동률
-        grouped: dict[str, list[int]] = {}
-        for item in items:
-            if item.item_nm and item.ord_qty is not None:
-                grouped.setdefault(item.item_nm, []).append(int(item.ord_qty))
-
-        changed_items: list[OrderingHistoryChangedItem] = []
-        for name, qty_values in grouped.items():
-            if not qty_values:
-                continue
-            latest = qty_values[0]
-            baseline_values = qty_values[1:] if len(qty_values) > 1 else qty_values
-            baseline = sum(baseline_values) / max(len(baseline_values), 1)
-            if baseline <= 0:
-                continue
-            change_ratio = (latest - baseline) / baseline
-            changed_items.append(
-                OrderingHistoryChangedItem(
-                    item_nm=name,
-                    avg_ord_qty=round(baseline, 2),
-                    latest_ord_qty=int(latest),
-                    change_ratio=round(change_ratio, 4),
-                )
-            )
-            if abs(change_ratio) >= 0.6:
-                anomalies.append(
-                    OrderingHistoryAnomalyItem(
-                        id=f"anom-item-shift-{name}",
-                        severity="high" if abs(change_ratio) >= 1.0 else "medium",
-                        kind="item_demand_shift",
-                        message=f"{name} 발주량이 평시 대비 {round(change_ratio * 100)}% 변동했습니다.",
-                        recommended_action="해당 품목의 최근 판매·폐기 추이를 함께 확인하고, 일시 이벤트인지 구조 변화인지 구분해 발주 기준을 조정하세요.",
-                        related_items=[name],
-                    )
-                )
-
-        changed_items.sort(key=lambda item: abs(item.change_ratio), reverse=True)
-
-        kpis = [
-            OrderingHistoryInsightKpi(
-                key="total_orders",
-                label="총 발주 건수",
-                value=f"{total_count}건",
-                tone="primary",
-            ),
-            OrderingHistoryInsightKpi(
-                key="manual_ratio",
-                label="수동 발주 비중",
-                value=f"{round(manual_rate * 100)}%",
-                tone="warning" if manual_rate >= 0.6 else "default",
-            ),
-            OrderingHistoryInsightKpi(
-                key="confirm_gap_count",
-                label="발주-확정 괴리 건수",
-                value=f"{len(gap_rows)}건",
-                tone="danger" if gap_rows else "success",
-            ),
-            OrderingHistoryInsightKpi(
-                key="avg_order_qty",
-                label="평균 발주량",
-                value=f"{round(avg_ord_qty, 1)}개",
-                tone="default",
-            ),
-        ]
-
-        # 중복 anomaly id 제거
-        unique_anomalies: dict[str, OrderingHistoryAnomalyItem] = {}
-        for anomaly in anomalies:
-            if anomaly.id not in unique_anomalies:
-                unique_anomalies[anomaly.id] = anomaly
-
-        return OrderingHistoryInsightsResponse(
-            kpis=kpis,
-            anomalies=list(unique_anomalies.values())[:8],
-            top_changed_items=changed_items[:5],
+        summary_stats = self._build_history_summary_stats(
+            items=items,
+            total_count=data["total_count"],
+            auto_rate=data["auto_rate"],
+            manual_rate=data["manual_rate"],
         )
+        ai_payload = await self.ai_client.generate_ordering_history_insights(
+            store_id=normalized_store_id,
+            filters={
+                "date_from": date_from,
+                "date_to": date_to,
+                "item_nm": item_nm,
+                "is_auto": is_auto,
+                "limit": limit,
+            },
+            history_items=[item.model_dump() for item in items],
+            summary_stats=summary_stats,
+        )
+        if ai_payload is None:
+            raise RuntimeError("AI service returned no payload")
+
+        try:
+            return OrderingHistoryInsightsResponse(
+                kpis=[
+                    OrderingHistoryInsightKpi(**kpi)
+                    for kpi in (ai_payload.get("kpis") or [])
+                    if isinstance(kpi, dict)
+                ],
+                anomalies=[
+                    OrderingHistoryAnomalyItem(**anomaly)
+                    for anomaly in (ai_payload.get("anomalies") or [])
+                    if isinstance(anomaly, dict)
+                ][:8],
+                top_changed_items=[
+                    OrderingHistoryChangedItem(**item)
+                    for item in (ai_payload.get("top_changed_items") or [])
+                    if isinstance(item, dict)
+                ][:5],
+                sources=[str(source) for source in (ai_payload.get("sources") or [])],
+                retrieved_contexts=[
+                    str(context) for context in (ai_payload.get("retrieved_contexts") or [])
+                ],
+                confidence=float(ai_payload["confidence"])
+                if ai_payload.get("confidence") is not None
+                else None,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Invalid AI ordering insights payload") from exc

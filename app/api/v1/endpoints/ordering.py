@@ -109,7 +109,7 @@ def get_ordering_history(
 
 
 @router.get("/history/insights", response_model=OrderingHistoryInsightsResponse)
-def get_ordering_history_insights(
+async def get_ordering_history_insights(
     store_id: str = Query(...),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
@@ -119,7 +119,7 @@ def get_ordering_history_insights(
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingHistoryInsightsResponse:
     try:
-        return service.get_history_insights(
+        return await service.get_history_insights(
             store_id=store_id,
             date_from=date_from,
             date_to=date_to,
@@ -129,3 +129,8 @@ def get_ordering_history_insights(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="AI ordering insights generation failed",
+        ) from exc
