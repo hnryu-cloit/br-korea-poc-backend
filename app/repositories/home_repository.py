@@ -38,6 +38,13 @@ class HomeRepository:
                 )
         return sorted(events, key=lambda event: event["date"])
 
+    @staticmethod
+    def _to_iso_date(value: str) -> str:
+        normalized = "".join(ch for ch in value if ch.isdigit())
+        if len(normalized) == 8:
+            return f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:8]}"
+        return value
+
     def _query_campaign_events(
         self,
         conn,
@@ -92,10 +99,12 @@ class HomeRepository:
             display_date = end_dt if start_dt < start else start_dt
             events.append(
                 {
-                    "date": display_date,
+                    "date": self._to_iso_date(display_date),
                     "title": str(row["cpi_nm"] or "캠페인"),
-                    "type": "campaign",
-                    "description": f"{row['cpi_kind_nm'] or ''} · {start_dt} ~ {end_dt}",
+                    "category": "campaign",
+                    "type": str(row["cpi_kind_nm"] or ""),
+                    "startDate": self._to_iso_date(start_dt),
+                    "endDate": self._to_iso_date(end_dt),
                 }
             )
         return events
@@ -155,10 +164,12 @@ class HomeRepository:
             display_date = end_dt if start_dt < start else start_dt
             events.append(
                 {
-                    "date": display_date,
+                    "date": self._to_iso_date(display_date),
                     "title": str(row["pay_dc_nm"] or "통신사 할인"),
-                    "type": "telecom",
-                    "description": f"{row['pay_dc_grp_type_nm'] or ''} · {start_dt} ~ {end_dt}",
+                    "category": "telecom",
+                    "type": str(row["pay_dc_grp_type_nm"] or ""),
+                    "startDate": self._to_iso_date(start_dt),
+                    "endDate": self._to_iso_date(end_dt),
                 }
             )
         return events

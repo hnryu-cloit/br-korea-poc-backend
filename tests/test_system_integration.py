@@ -324,16 +324,9 @@ def test_home_overview_matches_frontend_contract() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert set(payload.keys()) == {"updated_at", "priority_actions", "stats", "cards", "imminent_deadlines"}
-    assert isinstance(payload["priority_actions"], list)
+    assert set(payload.keys()) == {"updated_at", "stats", "cards", "imminent_deadlines"}
     assert len(payload["stats"]) == 4
     assert len(payload["cards"]) == 3
-
-    if payload["priority_actions"]:
-        first_action = payload["priority_actions"][0]
-        assert "ai_reasoning" in first_action
-        assert "confidence_score" in first_action
-        assert "is_finished_good" in first_action
 
     ordering_card = next(card for card in payload["cards"] if card["domain"] == "ordering")
     assert isinstance(ordering_card["delivery_scheduled"], bool)

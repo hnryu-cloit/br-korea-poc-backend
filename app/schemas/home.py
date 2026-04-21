@@ -63,8 +63,7 @@ class HomeSummaryCard(BaseModel):
     domain: Literal["production", "ordering", "sales"]
     title: str
     description: str
-    highlights_text: list[str]
-    highlights_data: list[dict[str, Any]]
+    highlights: list[dict[str, Any]]
     metrics: list[HomeCardMetric]
     cta: HomeCta
     prompts: list[str]
@@ -84,23 +83,26 @@ class HomeOrderingDeadline(BaseModel):
 
 class HomeOverviewResponse(BaseModel):
     updated_at: str
-    priority_actions: list[HomePriorityAction]
     stats: list[HomeStatItem]
     cards: list[HomeSummaryCard]
     imminent_deadlines: list[HomeOrderingDeadline]
 
 class ScheduleEvent(BaseModel):
-    date: str  # YYYYMMDD
+    date: str
     title: str
-    type: str  # campaign | telecom | notice
-    description: str
+    category: str  # campaign | telecom | notice
+    type: str
+    startDate: str
+    endDate: str
 
 
 class ScheduleNotice(BaseModel):
     id: str
     title: str
-    description: str
-    tag: str
+    category: Literal["campaign", "telecom", "notice"]
+    type: str
+    startDate: str
+    endDate: str
     tone: Literal["blue", "green", "orange", "rose"] = "blue"
 
 

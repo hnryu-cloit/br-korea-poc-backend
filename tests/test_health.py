@@ -168,11 +168,10 @@ def test_home_overview() -> None:
     response = client.get("/api/home/overview")
     assert response.status_code == 200
     payload = response.json()
-    assert isinstance(payload["priority_actions"], list)
-    if payload["priority_actions"]:
-        assert "ai_reasoning" in payload["priority_actions"][0]
-        assert "confidence_score" in payload["priority_actions"][0]
-        assert "is_finished_good" in payload["priority_actions"][0]
+    assert "updated_at" in payload
+    assert isinstance(payload["stats"], list)
+    assert isinstance(payload["cards"], list)
+    assert isinstance(payload["imminent_deadlines"], list)
     ordering_card = next(card for card in payload["cards"] if card["domain"] == "ordering")
     assert isinstance(ordering_card["delivery_scheduled"], bool)
 
@@ -190,13 +189,18 @@ def test_home_schedule() -> None:
         first = payload["events"][0]
         assert "date" in first
         assert "title" in first
+        assert "category" in first
         assert "type" in first
-        assert "description" in first
+        assert "startDate" in first
+        assert "endDate" in first
     if payload["notices"]:
         first_notice = payload["notices"][0]
         assert "id" in first_notice
         assert "title" in first_notice
-        assert "description" in first_notice
+        assert "category" in first_notice
+        assert "type" in first_notice
+        assert "startDate" in first_notice
+        assert "endDate" in first_notice
     if payload["todos"]:
         first_todo = payload["todos"][0]
         assert "id" in first_todo

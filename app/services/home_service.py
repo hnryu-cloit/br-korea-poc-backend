@@ -62,7 +62,6 @@ class HomeService:
         active_deadlines = [d.remaining_minutes for d in deadlines if d.remaining_minutes >= 0]
         most_imminent_deadline = min(active_deadlines) if active_deadlines else 0
 
-        priority_actions = self._build_priority_actions(production=production, ordering_summary=ordering_summary)
         stats = self._build_stats(
             danger_count=production.danger_count,
             ordering_deadline_minutes=most_imminent_deadline,
@@ -77,12 +76,25 @@ class HomeService:
         )
 
         return HomeOverviewResponse(
-            updated_at=get_now().strftime("%Y-%m-%d %H:%M"),
-            priority_actions=priority_actions,
+            updated_at=get_now().isoformat(timespec="seconds"),
             stats=stats,
             cards=cards,
             imminent_deadlines=deadlines,
         )
+
+    @staticmethod
+    def _to_iso_timestamp_from_hhmm(value: str | None) -> str | None:
+        if not value or value == "-":
+            return None
+        try:
+            hour_str, minute_str = value.split(":")
+            hour = int(hour_str)
+            minute = int(minute_str)
+            base = get_now()
+            target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except (ValueError, TypeError):
+            return None
+        return target.isoformat(timespec="seconds")
 
     def _build_detailed_deadlines(self) -> list[HomeOrderingDeadline]:
         # 현재는 POC 목적이므로, 복수 발주처/메뉴 타입 시나리오에 맞는 하드코딩 데이터를 반환합니다.
@@ -142,29 +154,27 @@ class HomeService:
     def _build_schedule_notices(events: list[dict[str, str]]) -> list[ScheduleNotice]:
         notices: list[ScheduleNotice] = []
         for event in events[:6]:
-            event_type = str(event.get("type") or "notice")
+            event_type = str(event.get("category") or event.get("type") or "notice")
             title = str(event.get("title") or "운영 안내")
-            description = str(event.get("description") or "")
-            date_text = str(event.get("date") or "")
-            if date_text and len(date_text) == 8:
-                date_text = f"{date_text[:4]}-{date_text[4:6]}-{date_text[6:8]}"
+            detail_type = str(event.get("type") or "")
+            start_date = str(event.get("startDate") or event.get("start_date") or event.get("date") or "")
+            end_date = str(event.get("endDate") or event.get("end_date") or event.get("date") or "")
 
             if event_type == "campaign":
-                tag = "캠페인"
                 tone = "green"
             elif event_type == "telecom":
-                tag = "할인"
                 tone = "blue"
             else:
-                tag = "공지"
                 tone = "orange"
 
             notices.append(
                 ScheduleNotice(
                     id=f"{event_type}-{event.get('date')}-{title}",
                     title=title,
-                    description=(f"{date_text} · {description}" if date_text else description).strip(),
-                    tag=tag,
+                    category=event_type if event_type in {"campaign", "telecom", "notice"} else "notice",
+                    type=detail_type,
+                    startDate=start_date,
+                    endDate=end_date,
                     tone=tone,
                 )
             )
@@ -197,7 +207,7 @@ class HomeService:
                     recurring=True,
                 )
             )
-        if any(event.get("type") == "campaign" for event in events):
+        if any((event.get("category") or event.get("type")) == "campaign" for event in events):
             todos.append(
                 ScheduleTodoItem(
                     id="todo-campaign-check",
@@ -205,7 +215,7 @@ class HomeService:
                     recurring=False,
                 )
             )
-        if any(event.get("type") == "telecom" for event in events):
+        if any((event.get("category") or event.get("type")) == "telecom" for event in events):
             todos.append(
                 ScheduleTodoItem(
                     id="todo-telecom-check",
@@ -367,17 +377,11 @@ class HomeService:
         danger_items = [item for item in production.items if item.status in {"danger", "warning"}][
             :2
         ]
-        production_highlights = [
-            f"{item.name} · 현재 {item.current}개 / 1시간 후 {item.forecast}개 예상"
-            for item in danger_items
-        ] or ["현재 위험 품목이 없습니다."]
-
         production_card = HomeSummaryCard(
             domain="production",
             title="생산 현황",
             description="실시간 재고 및 1시간 후 예측",
-            highlights_text=production_highlights,
-            highlights_data=[
+            highlights=[
                 {
                     "type": "production_item",
                     "sku_id": item.sku_id,
@@ -386,7 +390,7 @@ class HomeService:
                     "current": item.current,
                     "forecast": item.forecast,
                     "recommended": item.recommended,
-                    "depletion_time": item.depletion_time,
+                    "depletion_time": self._to_iso_timestamp_from_hhmm(item.depletion_time),
                 }
                 for item in danger_items
             ],
@@ -419,11 +423,7 @@ class HomeService:
             domain="ordering",
             title="주문 관리",
             description="주문 누락 방지 및 추천 검토",
-            highlights_text=[
-                f"주문 상태 · {'추천안 선택 완료' if ordering_summary.recommended_selected else '검토 필요'}",
-                f"AI 추천안 {ordering_option_count}개 준비됨 · 최근 7일 선택 {ordering_summary.recent_selection_count_7d}건",
-            ],
-            highlights_data=[
+            highlights=[
                 {
                     "type": "ordering_summary",
                     "recommended_selected": ordering_summary.recommended_selected,
@@ -468,11 +468,7 @@ class HomeService:
             domain="sales",
             title="손익 분석",
             description="현재 운영 데이터 기반 상태 요약",
-            highlights_text=[
-                sales_status["headline"],
-                sales_status["detail"],
-            ],
-            highlights_data=[
+            highlights=[
                 {
                     "type": "sales_summary",
                     "production_danger_count": production.danger_count,
