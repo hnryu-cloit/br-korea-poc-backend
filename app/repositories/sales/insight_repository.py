@@ -20,10 +20,6 @@ class InsightRepositoryMixin:
         date_to: str | None = None,
     ) -> dict:
         insights: dict = {
-            "peak_hours": self._make_no_data_section("시간대 운영 코칭"),
-            "channel_mix": self._make_no_data_section("채널 전환 인사이트"),
-            "payment_mix": self._make_no_data_section("결제/할인 민감도"),
-            "menu_mix": self._make_no_data_section("메뉴 믹스 추천"),
             "filtered_store_id": store_id,
             "filtered_date_from": date_from,
             "filtered_date_to": date_to,
@@ -32,7 +28,7 @@ class InsightRepositoryMixin:
         if campaign_context:
             insights["campaign_seasonality"] = self._build_campaign_insight(campaign_context)
         if not self.engine:
-            return insights
+            raise RuntimeError("sales database engine is not configured")
 
         try:
             # 시간대 운영 코칭: raw_daily_store_item_tmzon 직접 사용
@@ -70,18 +66,13 @@ class InsightRepositoryMixin:
                 date_to,
                 exc,
             )
-        return insights
+            raise RuntimeError("매출 인사이트 조회 중 DB 오류가 발생했습니다.") from exc
 
-    @staticmethod
-    def _make_no_data_section(title: str) -> dict:
-        """실 DB 데이터가 없을 때 반환하는 빈 인사이트 섹션"""
-        return {
-            "title": title,
-            "summary": "데이터를 조회할 수 없습니다. 데이터 적재 후 다시 확인해 주세요.",
-            "metrics": [],
-            "actions": [],
-            "status": "review",
-        }
+        required_sections = ("peak_hours", "channel_mix", "payment_mix", "menu_mix")
+        if any(not insights.get(section) for section in required_sections):
+            raise LookupError("매출 인사이트 실데이터가 부족합니다.")
+
+        return insights
 
     def _fetch_peak_hours_from_tmzon(
         self, store_id: str | None, date_from: str | None, date_to: str | None
@@ -443,4 +434,3 @@ class InsightRepositoryMixin:
             "actions": actions[:3],
             "status": "active" if discount_context else "normal",
         }
-

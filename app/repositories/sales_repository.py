@@ -26,6 +26,9 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
         date_to: str | None = None,
     ) -> dict:
         """오늘 매출 요약 및 최근 7일 주간 데이터, 상품별 매출 순위를 실 DB에서 집계"""
+        if not self.engine:
+            raise RuntimeError("sales database engine is not configured")
+
         result: dict = {
             "data_date": None,
             "today_revenue": 0.0,
@@ -36,8 +39,6 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "avg_net_profit_per_item": 0.0,
             "estimated_today_profit": 0.0,
         }
-        if not self.engine:
-            return result
 
         # 1. 사용할 테이블·컬럼 결정
         item_relation = "raw_daily_store_item"
@@ -71,7 +72,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     .first()
                 )
                 if not max_dt_row or not max_dt_row["max_dt"]:
-                    return result
+                    raise LookupError("매출 요약 데이터가 없습니다.")
                 max_dt = str(max_dt_row["max_dt"])
                 result["data_date"] = max_dt
 
@@ -224,5 +225,6 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 date_to,
                 exc,
             )
+            raise RuntimeError("매출 요약 집계 중 DB 오류가 발생했습니다.") from exc
 
         return result

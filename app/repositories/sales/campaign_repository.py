@@ -169,18 +169,7 @@ class CampaignRepositoryMixin:
     ) -> dict:
         campaign_context = self._fetch_campaign_context()
         if not campaign_context:
-            return {
-                "campaign_code": "",
-                "campaign_name": "",
-                "benefit_type": "",
-                "item_group_count": 0,
-                "item_count": 0,
-                "discount_cost": 0.0,
-                "uplift_revenue": 0.0,
-                "roi_pct": 0.0,
-                "payback_days": None,
-                "periods": [],
-            }
+            raise LookupError("캠페인 효과 실데이터가 없습니다.")
 
         campaign_code = self._first_text(campaign_context.get("campaign_cd"))
         campaign_name = self._first_text(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from textwrap import dedent
+from typing import Optional
 
 from app.repositories.sales_repository import SalesRepository
 from app.schemas.sales import (
@@ -11,7 +13,6 @@ from app.schemas.sales import (
     SalesQueryResponse,
     SalesSummaryResponse,
 )
-from app.schemas.sales import SalesComparison, SalesInsightsResponse, SalesPrompt, SalesQueryRequest, SalesQueryResponse, SalesSummaryResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
 from app.services.prompt_settings_service import PromptSettingsService
@@ -55,19 +56,47 @@ class SalesService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[SalesPrompt]:
-        if self.ai_client and self.prompt_settings_service:
-            try:
-                ai_prompts = await self.ai_client.suggest_sales_prompts(
-                    store_id=store_id, domain=domain
-                )
-                if ai_prompts:
-                    return [SalesPrompt(**p) for p in ai_prompts]
-            except Exception:
-                pass
-        prompts = await self.repository.list_prompts(
-            store_id=store_id, date_from=date_from, date_to=date_to
+        try:
+            context_prompts = await self.repository.list_prompts(
+                store_id=store_id, date_from=date_from, date_to=date_to
+            )
+        except Exception:
+            context_prompts = self._build_prompt_fallbacks(store_id=store_id)
+        if not context_prompts:
+            context_prompts = self._build_prompt_fallbacks(store_id=store_id)
+
+        if not self.ai_client:
+            return [SalesPrompt(**prompt) for prompt in context_prompts]
+
+        system_instruction = (
+            self.prompt_settings_service.get_system_instruction(domain)
+            if self.prompt_settings_service
+            else None
         )
-        return [SalesPrompt(**prompt) for prompt in prompts]
+        ai_prompts = await self.ai_client.suggest_sales_prompts(
+            store_id=store_id,
+            domain=domain,
+            context_prompts=context_prompts,
+            system_instruction=system_instruction,
+        )
+        if not ai_prompts:
+            return [SalesPrompt(**prompt) for prompt in context_prompts]
+        return [SalesPrompt(**prompt) for prompt in ai_prompts]
+
+    def _build_prompt_fallbacks(self, store_id: str | None = None) -> list[dict[str, str]]:
+        store = store_id or "POC_001"
+        return [
+            {"label": "기간 매출 변동 요인", "category": "매출", "prompt": f"{store} 최근 매출 변동 요인을 설명해줘"},
+            {"label": "채널 수익성 비교", "category": "채널", "prompt": f"{store} 배달/매장 채널 수익성을 비교해줘"},
+            {"label": "결제수단 믹스 점검", "category": "결제", "prompt": f"{store} 결제수단별 매출 기여도를 알려줘"},
+            {"label": "피크타임 운영 액션", "category": "운영", "prompt": f"{store} 피크시간 운영 개선 액션 3가지를 제안해줘"},
+            {"label": "인기 상품 유지 전략", "category": "상품", "prompt": f"{store} 인기 상품 매출을 유지할 운영 전략을 제안해줘"},
+            {"label": "재고 리스크 점검", "category": "생산", "prompt": f"{store} 품절 리스크가 높은 SKU를 점검해줘"},
+            {"label": "할인 정책 효과", "category": "할인", "prompt": f"{store} 할인 정책이 매출과 마진에 미친 영향을 분석해줘"},
+            {"label": "주간 코칭 리포트", "category": "코칭", "prompt": f"{store} 이번 주 운영 코칭 포인트를 요약해줘"},
+            {"label": "주문 마감 체크", "category": "주문", "prompt": f"{store} 주문 마감 전 점검 항목을 정리해줘"},
+            {"label": "다음주 우선 과제", "category": "운영", "prompt": f"{store} 다음 주 우선 실행 과제 3가지를 제안해줘"},
+        ]
 
     async def query(self, payload: SalesQueryRequest, actor_role: str = "store_owner") -> SalesQueryResponse:
         # 1. PII 마스킹 (전화번호 등)
@@ -138,7 +167,15 @@ class SalesService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> SalesInsightsResponse:
+        if not store_id:
+            raise ValueError("store_id is required")
         payload = await self.repository.get_insights(store_id=store_id, date_from=date_from, date_to=date_to)
+        await self._apply_ai_summaries_to_insights(
+            payload=payload,
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
         for key in ("peak_hours", "channel_mix", "payment_mix", "menu_mix", "campaign_seasonality"):
             section = payload.get(key)
             if not section:
@@ -154,6 +191,206 @@ class SalesService:
     ) -> SalesSummaryResponse:
         payload = await self.repository.get_summary(store_id=store_id, date_from=date_from, date_to=date_to)
         return SalesSummaryResponse(**payload)
+
+    async def get_campaign_effect(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> SalesCampaignEffectResponse:
+        if not store_id:
+            raise ValueError("store_id is required")
+        payload = await self.repository.get_campaign_effect(
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        periods = payload.get("periods", [])
+        if not periods:
+            raise LookupError("캠페인 효과 실데이터가 없습니다.")
+
+        metrics = [
+            {
+                "label": "캠페인 코드",
+                "value": str(payload.get("campaign_code") or "-"),
+                "detail": str(payload.get("campaign_name") or "-"),
+            },
+            {
+                "label": "할인 비용",
+                "value": f"{int(float(payload.get('discount_cost') or 0)):,}원",
+                "detail": "raw_daily_store_cpi_tmzon 기준",
+            },
+            {
+                "label": "순 업리프트",
+                "value": f"{int(float(payload.get('uplift_revenue') or 0)):,}원",
+                "detail": "캠페인 전/중 매출 비교",
+            },
+            {
+                "label": "ROI",
+                "value": f"{float(payload.get('roi_pct') or 0):.1f}%",
+                "detail": "((업리프트-비용)/비용) * 100",
+            },
+        ]
+
+        before = next((period for period in periods if period.get("label") == "캠페인 전"), None)
+        during = next((period for period in periods if period.get("label") == "캠페인 중"), None)
+        after = next((period for period in periods if period.get("label") == "캠페인 후"), None)
+        default_summary = (
+            f"캠페인 전 {int(float((before or {}).get('revenue') or 0)):,}원 대비 "
+            f"캠페인 중 {int(float((during or {}).get('revenue') or 0)):,}원을 기록했습니다. "
+            f"캠페인 후 매출은 {int(float((after or {}).get('revenue') or 0)):,}원입니다."
+        )
+        default_actions = [
+            "ROI가 낮으면 할인강도 대신 번들/세트 구성을 우선 검토하세요.",
+            "캠페인 전/중/후 기간의 채널 믹스와 결제수단 반응을 함께 점검하세요.",
+        ]
+        summary, actions = await self._generate_campaign_effect_narrative(
+            store_id=store_id,
+            payload=payload,
+            default_summary=default_summary,
+            default_actions=default_actions,
+        )
+        return SalesCampaignEffectResponse(
+            title="캠페인 효과 분석",
+            summary=summary,
+            metrics=metrics,
+            actions=actions,
+        )
+
+    async def _apply_ai_summaries_to_insights(
+        self,
+        *,
+        payload: dict,
+        store_id: str,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> None:
+        if not self.ai_client:
+            raise RuntimeError("매출 인사이트 요약용 AI 클라이언트가 설정되지 않았습니다.")
+
+        sections: list[tuple[str, dict]] = []
+        for key in ("peak_hours", "channel_mix", "payment_mix", "menu_mix"):
+            section = payload.get(key)
+            if isinstance(section, dict):
+                sections.append((key, section))
+        if not sections:
+            raise LookupError("매출 인사이트 실데이터가 부족합니다.")
+
+        section_lines: list[str] = []
+        for key, section in sections:
+            metrics = section.get("metrics") or []
+            metric_line = ", ".join(
+                f"{item.get('label')}={item.get('value')}" for item in metrics if isinstance(item, dict)
+            )
+            actions = section.get("actions") or []
+            action_line = "; ".join(str(item) for item in actions)
+            section_lines.append(
+                f"- {key}: title={section.get('title')} | summary={section.get('summary')} | "
+                f"metrics=[{metric_line}] | actions=[{action_line}]"
+            )
+
+        prompt = dedent(
+            f"""
+            아래 매출 인사이트 섹션을 기반으로, 각 섹션 summary를 1문장씩 다시 작성하세요.
+            출력 형식:
+            peak_hours::...
+            channel_mix::...
+            payment_mix::...
+            menu_mix::...
+
+            규칙:
+            1) 입력 데이터 외 새로운 수치/사실 생성 금지
+            2) 섹션당 1문장, 한국어, 실무 실행 관점
+            3) 형식이 다르면 실패로 간주
+
+            점포: {store_id}
+            기간: {date_from or "미지정"} ~ {date_to or "미지정"}
+            섹션 데이터:
+            {chr(10).join(section_lines)}
+            """
+        ).strip()
+        result = await self.ai_client.query_sales(
+            prompt=prompt,
+            store_id=store_id,
+            domain="sales",
+            system_instruction="입력 데이터에 근거한 요약만 작성하고 지정된 포맷을 정확히 지키세요.",
+        )
+        if not result:
+            raise RuntimeError("AI 섹션 요약 생성에 실패했습니다.")
+        text = str(result.get("text") or "").strip()
+        parsed: dict[str, str] = {}
+        for line in text.splitlines():
+            if "::" not in line:
+                continue
+            key, value = line.split("::", 1)
+            key = key.strip()
+            value = value.strip()
+            if key and value:
+                parsed[key] = value
+        required_keys = {"peak_hours", "channel_mix", "payment_mix", "menu_mix"}
+        if not required_keys.issubset(parsed.keys()):
+            raise RuntimeError("AI 섹션 요약 포맷이 올바르지 않습니다.")
+
+        for key, section in sections:
+            section["summary"] = parsed.get(key, section.get("summary", ""))
+
+    async def _generate_campaign_effect_narrative(
+        self,
+        *,
+        store_id: str,
+        payload: dict,
+        default_summary: str,
+        default_actions: list[str],
+    ) -> tuple[str, list[str]]:
+        if not self.ai_client:
+            raise RuntimeError("캠페인 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
+
+        prompt = dedent(
+            f"""
+            아래 캠페인 실데이터를 바탕으로 summary 1문장과 action 2개를 생성하세요.
+            출력 형식:
+            summary::...
+            action1::...
+            action2::...
+
+            규칙:
+            1) 입력 수치만 사용하고 임의 생성 금지
+            2) action은 실행형 문장
+            3) 지정된 키를 모두 포함
+
+            점포: {store_id}
+            campaign_code: {payload.get("campaign_code")}
+            campaign_name: {payload.get("campaign_name")}
+            discount_cost: {payload.get("discount_cost")}
+            uplift_revenue: {payload.get("uplift_revenue")}
+            roi_pct: {payload.get("roi_pct")}
+            periods: {payload.get("periods")}
+            """
+        ).strip()
+        result = await self.ai_client.query_sales(
+            prompt=prompt,
+            store_id=store_id,
+            domain="sales",
+            system_instruction="입력 실데이터 근거로만 생성하고 형식을 정확히 지키세요.",
+        )
+        if not result:
+            raise RuntimeError("AI 캠페인 서술 생성에 실패했습니다.")
+        text = str(result.get("text") or "").strip()
+        parsed: dict[str, str] = {}
+        for line in text.splitlines():
+            if "::" not in line:
+                continue
+            key, value = line.split("::", 1)
+            key = key.strip()
+            value = value.strip()
+            if key and value:
+                parsed[key] = value
+        summary = parsed.get("summary", "").strip()
+        action1 = parsed.get("action1", "").strip()
+        action2 = parsed.get("action2", "").strip()
+        if not summary or not action1 or not action2:
+            raise RuntimeError("AI 캠페인 서술 포맷이 올바르지 않습니다.")
+        return summary, [action1, action2]
 
     def _classify_query(self, prompt: str) -> str:
         if any(keyword in prompt for keyword in _SENSITIVE_KEYWORDS):
