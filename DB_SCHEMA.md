@@ -24,6 +24,8 @@
 | 원본 테이블명 | Comment | DB 테이블 |
 |---|---|---|
 | `SPL_DAY_STOCK_DTL` | 재고 테이블 | `raw_inventory_extract` |
+| 재고율.xlsx (주문보조레포트) | 일자별·점포별·상품별 재고율 집계 | `raw_stock_rate` |
+| 품절시간_CK/JBOD/기타.xlsx | 일자별·점포별·상품별 품절 시각 (카테고리별 3파일 통합) | `raw_stockout_time` |
 
 ### 매출
 
@@ -178,6 +180,10 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | `08. 통신사 제휴 할인 마스터/*.xlsx` | `telecom_discount_type`, `telecom_discount_policy`, `telecom_discount_item`, `telecom_discount_master_workbook` | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | 시트별 direct load + workbook 보존 |
 | `09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_master`, `campaign_item_group`, `campaign_item` | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | 시트별 direct load |
 | `00. 테이블 구조/*.xlsx`, `ERD_V0.2.png`, `POC_TABLE_DDL.sql` | - | - | 참고용 파일, 적재 대상 아님 |
+| `05. 재고 및 품절/재고율.xlsx` | `stock_rate` | `raw_stock_rate` | Sheet1 direct load |
+| `05. 재고 및 품절/품절시간_CK.xlsx` | `stockout_time_ck` | `raw_stockout_time` | Sheet1 direct load (CK 카테고리) |
+| `05. 재고 및 품절/품절시간_JBOD.xlsx` | `stockout_time_jbod` | `raw_stockout_time` | Sheet1 direct load (JBOD 카테고리) |
+| `05. 재고 및 품절/품절시간_기타.xlsx` | `stockout_time_etc` | `raw_stockout_time` | Sheet1 direct load (기타 카테고리) |
 
 ## 현재 앱 사용 방식
 
@@ -224,6 +230,11 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - AI 호출은 `X-Request-Id`로 요청 단위 추적이 가능하다.
 - 주문 마감 알림은 단건(`/api/ordering/deadline-alerts`) 외 batch(`POST /api/ordering/deadline-alerts/batch`) 계약을 지원한다.
 
+## Backend-AI 상권 인사이트 인터페이스 메모 (2026-04-21)
+
+- 백엔드는 상권 집계 데이터를 AI 서비스 `/analytics/market/insights`로 전달해 역할별 인사이트를 생성한다.
+- 점주 API는 단일 지점 인사이트를 반환하고, 본사 API는 지점 스코어보드(전 지점 비교)까지 포함한다.
+
 ## 현재 문서 해석 시 주의사항
 
 - 아래 컬럼 정의는 원본 제공 문서 기준 업무 스키마 설명이다.
@@ -250,6 +261,8 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | 캠페인 workbook | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | - | 캠페인 3개 시트별 raw 테이블로 직접 적재 |
 | 정산 기준 정보 workbook | `raw_settlement_master`, `raw_workbook_rows` | - | 정식 raw direct load + 원본 보존 |
 | 통신사 제휴 할인 마스터 workbook | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | - | 데이터 시트 direct load + 메타 시트 보존 |
+| 재고율 workbook (주문보조레포트) | `raw_stock_rate` | - | Sheet1 direct load |
+| 품절시간 workbook CK/JBOD/기타 (주문보조레포트) | `raw_stockout_time` | - | 3개 파일 동일 테이블 통합 적재 |
 
 ## 운영 테이블 목록
 
@@ -821,6 +834,8 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | `POST /api/production/registrations` | `production_registrations` | 생산 등록과 피드백 결과를 저장한다. |
 | `GET /api/production/registrations/history` | `production_registrations` | 생산 등록 이력을 조회한다. |
 | `GET /api/production/registrations/summary` | `production_registrations` | 최근 생산 등록 요약 지표를 계산한다. |
+| `GET /api/production/inventory-status` | `core_stock_rate`, `core_stockout_time` | 최신 재고율/품절시각 기준으로 과잉·부족·적정 상태를 분류하고 근거(evidence)와 가설 유통기한 지표를 함께 반환한다. |
+| `GET /api/production/waste-summary` | `core_stock_rate`, `raw_inventory_extract` | D+1 보정 로스(`당일 잉여 - 익일 흡수`)와 실폐기(`disuse_qty`)를 분리 집계하고 근거(evidence)를 반환한다. |
 
 ### 매출 분석 API
 
@@ -890,3 +905,141 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - `/api/analytics/market-intelligence`는 repository 예외 발생 시에도 기본 구조(빈 집계 + data_sources 안내)로 200 응답을 반환하도록 서비스 계층에서 예외를 흡수한다.
 - `EXTERNAL_API_KEY` 기본값은 빈 값이며, `stub-key` 센티넬 없이 실키 설정 여부로만 외부 연동을 판단한다.
 - `POST /api/sales/query`의 저장 경로 표기는 `stub_repository`가 아닌 `repository`로 기록된다.
+
+---
+
+## core_stock_rate — 재고율 정제 뷰
+
+> 원본: `raw_stock_rate` / 마이그레이션: `0014_create_core_stock_views.sql`
+
+| 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `masked_stor_cd` | TEXT | 비식별 점포코드 |
+| `masked_stor_nm` | TEXT | 비식별 점포명 |
+| `prc_dt` | TEXT | 기준 일자 (YYYYMMDD) |
+| `item_cd` | TEXT | 상품 코드 |
+| `item_nm` | TEXT | 상품명 |
+| `ord_avg` | NUMERIC | 판매가능수량 |
+| `sal_avg` | NUMERIC | 판매량 |
+| `stk_avg` | NUMERIC | 재고량 (음수 = 품절 후 초과 판매) |
+| `stk_rt` | NUMERIC | 재고율 (음수 = 품절 초과) |
+| `is_stockout` | BOOLEAN | 품절 여부 (`stk_avg < 0`이면 TRUE) |
+
+---
+
+## core_stockout_time — 품절시간 정제 뷰
+
+> 원본: `raw_stockout_time` / 마이그레이션: `0014_create_core_stock_views.sql`
+
+**SOLD_OUT_TM 정제 규칙**
+
+| 원본 형식 | 의미 | 정제 결과 |
+|---|---|---|
+| `'N시'` (예: `'21시'`) | 해당 일 N시에 품절 발생 | `is_stockout=TRUE`, `stockout_hour=N`, `remaining_qty=NULL` |
+| 순수 숫자 N (예: `40`) | 영업 마감 시 잔여 재고량 | `is_stockout=FALSE`, `stockout_hour=NULL`, `remaining_qty=N` |
+| `NULL` | 데이터 없음 | 모두 NULL |
+
+| 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `masked_stor_cd` | TEXT | 비식별 점포코드 |
+| `masked_stor_nm` | TEXT | 비식별 점포명 |
+| `prc_dt` | TEXT | 기준 일자 (YYYYMMDD) |
+| `item_cd` | TEXT | 상품 코드 |
+| `item_nm` | TEXT | 상품명 |
+| `category` | TEXT | 카테고리 구분 (source_file 기준: 품절시간_CK/JBOD/기타) |
+| `stor_cnt` | NUMERIC | 해당 상품 취급 점포 수 |
+| `ranking_main` | NUMERIC | 카테고리 내 전체 판매 랭킹 |
+| `o_ranking1` | NUMERIC | 1위 기준 랭킹 |
+| `o_ranking3` | NUMERIC | 3위 기준 랭킹 |
+| `ord_avg` | NUMERIC | 판매가능수량 |
+| `sal_avg` | NUMERIC | 판매량 |
+| `stk_avg` | NUMERIC | 재고량 |
+| `stk_rt` | NUMERIC | 재고율 |
+| `is_stockout` | BOOLEAN | 품절 발생 여부 |
+| `stockout_hour` | INT | 품절 발생 시각 (시 단위, `is_stockout=TRUE`일 때만 유효) |
+| `remaining_qty` | INT | 영업 마감 잔여 재고 (`is_stockout=FALSE`일 때만 유효) |
+| `sold_out_tm_raw` | TEXT | 원본값 보존 |
+
+**데이터 분포 (501,248건 기준)**
+- 품절 건수: 80,062건 (`is_stockout=TRUE`)
+- 잔여재고 건수: 6,728건 (`remaining_qty` 유효)
+- 데이터 없음: 414,452건 (`sold_out_tm_raw IS NULL`)
+
+---
+
+## 재고율 테이블 (주문보조레포트)
+
+> 출처: `resource/05. 재고 및 품절/재고율.xlsx`  
+> DB 테이블: `raw_stock_rate`  
+> 마이그레이션: `0013_create_stock_rate_and_stockout_time_tables.sql`  
+> 조회 기간: 2026-01-01 ~ 2026-03-31 / 대상: POC 점포
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| STOR_CD | `STOR_CD` | TEXT | 원본 점포코드 | 비식별화 대상 |
+| MASKED_STOR_CD | `MASKED_STOR_CD` | TEXT | 비식별 점포코드 (POC_NNN 형식) | |
+| MASKED_STOR_NM | `MASKED_STOR_NM` | TEXT | 비식별 점포명 | |
+| PRC_DT | `PRC_DT` | TEXT | 기준 일자 (YYYYMMDD) | |
+| ITEM_CD | `ITEM_CD` | TEXT | 상품 코드 | |
+| ITEM_NM | `ITEM_NM` | TEXT | 상품명 | |
+| ORD_AVG | `ORD_AVG` | TEXT | 판매가능수량 (주문 기반 공급량) | NUMBER 캐스팅 필요 |
+| SAL_AVG | `SAL_AVG` | TEXT | 판매량 | NUMBER 캐스팅 필요 |
+| STK_AVG | `STK_AVG` | TEXT | 재고량 (음수 가능 — 품절 후 초과 판매) | NUMBER 캐스팅 필요 |
+| STK_RT | `STK_RT` | TEXT | 재고율 = STK_AVG / ORD_AVG (음수 가능) | NUMBER 캐스팅 필요 |
+
+**샘플 데이터**
+
+```
+MASKED_STOR_CD  PRC_DT    ITEM_NM              ORD_AVG  SAL_AVG  STK_AVG  STK_RT
+POC_030         20260101  페이머스글레이즈드      120      80       40       0.33
+POC_030         20260101  카카오후로스티드         36      21       15       0.42
+```
+
+**해석 주의사항**
+- `STK_AVG < 0`: 재고 소진 후 추가 판매가 발생한 품절 초과 상태
+- `STK_RT`는 소수 (0.33 = 33%), 음수 가능
+
+---
+
+## 품절시간 테이블 (주문보조레포트)
+
+> 출처: `resource/05. 재고 및 품절/품절시간_CK.xlsx`, `품절시간_JBOD.xlsx`, `품절시간_기타.xlsx`  
+> DB 테이블: `raw_stockout_time` (3개 파일 통합 적재)  
+> 마이그레이션: `0013_create_stock_rate_and_stockout_time_tables.sql`  
+> 카테고리 구분: CK(케이크류), JBOD(도넛·빵류), 기타
+
+| 원본 컬럼명 | DB 컬럼명 | 타입 | 설명 | 비고 |
+|---|---|---|---|---|
+| STOR_CD | `STOR_CD` | TEXT | 원본 점포코드 | |
+| MASKED_STOR_CD | `MASKED_STOR_CD` | TEXT | 비식별 점포코드 | |
+| MASKED_STOR_NM | `MASKED_STOR_NM` | TEXT | 비식별 점포명 | |
+| PRC_DT | `PRC_DT` | TEXT | 기준 일자 (YYYYMMDD) | |
+| ITEM_CD | `ITEM_CD` | TEXT | 상품 코드 | |
+| ITEM_NM | `ITEM_NM` | TEXT | 상품명 | |
+| STOR_CNT | `STOR_CNT` | TEXT | 해당 상품 취급 점포 수 | NUMBER 캐스팅 필요 |
+| RANKING_MAIN | `RANKING_MAIN` | TEXT | 해당 카테고리 내 전체 판매 랭킹 | |
+| O_RANKING1 | `O_RANKING1` | TEXT | 1위 기준 랭킹 | |
+| O_RANKING3 | `O_RANKING3` | TEXT | 3위 기준 랭킹 | |
+| ORD_AVG | `ORD_AVG` | TEXT | 판매가능수량 | NUMBER 캐스팅 필요 |
+| SAL_AVG | `SAL_AVG` | TEXT | 판매량 | NUMBER 캐스팅 필요 |
+| STK_AVG | `STK_AVG` | TEXT | 재고량 (음수 가능) | NUMBER 캐스팅 필요 |
+| STK_RT | `STK_RT` | TEXT | 재고율 (음수 가능) | NUMBER 캐스팅 필요 |
+| SOLD_OUT_TM | `SOLD_OUT_TM` | TEXT | 품절 발생 시각 (숫자 또는 'N시' 형식 혼재) | 정제 필요 |
+
+**샘플 데이터**
+
+```
+MASKED_STOR_CD  PRC_DT    ITEM_NM              STOR_CNT  ORD_AVG  SAL_AVG  STK_AVG  STK_RT  SOLD_OUT_TM
+POC_030         20260101  페이머스글레이즈드      586       120      80       40       0.33    40
+POC_030         20260101  스트로베리필드          574       48       38       10       0.21    '21시'
+POC_030         20260101  두바이 스타일 초콜릿도넛  303      15       25       -10      -0.67   '17시'
+```
+
+**`SOLD_OUT_TM` 정제 규칙**
+- 숫자 값 (e.g., `40`): 분 단위 또는 특정 내부 코드로 추정 — 도메인 확인 필요
+- 문자 값 (e.g., `'21시'`): 품절 발생 시(時) 직접 표기
+
+**`source_file` 컬럼으로 카테고리 구분 가능**
+- `품절시간_CK.xlsx` → CK(케이크류)
+- `품절시간_JBOD.xlsx` → JBOD(도넛·빵류)
+- `품절시간_기타.xlsx` → 기타
