@@ -171,6 +171,35 @@ class ProductionService:
             return default
         return parsed
 
+    @classmethod
+    def _safe_int(cls, value: object, default: int = 0) -> int:
+        return int(round(cls._safe_float(value, float(default))))
+
+    @staticmethod
+    def _normalize_inventory_status_result(result: object) -> tuple[list[dict], int, dict[str, Any]]:
+        """레포지토리 반환값을 (rows, total_items, summary_metrics) 형식으로 정규화."""
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                rows, total_items, summary_metrics = result
+                normalized_rows = rows if isinstance(rows, list) else []
+                normalized_total = (
+                    int(total_items)
+                    if isinstance(total_items, (int, float)) and not isinstance(total_items, bool)
+                    else 0
+                )
+                normalized_summary = summary_metrics if isinstance(summary_metrics, dict) else {}
+                return normalized_rows, normalized_total, normalized_summary
+            if len(result) == 2:
+                rows, total_items = result
+                normalized_rows = rows if isinstance(rows, list) else []
+                normalized_total = (
+                    int(total_items)
+                    if isinstance(total_items, (int, float)) and not isinstance(total_items, bool)
+                    else 0
+                )
+                return normalized_rows, normalized_total, {}
+        return [], 0, {}
+
     async def _attach_ai_grounded_summary(
         self,
         *,
@@ -686,11 +715,12 @@ class ProductionService:
         if cached_payload:
             return InventoryStatusResponse.model_validate(cached_payload)
 
-        rows, total_items, summary_metrics = self.repository.get_inventory_status(
+        raw_result = self.repository.get_inventory_status(
             store_id=store_id,
             page=page,
             page_size=page_size,
         )
+        rows, total_items, summary_metrics = self._normalize_inventory_status_result(raw_result)
         if not rows and total_items == 0:
             raise LookupError("해당 점포의 재고 진단 데이터가 없습니다.")
 
@@ -750,9 +780,9 @@ class ProductionService:
             reverse=True,
         )[:3]
 
-        shortage_count = int(summary_metrics.get("shortage_count", 0))
-        excess_count = int(summary_metrics.get("excess_count", 0))
-        normal_count = int(summary_metrics.get("normal_count", 0))
+        shortage_count = self._safe_int(summary_metrics.get("shortage_count"), 0)
+        excess_count = self._safe_int(summary_metrics.get("excess_count"), 0)
+        normal_count = self._safe_int(summary_metrics.get("normal_count"), 0)
         avg_stock_rate = round(self._safe_float(summary_metrics.get("avg_stock_rate"), 0.0), 3)
 
         base_evidence: dict[str, Any] = {

@@ -863,9 +863,9 @@ class ProductionRepository(BaseRepository):
 
     def get_inventory_status(
         self, store_id: str | None = None, page: int = 1, page_size: int = 10
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int, dict]:
         if not self.engine or not store_id:
-            return [], 0
+            return [], 0, {}
         try:
             offset = max(0, (page - 1) * page_size)
             with self.engine.connect() as conn:
@@ -873,37 +873,57 @@ class ProductionRepository(BaseRepository):
                     conn.execute(
                         text(
                             """
-                        SELECT COUNT(*) AS total_items
-                        FROM (
-                          SELECT item_nm
-                          FROM raw_inventory_extract
-                          WHERE masked_stor_cd = :store_id
-                            AND stock_qty IS NOT NULL AND stock_qty != '' AND stock_qty != '0'
-                          GROUP BY item_nm
-                        ) AS grouped_items
-                    """
+                            SELECT COUNT(DISTINCT item_cd) AS total_items
+                            FROM core_stock_rate
+                            WHERE masked_stor_cd = :store_id
+                            """
                         ),
                         {"store_id": store_id},
                     ).scalar_one()
                 )
+                summary_row = conn.execute(
+                    text(
+                        """
+                        WITH latest AS (
+                            SELECT DISTINCT ON (item_cd)
+                                stk_rt, is_stockout
+                            FROM core_stock_rate
+                            WHERE masked_stor_cd = :store_id
+                            ORDER BY item_cd, prc_dt DESC
+                        )
+                        SELECT
+                            COUNT(*) FILTER (WHERE stk_rt < 0 OR is_stockout)  AS shortage_count,
+                            COUNT(*) FILTER (WHERE stk_rt >= 0.35 AND NOT is_stockout) AS excess_count,
+                            COUNT(*) FILTER (WHERE stk_rt >= 0 AND stk_rt < 0.35 AND NOT is_stockout) AS normal_count,
+                            AVG(stk_rt) AS avg_stock_rate
+                        FROM latest
+                        """
+                    ),
+                    {"store_id": store_id},
+                ).mappings().one()
+                summary_metrics = dict(summary_row)
+
                 rows = (
                     conn.execute(
                         text(
                             """
-                            WITH latest_date AS (
-                                SELECT MAX(stock_dt) AS stock_dt
-                                FROM raw_inventory_extract
-                                WHERE masked_stor_cd = :store_id
-                            )
-                            SELECT
-                                COALESCE(item_cd, item_nm) AS item_cd,
-                                item_nm,
-                                SUM(COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)) AS total_disuse_qty,
-                                AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS avg_cost
-                            FROM raw_inventory_extract r
-                            JOIN latest_date d ON r.stock_dt = d.stock_dt
-                            WHERE r.masked_stor_cd = :store_id
-                            GROUP BY COALESCE(item_cd, item_nm), item_nm
+                            SELECT DISTINCT ON (sr.item_cd)
+                                sr.item_cd,
+                                sr.item_nm,
+                                sr.stk_avg,
+                                sr.sal_avg,
+                                sr.ord_avg,
+                                sr.stk_rt,
+                                sr.is_stockout,
+                                st.stockout_hour
+                            FROM core_stock_rate sr
+                            LEFT JOIN core_stockout_time st
+                                ON sr.masked_stor_cd = st.masked_stor_cd
+                               AND sr.item_cd = st.item_cd
+                               AND sr.prc_dt = st.prc_dt
+                            WHERE sr.masked_stor_cd = :store_id
+                            ORDER BY sr.item_cd, sr.prc_dt DESC
+                            LIMIT :page_size OFFSET :offset
                             """
                         ),
                         {"store_id": store_id, "page_size": page_size, "offset": offset},
@@ -911,10 +931,10 @@ class ProductionRepository(BaseRepository):
                     .mappings()
                     .all()
                 )
-            return [dict(r) for r in rows], total_items
+            return [dict(r) for r in rows], total_items, summary_metrics
         except SQLAlchemyError as exc:
             logger.warning("get_inventory_status 쿼리 실패: store_id=%s error=%s", store_id, exc)
-            return [], 0
+            return [], 0, {}
 
     async def get_registration_summary(
         self,
