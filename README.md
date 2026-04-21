@@ -2,6 +2,17 @@
 
 BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
+## 최근 업데이트 (2026-04-21)
+
+- 발주 이력 점포 검증 로직을 보완했습니다.
+  - `raw_store_master`에 점포가 없더라도 `raw_order_extract`에 주문 데이터가 있으면 유효 점포로 인정합니다.
+- `GET /api/production/inventory-status`
+  - `store_id`를 필수 파라미터로 강제하고, 데이터 없음(404) / 요청오류(422) 분기를 명시했습니다.
+  - `core_stock_rate`, `core_stockout_time` 기반 재고율 진단 지표와 `evidence`를 응답에 포함하도록 확장했습니다.
+- `GET /api/production/waste-summary`
+  - D+1 보정 로스(`당일 잉여 - 익일 흡수`)와 실폐기(`disuse_qty`)를 분리 집계하도록 변경했습니다.
+  - 품목군 키워드 기반 가설 유통기한(1일/2일/0일)과 추정 만기 리스크를 응답에 포함했습니다.
+
 ## Tech Stack
 
 | 패키지 | 버전 |
@@ -225,6 +236,14 @@ mypy .
 - 매출 질의 계약에서 `store_id`를 필수로 정비했습니다. (`SalesQueryRequest.store_id` required)
 - AI 주문 마감 알림 batch 인터페이스를 호출할 수 있도록 `get_ordering_deadline_alerts_batch()`를 추가했습니다.
 - AI 계약 버전 확인을 위해 `get_contract_info()` 클라이언트 메서드를 추가했습니다.
+
+## Session Update (2026-04-21, Role-Based Market Insights)
+
+- 상권 인사이트 API를 추가했습니다.
+  - 점주: `GET /api/analytics/market-intelligence/insights`
+  - 본사: `GET /api/analytics/market-intelligence/insights/hq` (`hq_admin`, `hq_operator`)
+- `AnalyticsService`가 AI 서비스(`POST /analytics/market/insights`)에 상권 집계 데이터를 전달해 실행형 인사이트를 생성하도록 확장했습니다.
+- weekly-report 다운로드는 AI 인사이트의 markdown을 우선 사용하고, 실패 시 기존 템플릿으로 fallback합니다.
 
 `mypy`는 `pyproject.toml` 설정에 따라 `tests/`, `scripts/` 디렉터리를 제외하고 검사합니다.
 

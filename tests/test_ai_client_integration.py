@@ -195,3 +195,34 @@ async def test_recommend_ordering_returns_none_on_error(client: AIServiceClient)
     )
     result = await client.recommend_ordering("POC_001", "2024-01-15")
     assert result is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_generate_market_insights_success(client: AIServiceClient) -> None:
+    stub = {
+        "executive_summary": "요약",
+        "key_insights": [],
+        "risk_warnings": [],
+        "action_plan": [],
+        "branch_scoreboard": [],
+        "report_markdown": "# report",
+        "evidence_refs": ["estimated_sales_summary.monthly_estimated_sales"],
+        "audience": "store_owner",
+        "source": "ai",
+        "trace_id": "trace-1",
+    }
+    route = respx.post(f"{AI_BASE_URL}/analytics/market/insights").mock(
+        return_value=httpx.Response(200, json=stub)
+    )
+
+    result = await client.generate_market_insights(
+        audience="store_owner",
+        scope={"store_id": "POC_001"},
+        market_data={"estimated_sales_summary": {"monthly_estimated_sales": 1000000}},
+    )
+
+    assert result is not None
+    assert result["executive_summary"] == "요약"
+    request = route.calls.last.request
+    assert request.headers["X-Request-Id"]

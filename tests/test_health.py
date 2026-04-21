@@ -515,6 +515,38 @@ def test_analytics_market_intelligence_endpoint_returns_response_shape() -> None
     assert "data_sources" in payload
 
 
+def test_analytics_market_insights_endpoint_returns_response_shape() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence/insights"
+        "?store_id=POC_001&gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "executive_summary" in payload
+    assert "key_insights" in payload
+    assert "action_plan" in payload
+    assert payload["audience"] == "store_owner"
+
+
+def test_analytics_hq_market_insights_forbidden_for_store_role() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence/insights/hq?gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000&limit=5",
+        headers={"X-User-Role": "store_owner"},
+    )
+    assert response.status_code == 403
+
+
+def test_analytics_hq_market_insights_allowed_for_hq_role() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence/insights/hq?gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000&limit=5",
+        headers={"X-User-Role": "hq_admin"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "summary" in payload
+    assert "branches" in payload
+
+
 def test_signals_endpoint_returns_response_shape() -> None:
     response = client.get("/api/signals")
     assert response.status_code == 200
