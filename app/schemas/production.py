@@ -239,21 +239,45 @@ ChartDataPoint = SimulationChartPoint
 
 class WasteItem(BaseModel):
     item_nm: str
-    total_disuse_qty: float
-    loss_amount: float
+    image_url: str | None = None
+    adjusted_loss_qty: float
+    confirmed_disuse_qty: float
+    estimated_expiry_loss_qty: float
+    adjusted_loss_amount: float
+    disuse_amount: float
+    assumed_shelf_life_days: int
+    expiry_risk_level: str
 
 
 class WasteSummaryResponse(BaseModel):
     items: list[WasteItem]
-    total_loss_amount: float
+    total_adjusted_loss_amount: float
+    total_disuse_amount: float
+    total_estimated_expiry_loss_qty: float
+    summary: dict[str, float | int | str]
+    highlights: list[dict[str, str | float | int]]
+    actions: list[str]
+    evidence: dict[str, Any]
 
 
 class InventoryStatusItem(BaseModel):
+    item_cd: str
     item_nm: str
+    image_url: str | None = None
     total_stock: float
     total_sold: float
+    total_orderable: float
+    stock_rate: float
+    stockout_hour: int | None = None
+    is_stockout: bool = False
+    assumed_shelf_life_days: int
+    expiry_risk_level: str
     status: str
 
 
 class InventoryStatusResponse(BaseModel):
+    summary: dict[str, float | int | str]
+    highlights: list[dict[str, str | float | int]]
+    actions: list[str]
+    evidence: dict[str, Any]
     items: list[InventoryStatusItem]

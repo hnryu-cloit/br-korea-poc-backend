@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from uuid import uuid4
 
 import httpx
@@ -136,17 +137,18 @@ class AIServiceClient:
         current_stock: int,
         history: list[dict],
         pattern_4w: list[float],
+        store_id: str | None = None,
     ) -> dict | None:
         """AI 서비스에 생산 위험 예측을 요청합니다. 실패 시 None을 반환합니다."""
-        return await self._post(
-            "/management/production/predict",
-            {
-                "sku": sku,
-                "current_stock": current_stock,
-                "history": history,
-                "pattern_4w": pattern_4w,
-            },
-        )
+        body: dict = {
+            "sku": sku,
+            "current_stock": current_stock,
+            "history": history,
+            "pattern_4w": pattern_4w,
+        }
+        if store_id:
+            body["store_id"] = store_id
+        return await self._post("/management/production/predict", body)
 
     async def recommend_ordering(
         self,
@@ -227,6 +229,28 @@ class AIServiceClient:
         """AI 서비스 계약 버전 메타정보를 조회합니다."""
         return await self._get("/meta/contract")
 
+    async def generate_market_insights(
+        self,
+        *,
+        audience: str,
+        scope: dict[str, object],
+        market_data: dict[str, object],
+        branch_snapshots: list[dict[str, object]] | None = None,
+        store_name: str | None = None,
+    ) -> dict | None:
+        """AI 서비스에 상권 인사이트 생성을 요청합니다."""
+        return await self._post(
+            "/analytics/market/insights",
+            {
+                "audience": audience,
+                "scope": scope,
+                "market_data": market_data,
+                "branch_snapshots": branch_snapshots or [],
+                "store_name": store_name,
+            },
+            timeout=60.0,
+        )
+
     async def run_simulation(
         self,
         store_id: str,
@@ -252,3 +276,53 @@ class AIServiceClient:
                 "sales_data": sales_data,
             },
         )
+
+    async def generate_grounded_explanation(
+        self,
+        *,
+        store_id: str,
+        topic: str,
+        evidence_items: list[dict[str, str]],
+    ) -> dict[str, object] | None:
+        """근거 ID를 포함한 설명 문장을 생성합니다.
+
+        - 성공 조건: 설명 본문에 [E1] 형태 근거 인용이 최소 1개 존재
+        - 인용된 ID는 입력 evidence_items의 id 집합 내에 존재해야 함
+        """
+        if not evidence_items:
+            return None
+
+        evidence_lines = "\n".join(
+            [
+                f"{item.get('id', '')}: {item.get('label', '')} | {item.get('value', '')} | {item.get('calculation', '')}"
+                for item in evidence_items
+            ]
+        )
+        prompt = (
+            f"[요청]\n{topic} 결과를 점주가 이해할 수 있게 2~3문장으로 요약해줘.\n"
+            "[규칙]\n"
+            "1) 문장마다 반드시 근거 ID를 [E1], [E2] 형태로 인용\n"
+            "2) 아래 근거 목록에 없는 ID는 사용 금지\n"
+            "3) 수치를 임의 생성하지 말고 근거 목록 수치만 사용\n\n"
+            f"[근거 목록]\n{evidence_lines}"
+        )
+        result = await self.query_sales(
+            prompt=prompt,
+            store_id=store_id,
+            domain="production",
+            system_instruction="근거 ID 인용을 강제하고 수치를 왜곡하지 마세요.",
+        )
+        if not result:
+            return None
+
+        text = str(result.get("text") or "").strip()
+        if not text:
+            return None
+
+        cited_ids = sorted(set(re.findall(r"\[(E\d+)\]", text)))
+        valid_ids = {str(item.get("id") or "") for item in evidence_items}
+        filtered_ids = [evid for evid in cited_ids if evid in valid_ids]
+        if not filtered_ids:
+            return None
+
+        return {"text": text, "citations": filtered_ids}

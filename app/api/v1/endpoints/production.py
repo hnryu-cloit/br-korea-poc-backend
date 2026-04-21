@@ -123,22 +123,38 @@ async def run_production_simulation(
 
 
 @router.get("/waste-summary", response_model=WasteSummaryResponse)
-def get_waste_summary(
-    store_id: str | None = Query(default=None),
+async def get_waste_summary(
+    store_id: str = Query(..., min_length=1),
     service: ProductionService = Depends(get_production_service),
 ) -> WasteSummaryResponse:
     try:
-        return service.get_waste_summary(store_id=store_id)
+        return await service.get_waste_summary(store_id=store_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"폐기 요약 조회 오류: {str(exc)}") from exc
 
 
-@router.get("/inventory-status", response_model=InventoryStatusResponse)
-def get_inventory_status(
+@router.get("/alerts/push", response_model=ProductionAlertsResponse)
+async def get_production_push_alerts(
     store_id: str | None = Query(default=None),
+    service: ProductionService = Depends(get_production_service),
+) -> ProductionAlertsResponse:
+    return await service.get_alerts(store_id=store_id)
+
+
+@router.get("/inventory-status", response_model=InventoryStatusResponse)
+async def get_inventory_status(
+    store_id: str = Query(..., min_length=1),
     service: ProductionService = Depends(get_production_service),
 ) -> InventoryStatusResponse:
     try:
-        return service.get_inventory_status(store_id=store_id)
+        return await service.get_inventory_status(store_id=store_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"재고 상태 조회 오류: {str(exc)}") from exc

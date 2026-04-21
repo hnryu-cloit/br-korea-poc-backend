@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.core.utils import get_now
 from pathlib import Path
 import re
-from typing import Optional
+from typing import Any, Optional
 import unicodedata
 from urllib.parse import quote
 
@@ -109,7 +109,7 @@ class ProductionService:
                     break
         if filename is None:
             return None
-        return f"/static/menu-images/{quote(filename)}"
+        return f"/images/{quote(filename)}"
 
     @staticmethod
     def _calc_chance_loss_pct(current: int, forecast: int, status: str) -> int:
@@ -123,6 +123,66 @@ class ProductionService:
         buffer = forecast * 1.5
         buffer_deficit_ratio = max(0.0, (buffer - current) / max(buffer, 1))
         return min(10, max(3, int(round(buffer_deficit_ratio * 10))))
+
+    @staticmethod
+    def _assumed_shelf_life_days(item_name: str) -> int:
+        name = item_name.strip()
+        if any(keyword in name for keyword in ("샌드", "샐러드", "크림")):
+            return 1
+        if any(keyword in name for keyword in ("케이크", "파이")):
+            return 2
+        if any(keyword in name for keyword in ("도넛", "베이글", "빵")):
+            return 1
+        if any(keyword in name for keyword in ("커피", "음료")):
+            return 0
+        return 1
+
+    async def _attach_ai_grounded_summary(
+        self,
+        *,
+        store_id: str,
+        topic: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.ai_client:
+            return evidence
+
+        base_items = evidence.get("items")
+        if not isinstance(base_items, list):
+            return evidence
+
+        ai_evidence_items: list[dict[str, str]] = []
+        for idx, item in enumerate(base_items, start=1):
+            if not isinstance(item, dict):
+                continue
+            ai_evidence_items.append(
+                {
+                    "id": f"E{idx}",
+                    "label": str(item.get("label") or ""),
+                    "value": str(item.get("value") or ""),
+                    "calculation": str(item.get("calculation") or ""),
+                }
+            )
+        if not ai_evidence_items:
+            return evidence
+
+        ai_summary = await self.ai_client.generate_grounded_explanation(
+            store_id=store_id,
+            topic=topic,
+            evidence_items=ai_evidence_items,
+        )
+        if not ai_summary:
+            return evidence
+
+        merged = {**evidence}
+        merged["ai_summary"] = ai_summary.get("text")
+        merged["ai_citations"] = ai_summary.get("citations", [])
+        merged["ai_grounded"] = True
+        merged["items"] = [
+            {**item, "id": ai_evidence_items[idx]["id"]} if idx < len(ai_evidence_items) and isinstance(item, dict) else item
+            for idx, item in enumerate(base_items)
+        ]
+        return merged
 
     @staticmethod
     def _decision_for_row(raw: dict) -> ProductionSkuDecision:
@@ -201,17 +261,17 @@ class ProductionService:
     async def _get_sku_items(self, store_id: str | None = None, business_date: str | None = None) -> list[ProductionSkuItem]:
         raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
         items = [self._sku_item_from_row(raw) for raw in raw_items]
-        return await self._enrich_items_with_ai(items)
+        return await self._enrich_items_with_ai(items, store_id=store_id)
 
-    async def _enrich_items_with_ai(self, items: list[ProductionSkuItem]) -> list[ProductionSkuItem]:
-        """AI 예측 결과로 각 SKU 항목의 sales_velocity·alert_message·predicted_stockout_time·chance_loss를 보강합니다."""
+    async def _enrich_items_with_ai(self, items: list[ProductionSkuItem], store_id: str | None = None) -> list[ProductionSkuItem]:
+        """AI 예측 결과로 각 SKU 항목을 보강합니다. ML 모델 연동 시 predicted_stock_1h → forecast_stock_1h 반영."""
         if not self.ai_client or not items:
             return items
 
         enriched: list[ProductionSkuItem] = []
         for item in items:
             history = [
-                {"stock": item.current_stock, "sales": item.forecast_stock_1h, "production": 0}
+                {"stock": item.current_stock, "sales": item.avg_first_production_qty_4w or 0, "production": 0}
             ]
             pattern_4w: list[float] = []
 
@@ -221,6 +281,7 @@ class ProductionService:
                     current_stock=item.current_stock,
                     history=history,
                     pattern_4w=pattern_4w,
+                    store_id=store_id,
                 )
             except Exception as exc:
                 logger.warning("AI 예측 호출 실패 (sku=%s): %s", item.sku_id, exc)
@@ -231,6 +292,12 @@ class ProductionService:
                 continue
 
             updates: dict = {}
+
+            # ML 모델 또는 AI 서비스의 predicted_stock_1h → forecast_stock_1h 반영
+            predicted_stock_1h = result.get("predicted_stock_1h")
+            if predicted_stock_1h is not None:
+                updates["forecast_stock_1h"] = int(round(float(predicted_stock_1h)))
+
             if result.get("alert_message"):
                 updates["alert_message"] = result["alert_message"]
             stockout = result.get("stockout_expected_at") or result.get("predicted_stockout_time")
@@ -399,56 +466,286 @@ class ProductionService:
             alerts=alerts,
         )
 
-    def get_waste_summary(self, store_id: str | None = None) -> WasteSummaryResponse:
-        rows = self.repository.get_waste_summary(store_id=store_id)
-        items: list[WasteItem] = []
-        total_loss_amount = 0.0
+    async def get_waste_summary(self, store_id: str | None = None) -> WasteSummaryResponse:
+        if not store_id:
+            raise ValueError("store_id is required")
+
+        rows = self.repository.get_stock_rate_recent_rows(store_id=store_id)
+        if not rows:
+            raise LookupError("해당 점포의 재고율 데이터가 없습니다.")
+
+        by_item: dict[str, dict[int, dict[str, Any]]] = {}
         for row in rows:
-            total_disuse_qty = float(row.get("total_disuse_qty") or 0)
-            avg_cost = float(row.get("avg_cost") or 0)
-            loss_amount = round(total_disuse_qty * avg_cost, 2)
-            total_loss_amount += loss_amount
+            item_key = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_key:
+                continue
+            by_item.setdefault(item_key, {})[int(row.get("dr") or 1)] = row
+
+        disuse_rows = self.repository.get_disuse_and_cost_latest_rows(store_id=store_id)
+        disuse_map = {
+            str(row.get("item_cd") or row.get("item_nm") or "").strip(): row for row in disuse_rows
+        }
+
+        items: list[WasteItem] = []
+        total_adjusted_loss_amount = 0.0
+        total_disuse_amount = 0.0
+        total_estimated_expiry_loss_qty = 0.0
+
+        for _, window in by_item.items():
+            latest = window.get(1)
+            previous = window.get(2)
+            pivot = previous or latest
+            if not pivot:
+                continue
+
+            item_nm = str(pivot.get("item_nm") or "")
+            surplus_qty = max(float(pivot.get("ord_avg") or 0) - float(pivot.get("sal_avg") or 0), 0.0)
+            absorb_qty = (
+                max(float(latest.get("sal_avg") or 0) - float(latest.get("ord_avg") or 0), 0.0)
+                if latest and previous
+                else 0.0
+            )
+            adjusted_loss_qty = max(surplus_qty - absorb_qty, 0.0)
+
+            disuse_row = disuse_map.get(str(pivot.get("item_cd") or item_nm).strip()) or {}
+            confirmed_disuse_qty = float(disuse_row.get("total_disuse_qty") or 0.0)
+            avg_cost = float(disuse_row.get("avg_cost") or 0.0)
+            shelf_life_days = self._assumed_shelf_life_days(item_nm)
+            estimated_expiry_loss_qty = (
+                adjusted_loss_qty
+                if shelf_life_days <= 1
+                else round(adjusted_loss_qty * 0.6, 2)
+            )
+            expiry_risk_level = (
+                "높음"
+                if shelf_life_days <= 1 and adjusted_loss_qty > 0
+                else "중간"
+                if adjusted_loss_qty > 0
+                else "낮음"
+            )
+            adjusted_loss_amount = round(adjusted_loss_qty * avg_cost, 2)
+            disuse_amount = round(confirmed_disuse_qty * avg_cost, 2)
+
+            total_adjusted_loss_amount += adjusted_loss_amount
+            total_disuse_amount += disuse_amount
+            total_estimated_expiry_loss_qty += estimated_expiry_loss_qty
             items.append(
                 WasteItem(
-                    item_nm=str(row.get("item_nm") or ""),
-                    total_disuse_qty=total_disuse_qty,
-                    loss_amount=loss_amount,
+                    item_nm=item_nm,
+                    image_url=self._resolve_image_url(item_nm),
+                    adjusted_loss_qty=round(adjusted_loss_qty, 2),
+                    confirmed_disuse_qty=round(confirmed_disuse_qty, 2),
+                    estimated_expiry_loss_qty=round(estimated_expiry_loss_qty, 2),
+                    adjusted_loss_amount=adjusted_loss_amount,
+                    disuse_amount=disuse_amount,
+                    assumed_shelf_life_days=shelf_life_days,
+                    expiry_risk_level=expiry_risk_level,
                 )
             )
 
-        return WasteSummaryResponse(
-            items=items,
-            total_loss_amount=round(total_loss_amount, 2),
+        items.sort(key=lambda row: row.adjusted_loss_amount, reverse=True)
+        if not items:
+            raise LookupError("해당 점포의 폐기 손실 데이터가 없습니다.")
+
+        top_item = items[0]
+        base_evidence: dict[str, Any] = {
+            "summary_reason": "D+1 흡수 보정 로스와 실폐기를 분리 집계했습니다.",
+            "processing_route": "repository",
+            "fallback_used": False,
+            "items": [
+                {
+                    "label": "보정 로스 수식",
+                    "value": f"{round(total_adjusted_loss_amount, 2)}원",
+                    "calculation": "adjusted_loss=max((ord_avg_t-sal_avg_t)-max(sal_avg_t+1-ord_avg_t+1,0),0)",
+                    "source_table": "core_stock_rate",
+                },
+                {
+                    "label": "실폐기 수량",
+                    "value": f"{round(sum(item.confirmed_disuse_qty for item in items), 2)}개",
+                    "calculation": "confirmed_disuse=SUM(disuse_qty latest_date)",
+                    "source_table": "raw_inventory_extract",
+                },
+                {
+                    "label": "가설 유통기한",
+                    "value": "품목군 키워드 규칙",
+                    "calculation": "도넛/샌드/샐러드=1일, 케이크=2일, 음료=0일",
+                    "source_table": "assumption_rule",
+                },
+            ],
+        }
+        evidence = await self._attach_ai_grounded_summary(
+            store_id=store_id,
+            topic="폐기 손실 분석",
+            evidence=base_evidence,
         )
 
-    def get_inventory_status(self, store_id: str | None = None) -> InventoryStatusResponse:
-        rows = self.repository.get_inventory_status(store_id=store_id)
+        return WasteSummaryResponse(
+            items=items,
+            total_adjusted_loss_amount=round(total_adjusted_loss_amount, 2),
+            total_disuse_amount=round(total_disuse_amount, 2),
+            total_estimated_expiry_loss_qty=round(total_estimated_expiry_loss_qty, 2),
+            summary={
+                "store_id": store_id,
+                "item_count": len(items),
+                "gap_amount": round(total_adjusted_loss_amount - total_disuse_amount, 2),
+            },
+            highlights=[
+                {
+                    "label": "보정 로스 최대 품목",
+                    "item_nm": top_item.item_nm,
+                    "value": top_item.adjusted_loss_amount,
+                },
+                {
+                    "label": "유통기한 가설 손실 최대 품목",
+                    "item_nm": max(items, key=lambda row: row.estimated_expiry_loss_qty).item_nm,
+                    "value": max(items, key=lambda row: row.estimated_expiry_loss_qty).estimated_expiry_loss_qty,
+                },
+            ],
+            actions=[
+                "보정 로스 상위 3개 품목의 다음날 발주량을 하향 조정하세요.",
+                "가정 유통기한 1일 품목은 당일 마감 2시간 전 판촉/세트 전환을 적용하세요.",
+                "실폐기와 보정로스 차이가 큰 품목은 재고 등록 정확도를 점검하세요.",
+            ],
+            evidence=evidence,
+        )
+
+    async def get_inventory_status(self, store_id: str | None = None) -> InventoryStatusResponse:
+        if not store_id:
+            raise ValueError("store_id is required")
+
+        rows = self.repository.get_stock_rate_recent_rows(store_id=store_id)
+        if not rows:
+            raise LookupError("해당 점포의 재고 진단 데이터가 없습니다.")
+
+        latest_rows = [row for row in rows if int(row.get("dr") or 1) == 1]
+        if not latest_rows:
+            raise LookupError("해당 점포의 최신 재고율 데이터가 없습니다.")
+
+        stockout_rows = self.repository.get_stockout_latest_rows(store_id=store_id)
+        stockout_map = {
+            str(row.get("item_cd") or row.get("item_nm") or "").strip(): row for row in stockout_rows
+        }
+
         items: list[InventoryStatusItem] = []
-        for row in rows:
-            total_stock = float(row.get("total_stock") or 0)
-            total_sold = float(row.get("total_sold") or 0)
-            # 재고 적정성: 판매량 대비 재고를 단순 구간화
-            if total_sold <= 0:
-                status = "적정" if total_stock <= 0 else "과잉"
+        shortage_count = 0
+        excess_count = 0
+        normal_count = 0
+
+        for row in latest_rows:
+            item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            item_nm = str(row.get("item_nm") or item_cd)
+            total_stock = float(row.get("stk_avg") or 0)
+            total_sold = float(row.get("sal_avg") or 0)
+            total_orderable = float(row.get("ord_avg") or 0)
+            stock_rate = float(row.get("stk_rt") or 0)
+            stockout = stockout_map.get(item_cd) or stockout_map.get(item_nm) or {}
+            is_stockout = bool(stockout.get("is_stockout"))
+            stockout_hour = int(stockout["stockout_hour"]) if stockout.get("stockout_hour") is not None else None
+
+            if is_stockout or stock_rate < 0:
+                status = "부족"
+            elif stock_rate >= 0.35:
+                status = "과잉"
             else:
-                stock_ratio = total_stock / max(total_sold, 1)
-                if stock_ratio >= 1.5:
-                    status = "과잉"
-                elif stock_ratio <= 0.5:
-                    status = "부족"
-                else:
-                    status = "적정"
+                status = "적정"
+
+            if status == "부족":
+                shortage_count += 1
+            elif status == "과잉":
+                excess_count += 1
+            else:
+                normal_count += 1
+
+            shelf_life_days = self._assumed_shelf_life_days(item_nm)
+            expiry_risk_level = (
+                "높음"
+                if shelf_life_days <= 1 and stock_rate > 0.25
+                else "중간"
+                if stock_rate > 0.15
+                else "낮음"
+            )
 
             items.append(
                 InventoryStatusItem(
-                    item_nm=str(row.get("item_nm") or ""),
+                    item_cd=item_cd,
+                    item_nm=item_nm,
+                    image_url=self._resolve_image_url(item_nm),
                     total_stock=total_stock,
                     total_sold=total_sold,
+                    total_orderable=total_orderable,
+                    stock_rate=stock_rate,
+                    stockout_hour=stockout_hour,
+                    is_stockout=is_stockout,
+                    assumed_shelf_life_days=shelf_life_days,
+                    expiry_risk_level=expiry_risk_level,
                     status=status,
                 )
             )
 
-        return InventoryStatusResponse(items=items)
+        items.sort(key=lambda row: row.stock_rate)
+        top_shortage = [item for item in items if item.status == "부족"][:3]
+        top_excess = sorted(
+            [item for item in items if item.status == "과잉"],
+            key=lambda row: row.stock_rate,
+            reverse=True,
+        )[:3]
+
+        base_evidence: dict[str, Any] = {
+            "summary_reason": "재고율, 품절시간, 판매가능수량을 함께 반영해 상태를 분류했습니다.",
+            "processing_route": "repository",
+            "fallback_used": False,
+            "items": [
+                {
+                    "label": "재고율 기반 분류",
+                    "value": f"부족 {shortage_count}개 / 과잉 {excess_count}개",
+                    "calculation": "stock_rate<0 또는 품절=true: 부족, stock_rate>=0.35: 과잉, 그 외 적정",
+                    "source_table": "core_stock_rate, core_stockout_time",
+                },
+                {
+                    "label": "가설 유통기한",
+                    "value": "품목군 키워드 규칙",
+                    "calculation": "도넛/샌드/샐러드=1일, 케이크=2일, 음료=0일",
+                    "source_table": "assumption_rule",
+                },
+            ],
+        }
+        evidence = await self._attach_ai_grounded_summary(
+            store_id=store_id,
+            topic="재고 수준 진단",
+            evidence=base_evidence,
+        )
+
+        return InventoryStatusResponse(
+            summary={
+                "store_id": store_id,
+                "item_count": len(items),
+                "shortage_count": shortage_count,
+                "excess_count": excess_count,
+                "normal_count": normal_count,
+                "avg_stock_rate": round(sum(item.stock_rate for item in items) / max(len(items), 1), 3),
+            },
+            highlights=[
+                {
+                    "label": "부족 위험 TOP",
+                    "value": f"{item.item_nm} ({item.stock_rate:.2f})",
+                }
+                for item in top_shortage
+            ]
+            + [
+                {
+                    "label": "과잉 위험 TOP",
+                    "value": f"{item.item_nm} ({item.stock_rate:.2f})",
+                }
+                for item in top_excess
+            ],
+            actions=[
+                "부족 품목은 다음 생산/발주 사이클을 앞당겨 품절 시각을 늦추세요.",
+                "과잉 품목은 다음날 발주량을 축소하고, 프로모션/세트로 소진을 유도하세요.",
+                "유통기한 가설 1일 품목은 마감 전 재고 소진 우선순위를 높이세요.",
+            ],
+            evidence=evidence,
+            items=items,
+        )
 
     async def register_production(self, payload: ProductionRegistrationRequest) -> ProductionRegistrationResponse:
         await self.repository.save_registration(payload.model_dump())
