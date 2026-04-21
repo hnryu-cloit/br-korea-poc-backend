@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.core.utils import get_now
+import math
 from pathlib import Path
 import re
 from typing import Any, Optional
@@ -66,30 +67,33 @@ class ProductionService:
         return normalized
 
     @classmethod
-    def _menu_image_directory(cls) -> Path:
+    def _menu_image_directories(cls) -> list[Path]:
         repo_root = Path(__file__).resolve().parents[3]
+        front_public_dir = repo_root / "br-korea-poc-front" / "public" / "images"
         local_resource_dir = repo_root / "resource" / "05. 던킨도너츠 메뉴"
-        if local_resource_dir.exists():
-            return local_resource_dir
         docker_resource_dir = Path("/resource/05. 던킨도너츠 메뉴")
-        return docker_resource_dir
+
+        candidates = [front_public_dir, local_resource_dir, docker_resource_dir]
+        return [path for path in candidates if path.exists()]
 
     @classmethod
     def _load_menu_image_index(cls) -> dict[str, str]:
         if cls._menu_image_index is not None:
             return cls._menu_image_index
 
-        image_dir = cls._menu_image_directory()
         image_index: dict[str, str] = {}
-        if not image_dir.exists():
-            logger.warning("메뉴 이미지 디렉터리가 없어 image_url을 생성하지 못합니다: %s", image_dir)
+        image_dirs = cls._menu_image_directories()
+        if not image_dirs:
+            logger.warning("메뉴 이미지 디렉터리가 없어 image_url을 생성하지 못합니다.")
             cls._menu_image_index = image_index
             return image_index
 
-        for path in image_dir.glob("*.png"):
-            key = cls._normalize_menu_key(path.name)
-            if key and key not in image_index:
-                image_index[key] = path.name
+        for image_dir in image_dirs:
+            for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.PNG", "*.JPG", "*.JPEG", "*.WEBP"):
+                for path in image_dir.glob(pattern):
+                    key = cls._normalize_menu_key(path.name)
+                    if key and key not in image_index:
+                        image_index[key] = path.name
 
         cls._menu_image_index = image_index
         return image_index
@@ -136,6 +140,16 @@ class ProductionService:
         if any(keyword in name for keyword in ("커피", "음료")):
             return 0
         return 1
+
+    @staticmethod
+    def _safe_float(value: object, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(parsed):
+            return default
+        return parsed
 
     async def _attach_ai_grounded_summary(
         self,
@@ -499,17 +513,23 @@ class ProductionService:
                 continue
 
             item_nm = str(pivot.get("item_nm") or "")
-            surplus_qty = max(float(pivot.get("ord_avg") or 0) - float(pivot.get("sal_avg") or 0), 0.0)
+            surplus_qty = max(
+                self._safe_float(pivot.get("ord_avg")) - self._safe_float(pivot.get("sal_avg")),
+                0.0,
+            )
             absorb_qty = (
-                max(float(latest.get("sal_avg") or 0) - float(latest.get("ord_avg") or 0), 0.0)
+                max(
+                    self._safe_float(latest.get("sal_avg")) - self._safe_float(latest.get("ord_avg")),
+                    0.0,
+                )
                 if latest and previous
                 else 0.0
             )
             adjusted_loss_qty = max(surplus_qty - absorb_qty, 0.0)
 
             disuse_row = disuse_map.get(str(pivot.get("item_cd") or item_nm).strip()) or {}
-            confirmed_disuse_qty = float(disuse_row.get("total_disuse_qty") or 0.0)
-            avg_cost = float(disuse_row.get("avg_cost") or 0.0)
+            confirmed_disuse_qty = self._safe_float(disuse_row.get("total_disuse_qty"))
+            avg_cost = self._safe_float(disuse_row.get("avg_cost"))
             shelf_life_days = self._assumed_shelf_life_days(item_nm)
             estimated_expiry_loss_qty = (
                 adjusted_loss_qty
@@ -634,10 +654,10 @@ class ProductionService:
         for row in latest_rows:
             item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
             item_nm = str(row.get("item_nm") or item_cd)
-            total_stock = float(row.get("stk_avg") or 0)
-            total_sold = float(row.get("sal_avg") or 0)
-            total_orderable = float(row.get("ord_avg") or 0)
-            stock_rate = float(row.get("stk_rt") or 0)
+            total_stock = self._safe_float(row.get("stk_avg"))
+            total_sold = self._safe_float(row.get("sal_avg"))
+            total_orderable = self._safe_float(row.get("ord_avg"))
+            stock_rate = self._safe_float(row.get("stk_rt"))
             stockout = stockout_map.get(item_cd) or stockout_map.get(item_nm) or {}
             is_stockout = bool(stockout.get("is_stockout"))
             stockout_hour = int(stockout["stockout_hour"]) if stockout.get("stockout_hour") is not None else None
