@@ -122,6 +122,7 @@ def _install_ai_import_stubs() -> None:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
             APP_NAME: str = "br-korea-poc-ai-stub"
+            APP_ENV: str = "local"
             AI_SERVICE_TOKEN: str = AI_TOKEN
 
         api_config.Settings = _DummySettings  # type: ignore[attr-defined]
@@ -150,6 +151,9 @@ def _install_ai_import_stubs() -> None:
         def _dummy_production_service() -> object:
             return object()
 
+        def _dummy_chance_loss_service() -> object:
+            return object()
+
         def _dummy_ordering_service() -> object:
             return object()
 
@@ -159,6 +163,11 @@ def _install_ai_import_stubs() -> None:
         async def _verify_token() -> bool:
             return True
 
+        def _dynamic_dependency(name: str):
+            if name.startswith("get_"):
+                return lambda *args, **kwargs: object()
+            raise AttributeError(name)
+
         api_dependencies.get_settings = lambda: AISettings(AI_SERVICE_TOKEN=AI_TOKEN)  # type: ignore[attr-defined]
         api_dependencies.verify_token = _verify_token  # type: ignore[attr-defined]
         api_dependencies.get_gemini_client = _dummy_gemini_client  # type: ignore[attr-defined]
@@ -167,8 +176,10 @@ def _install_ai_import_stubs() -> None:
         api_dependencies.get_sales_analyzer = _dummy_sales_analyzer  # type: ignore[attr-defined]
         api_dependencies.get_channel_payment_analyzer = _dummy_channel_payment_analyzer  # type: ignore[attr-defined]
         api_dependencies.get_production_service = _dummy_production_service  # type: ignore[attr-defined]
+        api_dependencies.get_chance_loss_service = _dummy_chance_loss_service  # type: ignore[attr-defined]
         api_dependencies.get_ordering_service = _dummy_ordering_service  # type: ignore[attr-defined]
         api_dependencies.get_sales_service = _dummy_sales_service  # type: ignore[attr-defined]
+        api_dependencies.__getattr__ = _dynamic_dependency  # type: ignore[attr-defined]
         sys.modules["api.dependencies"] = api_dependencies
 
     if "pipeline.run" not in sys.modules:
@@ -209,6 +220,8 @@ def _install_ai_import_stubs() -> None:
 
         exported_name = service_exports[module_name]
         setattr(module, exported_name, _DummyService)
+        if module_name == "services.production_service":
+            module.normalize_payload_df = lambda payload: payload  # type: ignore[attr-defined]
         sys.modules[module_name] = module
 
 
@@ -240,7 +253,11 @@ class InProcessAIServiceClient(AIServiceClient):
     async def _post(self, path: str, body: dict) -> dict | None:
         transport = httpx.ASGITransport(app=self._ai_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://ai.local") as client:
-            response = await client.post(path, json=body, headers=self._headers)
+            response = await client.post(
+                path,
+                json=body,
+                headers=self._build_headers(request_id="system-integration-test"),
+            )
         self.last_request = {"path": path, "body": body}
         response.raise_for_status()
         return response.json()
@@ -299,9 +316,9 @@ class FakeAIOrderingService:
     def recommend_ordering(self, payload):
         return OrderingRecommendResponse(
             options=[
-                {"name": "전주 동요일 기준", "recommended_quantity": 120, "priority": 1},
-                {"name": "전전주 동요일 기준", "recommended_quantity": 112, "priority": 2},
-                {"name": "전월 동요일 기준", "recommended_quantity": 108, "priority": 3},
+                {"name": "전주 동요일 기준", "recommended_qty": 120, "priority": 1},
+                {"name": "전전주 동요일 기준", "recommended_qty": 112, "priority": 2},
+                {"name": "전월 동요일 기준", "recommended_qty": 108, "priority": 3},
             ],
             reasoning=f"{getattr(payload, 'store_id', 'store')} 최근 패턴 기준 추천입니다.",
         )

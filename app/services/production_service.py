@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from app.core.utils import get_now
 import copy
 import math
@@ -50,8 +51,9 @@ logger = logging.getLogger(__name__)
 class ProductionService:
     _menu_image_index: dict[str, str] | None = None
     _response_cache = TTLMemoryCache(max_size=128)
-    _waste_ttl_sec = 45
-    _inventory_ttl_sec = 45
+    _waste_ttl_sec = 300
+    _inventory_ttl_sec = 300
+    _ai_summary_timeout_sec = 1.2
 
     def __init__(
         self,
@@ -90,10 +92,11 @@ class ProductionService:
     def _menu_image_directories(cls) -> list[Path]:
         repo_root = Path(__file__).resolve().parents[3]
         front_public_dir = repo_root / "br-korea-poc-front" / "public" / "images"
+        docker_front_image_dir = Path("/menu-images")
         local_resource_dir = repo_root / "resource" / "05. 던킨도너츠 메뉴"
         docker_resource_dir = Path("/resource/05. 던킨도너츠 메뉴")
 
-        candidates = [front_public_dir, local_resource_dir, docker_resource_dir]
+        candidates = [front_public_dir, docker_front_image_dir, local_resource_dir, docker_resource_dir]
         return [path for path in candidates if path.exists()]
 
     @classmethod
@@ -229,11 +232,32 @@ class ProductionService:
         if not ai_evidence_items:
             return evidence
 
-        ai_summary = await self.ai_client.generate_grounded_explanation(
-            store_id=store_id,
-            topic=topic,
-            evidence_items=ai_evidence_items,
-        )
+        try:
+            ai_summary = await asyncio.wait_for(
+                self.ai_client.generate_grounded_explanation(
+                    store_id=store_id,
+                    topic=topic,
+                    evidence_items=ai_evidence_items,
+                ),
+                timeout=self._ai_summary_timeout_sec,
+            )
+        except TimeoutError:
+            logger.warning(
+                "AI 근거 요약 시간 초과: store_id=%s topic=%s timeout=%.1fs",
+                store_id,
+                topic,
+                self._ai_summary_timeout_sec,
+            )
+            return evidence
+        except Exception as exc:
+            logger.warning(
+                "AI 근거 요약 생성 실패: store_id=%s topic=%s error=%s",
+                store_id,
+                topic,
+                exc,
+            )
+            return evidence
+
         if not ai_summary:
             return evidence
 

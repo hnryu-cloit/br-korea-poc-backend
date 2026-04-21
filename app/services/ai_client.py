@@ -248,6 +248,26 @@ class AIServiceClient:
                 "branch_snapshots": branch_snapshots or [],
                 "store_name": store_name,
             },
+            timeout=20.0,
+        )
+
+    async def generate_ordering_history_insights(
+        self,
+        *,
+        store_id: str,
+        filters: dict[str, object],
+        history_items: list[dict[str, object]],
+        summary_stats: dict[str, object],
+    ) -> dict | None:
+        """AI 서비스에 발주 이력 이상징후 인사이트 생성을 요청합니다."""
+        return await self._post(
+            "/analytics/ordering/history/insights",
+            {
+                "store_id": store_id,
+                "filters": filters,
+                "history_items": history_items,
+                "summary_stats": summary_stats,
+            },
             timeout=60.0,
         )
 
