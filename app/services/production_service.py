@@ -421,8 +421,12 @@ class ProductionService:
             total_loss_amount=round(total_loss_amount, 2),
         )
 
-    def get_inventory_status(self, store_id: str | None = None) -> InventoryStatusResponse:
-        rows = self.repository.get_inventory_status(store_id=store_id)
+    def get_inventory_status(
+        self, store_id: str | None = None, page: int = 1, page_size: int = 10
+    ) -> InventoryStatusResponse:
+        rows, total_items = self.repository.get_inventory_status(
+            store_id=store_id, page=page, page_size=page_size
+        )
         items: list[InventoryStatusItem] = []
         for row in rows:
             total_stock = float(row.get("total_stock") or 0)
@@ -448,7 +452,16 @@ class ProductionService:
                 )
             )
 
-        return InventoryStatusResponse(items=items)
+        total_pages = max(1, ((total_items - 1) // page_size) + 1) if page_size > 0 else 1
+        return InventoryStatusResponse(
+            items=items,
+            pagination=Pagination(
+                page=page,
+                page_size=page_size,
+                total_items=total_items,
+                total_pages=total_pages,
+            ),
+        )
 
     async def register_production(self, payload: ProductionRegistrationRequest) -> ProductionRegistrationResponse:
         await self.repository.save_registration(payload.model_dump())

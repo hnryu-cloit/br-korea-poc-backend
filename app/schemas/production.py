@@ -257,3 +257,4 @@ class InventoryStatusItem(BaseModel):
 
 class InventoryStatusResponse(BaseModel):
     items: list[InventoryStatusItem]
+    pagination: Pagination

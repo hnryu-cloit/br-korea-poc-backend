@@ -225,6 +225,19 @@ def test_production_items() -> None:
     assert "pagination" in payload
 
 
+def test_production_inventory_status_pagination() -> None:
+    response = client.get("/api/production/inventory-status?page=1&page_size=5&store_id=POC_001")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["items"], list)
+    assert "pagination" in payload
+    pagination = payload["pagination"]
+    assert {"page", "page_size", "total_items", "total_pages"} <= set(pagination.keys())
+    assert pagination["page"] == 1
+    assert pagination["page_size"] == 5
+    assert len(payload["items"]) <= 5
+
+
 def test_production_item_detail() -> None:
     list_response = client.get("/api/production/items?page=1&page_size=20")
     assert list_response.status_code == 200

@@ -770,11 +770,31 @@ class ProductionRepository(BaseRepository):
             logger.warning("get_waste_summary 쿼리 실패: store_id=%s error=%s", store_id, exc)
             return []
 
-    def get_inventory_status(self, store_id: str | None = None) -> list[dict]:
+    def get_inventory_status(
+        self, store_id: str | None = None, page: int = 1, page_size: int = 10
+    ) -> tuple[list[dict], int]:
         if not self.engine or not store_id:
-            return []
+            return [], 0
         try:
+            offset = max(0, (page - 1) * page_size)
             with self.engine.connect() as conn:
+                total_items = int(
+                    conn.execute(
+                        text(
+                            """
+                        SELECT COUNT(*) AS total_items
+                        FROM (
+                          SELECT item_nm
+                          FROM raw_inventory_extract
+                          WHERE masked_stor_cd = :store_id
+                            AND stock_qty IS NOT NULL AND stock_qty != '' AND stock_qty != '0'
+                          GROUP BY item_nm
+                        ) AS grouped_items
+                    """
+                        ),
+                        {"store_id": store_id},
+                    ).scalar_one()
+                )
                 rows = (
                     conn.execute(
                         text(
@@ -788,18 +808,19 @@ class ProductionRepository(BaseRepository):
                           AND stock_qty IS NOT NULL AND stock_qty != '' AND stock_qty != '0'
                         GROUP BY item_nm
                         ORDER BY total_stock DESC
-                        LIMIT 10
+                        LIMIT :page_size
+                        OFFSET :offset
                     """
                         ),
-                        {"store_id": store_id},
+                        {"store_id": store_id, "page_size": page_size, "offset": offset},
                     )
                     .mappings()
                     .all()
                 )
-            return [dict(r) for r in rows]
+            return [dict(r) for r in rows], total_items
         except SQLAlchemyError as exc:
             logger.warning("get_inventory_status 쿼리 실패: store_id=%s error=%s", store_id, exc)
-            return []
+            return [], 0
 
     async def get_registration_summary(
         self,

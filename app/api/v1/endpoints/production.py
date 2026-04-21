@@ -135,10 +135,12 @@ def get_waste_summary(
 
 @router.get("/inventory-status", response_model=InventoryStatusResponse)
 def get_inventory_status(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     store_id: str | None = Query(default=None),
     service: ProductionService = Depends(get_production_service),
 ) -> InventoryStatusResponse:
     try:
-        return service.get_inventory_status(store_id=store_id)
+        return service.get_inventory_status(store_id=store_id, page=page, page_size=page_size)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"재고 상태 조회 오류: {str(exc)}") from exc
