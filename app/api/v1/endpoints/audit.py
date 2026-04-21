@@ -15,12 +15,12 @@ _HQ_ROLES = ("hq_admin", "hq_operator")
 @router.get(
     "/logs",
     response_model=AuditLogListResponse,
-    dependencies=[Depends(require_roles(*_HQ_ROLES, "store_owner"))],
+    dependencies=[Depends(require_roles(*_HQ_ROLES))],
 )
 async def list_audit_logs(
     domain: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     service: AuditService = Depends(get_audit_service),
 ) -> AuditLogListResponse:
-    """감사 로그를 반환합니다. hq_admin·hq_operator·store_owner 역할에서 접근 가능합니다."""
+    """감사 로그를 반환합니다. hq_admin·hq_operator 역할에서만 접근 가능합니다."""
     return await service.list_logs(domain=domain, limit=limit)

@@ -48,8 +48,25 @@ class SalesService:
         self.audit_service = audit_service
         self.prompt_settings_service = prompt_settings_service
 
-    async def list_prompts(self) -> list[SalesPrompt]:
-        prompts = await self.repository.list_prompts()
+    async def list_prompts(
+        self,
+        domain: str = "sales",
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[SalesPrompt]:
+        if self.ai_client and self.prompt_settings_service:
+            try:
+                ai_prompts = await self.ai_client.suggest_sales_prompts(
+                    store_id=store_id, domain=domain
+                )
+                if ai_prompts:
+                    return [SalesPrompt(**p) for p in ai_prompts]
+            except Exception:
+                pass
+        prompts = await self.repository.list_prompts(
+            store_id=store_id, date_from=date_from, date_to=date_to
+        )
         return [SalesPrompt(**prompt) for prompt in prompts]
 
     async def query(self, payload: SalesQueryRequest, actor_role: str = "store_owner") -> SalesQueryResponse:

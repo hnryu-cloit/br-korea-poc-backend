@@ -740,8 +740,8 @@ class ProductionRepository(BaseRepository):
                 return []
         return []
 
-    def get_waste_summary(self, store_id: str | None = None) -> list[dict]:
-        if not self.engine or not store_id:
+    def get_stock_rate_recent_rows(self, store_id: str) -> list[dict]:
+        if not self.engine:
             return []
         try:
             with self.engine.connect() as conn:
@@ -749,16 +749,34 @@ class ProductionRepository(BaseRepository):
                     conn.execute(
                         text(
                             """
-                        SELECT item_nm,
-                               SUM(CAST(disuse_qty AS NUMERIC)) AS total_disuse_qty,
-                               AVG(CAST(cost AS NUMERIC)) AS avg_cost
-                        FROM raw_inventory_extract
-                        WHERE masked_stor_cd = :store_id
-                          AND disuse_qty IS NOT NULL AND CAST(disuse_qty AS NUMERIC) > 0
-                        GROUP BY item_nm
-                        ORDER BY total_disuse_qty DESC
-                        LIMIT 5
-                    """
+                            WITH ranked AS (
+                                SELECT
+                                    masked_stor_cd,
+                                    prc_dt,
+                                    item_cd,
+                                    item_nm,
+                                    COALESCE(ord_avg, 0) AS ord_avg,
+                                    COALESCE(sal_avg, 0) AS sal_avg,
+                                    COALESCE(stk_avg, 0) AS stk_avg,
+                                    COALESCE(stk_rt, 0) AS stk_rt,
+                                    DENSE_RANK() OVER (ORDER BY prc_dt DESC) AS dr
+                                FROM core_stock_rate
+                                WHERE masked_stor_cd = :store_id
+                            )
+                            SELECT
+                                masked_stor_cd,
+                                prc_dt,
+                                item_cd,
+                                item_nm,
+                                ord_avg,
+                                sal_avg,
+                                stk_avg,
+                                stk_rt,
+                                dr
+                            FROM ranked
+                            WHERE dr <= 2
+                            ORDER BY item_nm, dr
+                            """
                         ),
                         {"store_id": store_id},
                     )
@@ -767,11 +785,11 @@ class ProductionRepository(BaseRepository):
                 )
             return [dict(r) for r in rows]
         except SQLAlchemyError as exc:
-            logger.warning("get_waste_summary 쿼리 실패: store_id=%s error=%s", store_id, exc)
+            logger.warning("get_stock_rate_recent_rows 쿼리 실패: store_id=%s error=%s", store_id, exc)
             return []
 
-    def get_inventory_status(self, store_id: str | None = None) -> list[dict]:
-        if not self.engine or not store_id:
+    def get_stockout_latest_rows(self, store_id: str) -> list[dict]:
+        if not self.engine:
             return []
         try:
             with self.engine.connect() as conn:
@@ -779,17 +797,20 @@ class ProductionRepository(BaseRepository):
                     conn.execute(
                         text(
                             """
-                        SELECT item_nm,
-                               SUM(CAST(stock_qty AS NUMERIC)) AS total_stock,
-                               SUM(CAST(sale_qty AS NUMERIC)) AS total_sold,
-                               SUM(CAST(gi_qty AS NUMERIC)) AS total_incoming
-                        FROM raw_inventory_extract
-                        WHERE masked_stor_cd = :store_id
-                          AND stock_qty IS NOT NULL AND stock_qty != '' AND stock_qty != '0'
-                        GROUP BY item_nm
-                        ORDER BY total_stock DESC
-                        LIMIT 10
-                    """
+                            WITH latest_date AS (
+                                SELECT MAX(prc_dt) AS prc_dt
+                                FROM core_stockout_time
+                                WHERE masked_stor_cd = :store_id
+                            )
+                            SELECT
+                                item_cd,
+                                item_nm,
+                                is_stockout,
+                                stockout_hour
+                            FROM core_stockout_time s
+                            JOIN latest_date d ON s.prc_dt = d.prc_dt
+                            WHERE s.masked_stor_cd = :store_id
+                            """
                         ),
                         {"store_id": store_id},
                     )
@@ -798,7 +819,42 @@ class ProductionRepository(BaseRepository):
                 )
             return [dict(r) for r in rows]
         except SQLAlchemyError as exc:
-            logger.warning("get_inventory_status 쿼리 실패: store_id=%s error=%s", store_id, exc)
+            logger.warning("get_stockout_latest_rows 쿼리 실패: store_id=%s error=%s", store_id, exc)
+            return []
+
+    def get_disuse_and_cost_latest_rows(self, store_id: str) -> list[dict]:
+        if not self.engine:
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            WITH latest_date AS (
+                                SELECT MAX(stock_dt) AS stock_dt
+                                FROM raw_inventory_extract
+                                WHERE masked_stor_cd = :store_id
+                            )
+                            SELECT
+                                COALESCE(item_cd, item_nm) AS item_cd,
+                                item_nm,
+                                SUM(COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)) AS total_disuse_qty,
+                                AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS avg_cost
+                            FROM raw_inventory_extract r
+                            JOIN latest_date d ON r.stock_dt = d.stock_dt
+                            WHERE r.masked_stor_cd = :store_id
+                            GROUP BY COALESCE(item_cd, item_nm), item_nm
+                            """
+                        ),
+                        {"store_id": store_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(r) for r in rows]
+        except SQLAlchemyError as exc:
+            logger.warning("get_disuse_and_cost_latest_rows 쿼리 실패: store_id=%s error=%s", store_id, exc)
             return []
 
     async def get_registration_summary(
