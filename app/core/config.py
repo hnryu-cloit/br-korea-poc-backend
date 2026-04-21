@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
 
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc"
-    EXTERNAL_API_KEY: str = "stub-key"
+    EXTERNAL_API_KEY: str = ""
     SBIZ_API_SNS_ANALYSIS_KEY: str = ""
     SBIZ_API_STARTUP_WEATHER_KEY: str = ""
     SBIZ_API_HOTPLACE_KEY: str = ""
@@ -74,9 +74,9 @@ class Settings(BaseSettings):
                 f"운영 환경에서 MOCK_NOW_STR이 설정되어 있습니다: {self.MOCK_NOW_STR}. 실제 시각 대신 고정 시각이 사용됩니다.",
                 stacklevel=2,
             )
-        if self.APP_ENV != "local" and self.EXTERNAL_API_KEY == "stub-key":
+        if self.APP_ENV != "local" and not self.EXTERNAL_API_KEY:
             warnings.warn(
-                "운영 환경에서 EXTERNAL_API_KEY가 stub-key 기본값으로 설정되어 있습니다.",
+                "non-local 환경에서 EXTERNAL_API_KEY가 비어 있습니다.",
                 stacklevel=2,
             )
         if (

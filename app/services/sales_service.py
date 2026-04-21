@@ -81,7 +81,7 @@ class SalesService:
 
         # 2. AI 또는 repository 조회 (마스킹된 쿼리 사용)
         ai_result: Optional[dict] = None
-        processing_route = "stub_repository"
+        processing_route = "repository"
         if self.ai_client:
             ai_result = await self.ai_client.query_sales(safe_prompt, store_id=payload.store_id)
 

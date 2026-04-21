@@ -376,7 +376,7 @@ def test_sales_query() -> None:
     assert "evidence" in payload
     assert payload["comparison"] is None
     assert payload["query_type"] == "data_lookup"
-    assert payload["processing_route"] in {"stub_repository", "ai_proxy"}
+    assert payload["processing_route"] in {"repository", "ai_proxy"}
 
 
 def test_sales_query_blocks_sensitive_prompt_for_store_role() -> None:
