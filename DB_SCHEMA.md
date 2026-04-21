@@ -877,7 +877,7 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 - 동일 API에서 `industry_analysis`/`sales_analysis`/`population_analysis`/`regional_status`/`customer_characteristics`를 함께 생성하며, 일부 항목은 원천 컬럼 한계로 reference 기반 프록시 집계(예: 직장·주거 인구, 소득소비, 교통접근지수)를 사용한다.
 - `customer_characteristics.new_customer_ratio/regular_customer_ratio`는 `raw_daily_store_item/raw_daily_store_pay_way/raw_order_extract`의 고객식별 컬럼(존재 시)을 자동탐지해 계산하고, 미존재 시 `raw_daily_store_cpi_tmzon` 키워드 보조추출을 시도한 뒤 최종적으로 null 처리한다.
 - `GET /api/ordering/history`, `GET /api/ordering/history/insights`는 `store_id` 필수이며, 누락/오입력은 4xx 에러를 반환한다.
-- `GET /api/ordering/options`의 `weather_summary`는 AI 응답이 비어 있으면 Open-Meteo 예보 API 폴백 결과를 사용한다.
+- `GET /api/ordering/options`의 `weather`는 AI 응답이 비어 있으면 Open-Meteo 예보 API 폴백 결과를 사용한다.
 
 - 프론트 글로벌 에러 배너 정책: `/analytics/market`는 `/api/analytics/market-intelligence` 실패를 1차 기준으로 표시하고, `store-profile/customer-profile/sales-trend` 실패는 보조 데이터 결손으로 분리한다.
 
