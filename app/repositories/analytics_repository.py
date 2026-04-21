@@ -2978,3 +2978,34 @@ class AnalyticsRepository:
                 }
             )
         return merged
+
+    def list_store_candidates(self, limit: int = 100) -> list[dict]:
+        """상권 인사이트 집계용 점포 후보 목록을 조회합니다."""
+        if not self.engine:
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                masked_stor_cd AS store_id,
+                                maked_stor_nm AS store_name,
+                                sido,
+                                region
+                            FROM raw_store_master
+                            WHERE masked_stor_cd IS NOT NULL
+                              AND masked_stor_cd <> ''
+                            ORDER BY masked_stor_cd
+                            LIMIT :limit
+                            """
+                        ),
+                        {"limit": max(1, min(limit, 500))},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(row) for row in rows]
+        except SQLAlchemyError:
+            return []

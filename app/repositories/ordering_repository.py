@@ -101,7 +101,7 @@ class OrderingRepository:
             return False
         try:
             with self.engine.connect() as connection:
-                exists = connection.execute(
+                exists_in_master = connection.execute(
                     text(
                         """
                         SELECT 1
@@ -112,7 +112,22 @@ class OrderingRepository:
                     ),
                     {"store_id": store_id},
                 ).scalar_one_or_none()
-                return exists is not None
+                if exists_in_master is not None:
+                    return True
+
+                # 점포 마스터 누락 상황에서도 주문 원천 데이터가 있으면 유효 점포로 간주
+                exists_in_order = connection.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM raw_order_extract
+                        WHERE masked_stor_cd = :store_id
+                        LIMIT 1
+                        """
+                    ),
+                    {"store_id": store_id},
+                ).scalar_one_or_none()
+                return exists_in_order is not None
         except SQLAlchemyError:
             return False
 

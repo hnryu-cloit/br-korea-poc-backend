@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -248,3 +250,48 @@ class MarketIntelligenceResponse(BaseModel):
     population_analysis: PopulationAnalysis
     regional_status: RegionalStatus
     customer_characteristics: CustomerCharacteristics
+
+
+class MarketInsightItem(BaseModel):
+    title: str
+    description: str
+    impact: Literal["high", "medium", "low"] = "medium"
+
+
+class MarketRiskWarningItem(BaseModel):
+    title: str
+    description: str
+    mitigation: str
+
+
+class MarketActionItem(BaseModel):
+    priority: int
+    title: str
+    action: str
+    expected_effect: str
+
+
+class BranchScoreboardItem(BaseModel):
+    store_id: str
+    store_name: str
+    growth_rate: str
+    risk_level: Literal["high", "medium", "low"] = "medium"
+    summary: str
+
+
+class MarketInsightsResponse(BaseModel):
+    executive_summary: str
+    key_insights: list[MarketInsightItem]
+    risk_warnings: list[MarketRiskWarningItem]
+    action_plan: list[MarketActionItem]
+    branch_scoreboard: list[BranchScoreboardItem]
+    report_markdown: str
+    evidence_refs: list[str]
+    audience: Literal["store_owner", "hq_admin"] = "store_owner"
+    source: Literal["ai", "fallback"] = "fallback"
+    trace_id: str | None = None
+
+
+class HQMarketInsightsResponse(BaseModel):
+    summary: MarketInsightsResponse
+    branches: list[BranchScoreboardItem]

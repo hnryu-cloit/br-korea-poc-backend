@@ -23,6 +23,7 @@ from app.schemas.analytics import (
     IndustryBusinessTrendPoint,
     HouseholdCompositionSlice,
     MarketIntelligenceResponse,
+    MarketInsightsResponse,
     PopulationAnalysis,
     PopulationTrendPoint,
     RegionalStatus,
@@ -40,14 +41,22 @@ from app.schemas.analytics import (
     TradeAreaSalesSlice,
     WeatherImpactResponse,
     CustomerCharacteristics,
+    HQMarketInsightsResponse,
+    BranchScoreboardItem,
 )
+from app.services.ai_client import AIServiceClient
 
 logger = logging.getLogger(__name__)
 
 
 class AnalyticsService:
-    def __init__(self, repository: AnalyticsRepository) -> None:
+    def __init__(
+        self,
+        repository: AnalyticsRepository,
+        ai_client: AIServiceClient | None = None,
+    ) -> None:
         self.repository = repository
+        self.ai_client = ai_client
 
     async def get_metrics(
         self,
@@ -250,6 +259,245 @@ class AnalyticsService:
                     },
                 )
             ),
+        )
+
+    async def get_market_insights(
+        self,
+        *,
+        store_id: str | None = None,
+        gu: str | None = None,
+        dong: str | None = None,
+        industry: str | None = None,
+        year: int | None = None,
+        quarter: str | None = None,
+        radius_m: int | None = None,
+    ) -> MarketInsightsResponse:
+        market = self.get_market_intelligence(
+            store_id=store_id,
+            gu=gu,
+            dong=dong,
+            industry=industry,
+            year=year,
+            quarter=quarter,
+            radius_m=radius_m,
+        )
+        store_profile = self.get_store_profile(store_id=store_id)
+        sales_trend = self.get_sales_trend(store_id=store_id)
+        scope = {
+            "store_id": store_id,
+            "gu": gu,
+            "dong": dong,
+            "industry": industry,
+            "year": year,
+            "quarter": quarter,
+            "radius_m": radius_m,
+        }
+        if self.ai_client:
+            ai_result = await self.ai_client.generate_market_insights(
+                audience="store_owner",
+                scope=scope,
+                market_data=self._build_market_payload(market, sales_trend),
+                store_name=store_profile.store_nm if store_profile else None,
+            )
+            if isinstance(ai_result, dict):
+                return MarketInsightsResponse(
+                    **{
+                        "executive_summary": str(ai_result.get("executive_summary") or ""),
+                        "key_insights": ai_result.get("key_insights") or [],
+                        "risk_warnings": ai_result.get("risk_warnings") or [],
+                        "action_plan": ai_result.get("action_plan") or [],
+                        "branch_scoreboard": ai_result.get("branch_scoreboard") or [],
+                        "report_markdown": str(ai_result.get("report_markdown") or ""),
+                        "evidence_refs": ai_result.get("evidence_refs") or [],
+                        "audience": "store_owner",
+                        "source": (
+                            str(ai_result.get("source"))
+                            if str(ai_result.get("source")) in {"ai", "fallback"}
+                            else "ai"
+                        ),
+                        "trace_id": ai_result.get("trace_id"),
+                    }
+                )
+        return self._fallback_market_insights(
+            audience="store_owner",
+            market=market,
+            store_name=store_profile.store_nm if store_profile else None,
+        )
+
+    async def get_hq_market_insights(
+        self,
+        *,
+        gu: str | None = None,
+        dong: str | None = None,
+        industry: str | None = None,
+        year: int | None = None,
+        quarter: str | None = None,
+        radius_m: int | None = None,
+        limit: int = 20,
+    ) -> HQMarketInsightsResponse:
+        store_rows = self.repository.list_store_candidates(limit=limit)
+        branch_snapshots: list[dict] = []
+        for row in store_rows:
+            store_id = str(row.get("store_id") or "")
+            store_name = str(row.get("store_name") or store_id)
+            if not store_id:
+                continue
+            market = self.get_market_intelligence(
+                store_id=store_id,
+                gu=gu,
+                dong=dong,
+                industry=industry,
+                year=year,
+                quarter=quarter,
+                radius_m=radius_m,
+            )
+            monthly = float(market.estimated_sales_summary.monthly_estimated_sales or 0)
+            weekend_ratio = float(market.estimated_sales_summary.weekend_ratio or 0)
+            risk_level = "high" if weekend_ratio < 30 else "medium" if weekend_ratio < 40 else "low"
+            branch_snapshots.append(
+                {
+                    "store_id": store_id,
+                    "store_name": store_name,
+                    "monthly_estimated_sales": monthly,
+                    "weekend_ratio": weekend_ratio,
+                    "risk_level": risk_level,
+                    "floating_population_analysis": market.floating_population_analysis,
+                }
+            )
+
+        scope = {
+            "gu": gu,
+            "dong": dong,
+            "industry": industry,
+            "year": year,
+            "quarter": quarter,
+            "radius_m": radius_m,
+            "limit": limit,
+        }
+        if self.ai_client:
+            ai_result = await self.ai_client.generate_market_insights(
+                audience="hq_admin",
+                scope=scope,
+                market_data={"branch_count": len(branch_snapshots)},
+                branch_snapshots=branch_snapshots,
+                store_name=None,
+            )
+            if isinstance(ai_result, dict):
+                summary = MarketInsightsResponse(
+                    **{
+                        "executive_summary": str(ai_result.get("executive_summary") or ""),
+                        "key_insights": ai_result.get("key_insights") or [],
+                        "risk_warnings": ai_result.get("risk_warnings") or [],
+                        "action_plan": ai_result.get("action_plan") or [],
+                        "branch_scoreboard": ai_result.get("branch_scoreboard") or [],
+                        "report_markdown": str(ai_result.get("report_markdown") or ""),
+                        "evidence_refs": ai_result.get("evidence_refs") or [],
+                        "audience": "hq_admin",
+                        "source": (
+                            str(ai_result.get("source"))
+                            if str(ai_result.get("source")) in {"ai", "fallback"}
+                            else "ai"
+                        ),
+                        "trace_id": ai_result.get("trace_id"),
+                    }
+                )
+                branches = (
+                    summary.branch_scoreboard
+                    if summary.branch_scoreboard
+                    else [self._to_branch_score(item) for item in branch_snapshots]
+                )
+                return HQMarketInsightsResponse(summary=summary, branches=branches)
+
+        fallback_summary = self._fallback_market_insights(
+            audience="hq_admin",
+            market=None,
+            store_name=None,
+        )
+        return HQMarketInsightsResponse(
+            summary=fallback_summary,
+            branches=[self._to_branch_score(item) for item in branch_snapshots],
+        )
+
+    @staticmethod
+    def _build_market_payload(
+        market: MarketIntelligenceResponse,
+        sales_trend: SalesTrendResponse,
+    ) -> dict:
+        return {
+            "estimated_sales_summary": market.estimated_sales_summary.model_dump(),
+            "category_sales_pie": [item.model_dump() for item in market.category_sales_pie],
+            "floating_population_trend": [item.model_dump() for item in market.floating_population_trend],
+            "customer_characteristics": market.customer_characteristics.model_dump(),
+            "regional_status": market.regional_status.model_dump(),
+            "sales_headline": sales_trend.headline,
+            "insight_chips": [item.model_dump() for item in sales_trend.insight_chips],
+            "data_sources": market.data_sources,
+        }
+
+    @staticmethod
+    def _to_branch_score(item: dict) -> BranchScoreboardItem:
+        weekend_ratio = float(item.get("weekend_ratio") or 0)
+        growth_rate = f"주말 비중 {weekend_ratio:.1f}%"
+        risk_level = str(item.get("risk_level") or "medium")
+        if risk_level not in {"high", "medium", "low"}:
+            risk_level = "medium"
+        return BranchScoreboardItem(
+            store_id=str(item.get("store_id") or ""),
+            store_name=str(item.get("store_name") or "-"),
+            growth_rate=growth_rate,
+            risk_level=risk_level,
+            summary=str(item.get("floating_population_analysis") or "상권 변동 데이터를 확인해 주세요."),
+        )
+
+    @staticmethod
+    def _fallback_market_insights(
+        *,
+        audience: str,
+        market: MarketIntelligenceResponse | None,
+        store_name: str | None,
+    ) -> MarketInsightsResponse:
+        target = store_name or "전체 지점"
+        monthly = (
+            f"{int(market.estimated_sales_summary.monthly_estimated_sales):,}원"
+            if market
+            else "미확인"
+        )
+        return MarketInsightsResponse(
+            executive_summary=f"{target} 기준 AI 인사이트 생성에 실패해 기본 분석을 제공합니다.",
+            key_insights=[
+                MarketInsightItem(
+                    title="기본 매출 점검",
+                    description=f"월 추정 매출은 {monthly}이며 상세 해석은 재시도 후 확인 가능합니다.",
+                    impact="medium",
+                )
+            ],
+            risk_warnings=[
+                MarketRiskWarningItem(
+                    title="분석 정확도 저하",
+                    description="서술형 인사이트가 fallback 처리되어 문맥 기반 해석이 제한됩니다.",
+                    mitigation="필터를 단순화하거나 잠시 후 다시 시도해 주세요.",
+                )
+            ],
+            action_plan=[
+                MarketActionItem(
+                    priority=1,
+                    title="핵심 지표 우선 확인",
+                    action="시간대·요일·고객 비중 차트를 먼저 점검해 운영 우선순위를 정합니다.",
+                    expected_effect="AI 리포트 부재 상황에서도 기본 의사결정이 가능합니다.",
+                )
+            ],
+            branch_scoreboard=[],
+            report_markdown=(
+                f"# 상권 분석 리포트 (fallback)\n\n"
+                f"- audience: {audience}\n"
+                f"- 대상: {target}\n"
+                f"- 월 추정매출: {monthly}\n"
+                f"- 상태: AI 인사이트 생성 실패\n"
+            ),
+            evidence_refs=["fallback"],
+            audience="hq_admin" if audience == "hq_admin" else "store_owner",
+            source="fallback",
+            trace_id=None,
         )
 
     def get_weekly_market_report_markdown(

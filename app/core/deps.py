@@ -49,7 +49,10 @@ def get_bootstrap_service() -> BootstrapService:
 
 
 def get_analytics_service() -> AnalyticsService:
-    return AnalyticsService(repository=AnalyticsRepository(engine=get_database_engine()))
+    return AnalyticsService(
+        repository=AnalyticsRepository(engine=get_database_engine()),
+        ai_client=_get_ai_client(),
+    )
 
 
 def get_ordering_service() -> OrderingService:

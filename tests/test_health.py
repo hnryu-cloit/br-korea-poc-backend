@@ -390,7 +390,7 @@ def test_sales_prompts() -> None:
 def test_sales_query() -> None:
     response = client.post(
         "/api/sales/query",
-        json={"prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘"},
+        json={"prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘", "store_id": "POC_001"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -403,7 +403,7 @@ def test_sales_query() -> None:
 def test_sales_query_blocks_sensitive_prompt_for_store_role() -> None:
     response = client.post(
         "/api/sales/query",
-        json={"prompt": "이번 달 이익률과 원가를 알려줘"},
+        json={"prompt": "이번 달 이익률과 원가를 알려줘", "store_id": "POC_001"},
         headers={"X-User-Role": "store_owner"},
     )
     assert response.status_code == 200
@@ -433,7 +433,7 @@ def test_audit_logs_require_hq_role_and_return_recent_events() -> None:
     )
     client.post(
         "/api/sales/query",
-        json={"prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘"},
+        json={"prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘", "store_id": "POC_001"},
         headers={"X-User-Role": "hq_operator"},
     )
 
@@ -534,6 +534,38 @@ def test_analytics_market_intelligence_endpoint_returns_response_shape() -> None
     payload = response.json()
     assert "radius_km" in payload
     assert "data_sources" in payload
+
+
+def test_analytics_market_insights_endpoint_returns_response_shape() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence/insights"
+        "?store_id=POC_001&gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "executive_summary" in payload
+    assert "key_insights" in payload
+    assert "action_plan" in payload
+    assert payload["audience"] == "store_owner"
+
+
+def test_analytics_hq_market_insights_forbidden_for_store_role() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence/insights/hq?gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000&limit=5",
+        headers={"X-User-Role": "store_owner"},
+    )
+    assert response.status_code == 403
+
+
+def test_analytics_hq_market_insights_allowed_for_hq_role() -> None:
+    response = client.get(
+        "/api/analytics/market-intelligence/insights/hq?gu=전체&dong=전체&industry=전체&year=2026&quarter=Q1&radius_m=3000&limit=5",
+        headers={"X-User-Role": "hq_admin"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "summary" in payload
+    assert "branches" in payload
 
 
 def test_signals_endpoint_returns_response_shape() -> None:
@@ -649,7 +681,7 @@ def test_sales_query_blocks_sensitive_fields_for_store_role() -> None:
     # store_owner 역할은 순이익·원가 질의가 차단됨
     response = client.post(
         "/api/sales/query",
-        json={"prompt": "전 매장 순이익과 원가율을 알려줘"},
+        json={"prompt": "전 매장 순이익과 원가율을 알려줘", "store_id": "POC_001"},
         headers={"X-User-Role": "store_owner"},
     )
     assert response.status_code == 200
@@ -661,7 +693,7 @@ def test_sales_query_blocks_sensitive_fields_for_store_role() -> None:
 def test_sales_query_not_blocked_for_general_question() -> None:
     response = client.post(
         "/api/sales/query",
-        json={"prompt": "이번 주 배달 건수 현황을 알려줘"},
+        json={"prompt": "이번 주 배달 건수 현황을 알려줘", "store_id": "POC_001"},
     )
     assert response.status_code == 200
     payload = response.json()

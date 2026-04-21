@@ -85,7 +85,83 @@
         "../resource/04. POC 대상 데이터_제공데이터/02. 매출/02. 일자별 시간대별 캠페인 매출 데이터/일자별+시간대별+캠페인+매출.xlsx"
       ],
       "columns": [
-        "masked_stor_cd","masked_stor_nm","cpi_cd","cpi_nm","bill_cnt","qty_00","qty_01","qty_02","qty_03","qty_04","qty_05","qty_06","qty_07","qty_08","qty_09","qty_10","qty_11","qty_12","qty_13","qty_14","qty_15","qty_16","qty_17","qty_18","qty_19","qty_20","qty_21","qty_22","qty_23","dc_amt_00","dc_amt_01","dc_amt_02","dc_amt_03","dc_amt_04","dc_amt_05","dc_amt_06","dc_amt_07","dc_amt_08","dc_amt_09","dc_amt_10","dc_amt_11","dc_amt_12","dc_amt_13","dc_amt_14","dc_amt_15","dc_amt_16","dc_amt_17","dc_amt_18","dc_amt_19","dc_amt_20","dc_amt_21","dc_amt_22","dc_amt_23","act_amt_00","act_amt_01","act_amt_02","act_amt_03","act_amt_04","act_amt_05","act_amt_06","act_amt_07","act_amt_08","act_amt_09","act_amt_10","act_amt_11","act_amt_12","act_amt_13","act_amt_14","act_amt_15","act_amt_16","act_amt_17","act_amt_18","act_amt_19","act_amt_20","act_amt_21","act_amt_22","act_amt_23"
+        "masked_stor_cd",
+        "masked_stor_nm",
+        "cpi_cd",
+        "cpi_nm",
+        "bill_cnt",
+        "qty_00",
+        "qty_01",
+        "qty_02",
+        "qty_03",
+        "qty_04",
+        "qty_05",
+        "qty_06",
+        "qty_07",
+        "qty_08",
+        "qty_09",
+        "qty_10",
+        "qty_11",
+        "qty_12",
+        "qty_13",
+        "qty_14",
+        "qty_15",
+        "qty_16",
+        "qty_17",
+        "qty_18",
+        "qty_19",
+        "qty_20",
+        "qty_21",
+        "qty_22",
+        "qty_23",
+        "dc_amt_00",
+        "dc_amt_01",
+        "dc_amt_02",
+        "dc_amt_03",
+        "dc_amt_04",
+        "dc_amt_05",
+        "dc_amt_06",
+        "dc_amt_07",
+        "dc_amt_08",
+        "dc_amt_09",
+        "dc_amt_10",
+        "dc_amt_11",
+        "dc_amt_12",
+        "dc_amt_13",
+        "dc_amt_14",
+        "dc_amt_15",
+        "dc_amt_16",
+        "dc_amt_17",
+        "dc_amt_18",
+        "dc_amt_19",
+        "dc_amt_20",
+        "dc_amt_21",
+        "dc_amt_22",
+        "dc_amt_23",
+        "act_amt_00",
+        "act_amt_01",
+        "act_amt_02",
+        "act_amt_03",
+        "act_amt_04",
+        "act_amt_05",
+        "act_amt_06",
+        "act_amt_07",
+        "act_amt_08",
+        "act_amt_09",
+        "act_amt_10",
+        "act_amt_11",
+        "act_amt_12",
+        "act_amt_13",
+        "act_amt_14",
+        "act_amt_15",
+        "act_amt_16",
+        "act_amt_17",
+        "act_amt_18",
+        "act_amt_19",
+        "act_amt_20",
+        "act_amt_21",
+        "act_amt_22",
+        "act_amt_23"
       ]
     },
     {
@@ -96,7 +172,27 @@
         "../resource/04. POC 대상 데이터_제공데이터/02. 매출/03. 일자별 결제 수단별 매출 데이터/일자별+결제+수단별+매출.xlsx"
       ],
       "columns": [
-        "masked_stor_cd","masked_stor_nm","pay_way_cd_nm","pay_dtl_cd_nm","sale_dt","pay_way_cd","pay_dtl_cd","pay_amt","rec_amt","change_amt","rtn_pay_amt","rtn_rec_amt","rtn_change","etc_profit_amt","rtn_etc_profit_amt","cash_exchng_cpn","rtn_cash_exchng_cpn","reg_user_id","reg_date","upd_user_id","upd_date"
+        "masked_stor_cd",
+        "masked_stor_nm",
+        "pay_way_cd_nm",
+        "pay_dtl_cd_nm",
+        "sale_dt",
+        "pay_way_cd",
+        "pay_dtl_cd",
+        "pay_amt",
+        "rec_amt",
+        "change_amt",
+        "rtn_pay_amt",
+        "rtn_rec_amt",
+        "rtn_change",
+        "etc_profit_amt",
+        "rtn_etc_profit_amt",
+        "cash_exchng_cpn",
+        "rtn_cash_exchng_cpn",
+        "reg_user_id",
+        "reg_date",
+        "upd_user_id",
+        "upd_date"
       ]
     },
     {
@@ -107,7 +203,31 @@
         "../resource/04. POC 대상 데이터_제공데이터/02. 매출/04. 일자별 상품별 매출/일자별+상품별+매출.xlsx"
       ],
       "columns": [
-        "masked_stor_cd","masked_stor_nm","item_nm","sale_dt","item_cd","item_tax_div","sale_qty","sale_amt","rtn_qty","rtn_amt","dc_amt","enuri_amt","vat_amt","actual_sale_amt","net_sale_amt","take_in_amt","take_in_vat_amt","take_out_amt","take_out_vat_amt","svc_fee_amt","svc_fee_vat_amt","reg_user_id","reg_date","upd_user_id","upd_date"
+        "masked_stor_cd",
+        "masked_stor_nm",
+        "item_nm",
+        "sale_dt",
+        "item_cd",
+        "item_tax_div",
+        "sale_qty",
+        "sale_amt",
+        "rtn_qty",
+        "rtn_amt",
+        "dc_amt",
+        "enuri_amt",
+        "vat_amt",
+        "actual_sale_amt",
+        "net_sale_amt",
+        "take_in_amt",
+        "take_in_vat_amt",
+        "take_out_amt",
+        "take_out_vat_amt",
+        "svc_fee_amt",
+        "svc_fee_vat_amt",
+        "reg_user_id",
+        "reg_date",
+        "upd_user_id",
+        "upd_date"
       ]
     },
     {
@@ -119,7 +239,16 @@
         "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+온라인.xlsx"
       ],
       "columns": [
-        "masked_stor_cd","masked_stor_nm","sale_dt","tmzon_div","ho_chnl_cd","sales_org_nm","ho_chnl_div","ho_chnl_nm","sale_amt","ord_cnt"
+        "masked_stor_cd",
+        "masked_stor_nm",
+        "sale_dt",
+        "tmzon_div",
+        "ho_chnl_cd",
+        "sales_org_nm",
+        "ho_chnl_div",
+        "ho_chnl_nm",
+        "sale_amt",
+        "ord_cnt"
       ]
     },
     {
@@ -596,6 +725,109 @@
       "table": "raw_workbook_rows",
       "paths": [
         "../resource/04. POC 대상 데이터_제공데이터/08. 통신사 제휴 할인 마스터/통신사+제휴+할인마스터.xlsx"
+      ]
+    },
+    {
+      "name": "stock_rate",
+      "loader": "xlsx",
+      "table": "raw_stock_rate",
+      "sheet": "Sheet1",
+      "skip_rows": 0,
+      "paths": [
+        "../resource/05. 재고 및 품절/재고율.xlsx"
+      ],
+      "columns": [
+        "STOR_CD",
+        "MASKED_STOR_CD",
+        "MASKED_STOR_NM",
+        "PRC_DT",
+        "ITEM_CD",
+        "ITEM_NM",
+        "ORD_AVG",
+        "SAL_AVG",
+        "STK_AVG",
+        "STK_RT"
+      ]
+    },
+    {
+      "name": "stockout_time_ck",
+      "loader": "xlsx",
+      "table": "raw_stockout_time",
+      "sheet": "Sheet1",
+      "skip_rows": 0,
+      "paths": [
+        "../resource/05. 재고 및 품절/품절시간_CK.xlsx"
+      ],
+      "columns": [
+        "STOR_CD",
+        "MASKED_STOR_CD",
+        "MASKED_STOR_NM",
+        "PRC_DT",
+        "ITEM_CD",
+        "ITEM_NM",
+        "STOR_CNT",
+        "RANKING_MAIN",
+        "O_RANKING1",
+        "O_RANKING3",
+        "ORD_AVG",
+        "SAL_AVG",
+        "STK_AVG",
+        "STK_RT",
+        "SOLD_OUT_TM"
+      ]
+    },
+    {
+      "name": "stockout_time_jbod",
+      "loader": "xlsx",
+      "table": "raw_stockout_time",
+      "sheet": "Sheet1",
+      "skip_rows": 0,
+      "paths": [
+        "../resource/05. 재고 및 품절/품절시간_JBOD.xlsx"
+      ],
+      "columns": [
+        "STOR_CD",
+        "MASKED_STOR_CD",
+        "MASKED_STOR_NM",
+        "PRC_DT",
+        "ITEM_CD",
+        "ITEM_NM",
+        "STOR_CNT",
+        "RANKING_MAIN",
+        "O_RANKING1",
+        "O_RANKING3",
+        "ORD_AVG",
+        "SAL_AVG",
+        "STK_AVG",
+        "STK_RT",
+        "SOLD_OUT_TM"
+      ]
+    },
+    {
+      "name": "stockout_time_etc",
+      "loader": "xlsx",
+      "table": "raw_stockout_time",
+      "sheet": "Sheet1",
+      "skip_rows": 0,
+      "paths": [
+        "../resource/05. 재고 및 품절/품절시간_기타.xlsx"
+      ],
+      "columns": [
+        "STOR_CD",
+        "MASKED_STOR_CD",
+        "MASKED_STOR_NM",
+        "PRC_DT",
+        "ITEM_CD",
+        "ITEM_NM",
+        "STOR_CNT",
+        "RANKING_MAIN",
+        "O_RANKING1",
+        "O_RANKING3",
+        "ORD_AVG",
+        "SAL_AVG",
+        "STK_AVG",
+        "STK_RT",
+        "SOLD_OUT_TM"
       ]
     }
   ]
