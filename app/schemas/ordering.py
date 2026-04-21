@@ -25,13 +25,22 @@ class OrderOption(BaseModel):
     items: list[OrderingOptionItemLine]
 
 
+class OrderingWeather(BaseModel):
+    region: str
+    forecast_date: str
+    weather_type: str
+    max_temperature_c: int | None = None
+    min_temperature_c: int | None = None
+    precipitation_probability: int | None = None
+
+
 class OrderingOptionsResponse(BaseModel):
     deadline_minutes: int
     deadline_at: str | None = None
     notification_entry: bool = False
     purpose_text: str = "주문 누락을 방지하고 최적 수량을 선택하세요."
     caution_text: str = "최종 주문 결정은 점주 권한입니다. 추천 옵션은 보조 자료로만 활용해주세요."
-    weather_summary: str | None = None
+    weather: OrderingWeather | None = None
     trend_summary: str | None = None
     business_date: str | None = None
     options: list[OrderOption]

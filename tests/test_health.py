@@ -55,6 +55,10 @@ def test_ordering_options() -> None:
     payload = response.json()
     assert payload["notification_entry"] is True
     assert isinstance(payload["options"], list)
+    if payload["weather"] is not None:
+        assert "region" in payload["weather"]
+        assert "forecast_date" in payload["weather"]
+        assert "weather_type" in payload["weather"]
 
 
 def test_ordering_context() -> None:

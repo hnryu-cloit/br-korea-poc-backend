@@ -138,7 +138,7 @@ class OrderingRepository:
             return "서울"
         return "서울"
 
-    async def get_weather_forecast_summary(self, store_id: str | None = None) -> str | None:
+    async def get_weather_forecast(self, store_id: str | None = None) -> dict[str, object] | None:
         sido = self._resolve_store_sido(store_id=store_id)
         latitude, longitude = _SIDO_COORDINATES.get(sido, _DEFAULT_WEATHER_COORD)
         try:
@@ -163,10 +163,14 @@ class OrderingRepository:
                 if not date:
                     return None
                 weather_label = _WEATHER_CODE_LABELS.get(int(weather_code), "날씨")
-                max_text = "-" if max_temp is None else f"{int(round(float(max_temp)))}도"
-                min_text = "-" if min_temp is None else f"{int(round(float(min_temp)))}도"
-                rain_text = "-" if rain_prob is None else f"{int(round(float(rain_prob)))}%"
-                return f"{sido} {date} 예보 · {weather_label}, 최고 {max_text} / 최저 {min_text}, 강수확률 {rain_text}"
+                return {
+                    "region": sido,
+                    "forecast_date": str(date),
+                    "weather_type": weather_label,
+                    "max_temperature_c": None if max_temp is None else int(round(float(max_temp))),
+                    "min_temperature_c": None if min_temp is None else int(round(float(min_temp))),
+                    "precipitation_probability": None if rain_prob is None else int(round(float(rain_prob))),
+                }
         except (httpx.HTTPError, ValueError, TypeError):
             return None
 

@@ -15,6 +15,7 @@ from app.schemas.ordering import (
     OrderingHistoryInsightsResponse,
     OrderingHistoryResponse,
     OrderingOptionsResponse,
+    OrderingWeather,
     OrderOption,
     OrderSelectionHistoryItem,
     OrderSelectionHistoryResponse,
@@ -71,6 +72,38 @@ class OrderingService:
     @staticmethod
     def _metric(key: str, value: object) -> dict[str, str]:
         return {"key": key, "value": str(value)}
+
+    @staticmethod
+    def _safe_int(value: object | None) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _normalize_weather_payload(cls, payload: object | None) -> OrderingWeather | None:
+        if not isinstance(payload, dict):
+            return None
+
+        region = cls._safe_str(payload.get("region") or payload.get("sido"))
+        forecast_date = cls._safe_str(payload.get("forecast_date") or payload.get("date"))
+        weather_type = cls._safe_str(payload.get("weather_type") or payload.get("type"))
+
+        if not region or not forecast_date or not weather_type:
+            return None
+
+        return OrderingWeather(
+            region=region,
+            forecast_date=forecast_date,
+            weather_type=weather_type,
+            max_temperature_c=cls._safe_int(payload.get("max_temperature_c") or payload.get("max_temp")),
+            min_temperature_c=cls._safe_int(payload.get("min_temperature_c") or payload.get("min_temp")),
+            precipitation_probability=cls._safe_int(
+                payload.get("precipitation_probability") or payload.get("rain_probability")
+            ),
+        )
 
     def _require_history_store_id(self, store_id: str | None) -> str:
         normalized = (store_id or "").strip()
@@ -147,7 +180,7 @@ class OrderingService:
         deadline_at: str | None = None
         purpose_text = "주문 누락을 방지하고 최적 수량을 선택하세요."
         caution_text = "최종 주문 결정은 점주 권한입니다. 추천 옵션은 보조 자료로만 활용해주세요."
-        weather_summary: str | None = None
+        weather: OrderingWeather | None = None
         trend_summary: str | None = None
 
         if ai_payload:
@@ -158,11 +191,12 @@ class OrderingService:
                 self._safe_str(ai_payload.get("caution_text") or ai_payload.get("guardrail_note"))
                 or caution_text
             )
-            weather_summary = self._safe_str(ai_payload.get("weather_summary"))
+            weather = self._normalize_weather_payload(ai_payload.get("weather"))
             trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
 
-        if not weather_summary:
-            weather_summary = await self.repository.get_weather_forecast_summary(store_id=store_id)
+        if weather is None:
+            weather_payload = await self.repository.get_weather_forecast(store_id=store_id)
+            weather = self._normalize_weather_payload(weather_payload)
 
         if deadline_at is None:
             deadline = await self.get_deadline(store_id=store_id)
@@ -175,7 +209,7 @@ class OrderingService:
             notification_entry=notification_entry,
             purpose_text=purpose_text,
             caution_text=caution_text,
-            weather_summary=weather_summary,
+            weather=weather,
             trend_summary=trend_summary,
             business_date=business_date,
             options=[OrderOption(**o) for o in merged_options],
