@@ -124,7 +124,7 @@ br-korea-poc-backend/
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc` | PostgreSQL 연결 URL |
-| `EXTERNAL_API_KEY` | `stub-key` | 공공데이터포털 API 키 (소진공 SmallShop 실시간 조회용, 우선 사용) |
+| `EXTERNAL_API_KEY` | (빈 값) | 공공데이터포털 API 키 (소진공 SmallShop 실시간 조회용, 우선 사용) |
 | `SBIZ_API_SNS_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `SNS 분석` 인증키 |
 | `SBIZ_API_STARTUP_WEATHER_KEY` | (빈 값) | 소진공 빅데이터 오픈API `창업기상도` 인증키 |
 | `SBIZ_API_HOTPLACE_KEY` | (빈 값) | 소진공 빅데이터 오픈API `핫플레이스` 인증키 |
@@ -136,7 +136,7 @@ br-korea-poc-backend/
 | `SBIZ_API_DELIVERY_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `배달분석` 인증키 |
 | `SBIZ_API_TOUR_FESTIVAL_KEY` | (빈 값) | 소진공 빅데이터 오픈API `관광 축제 정보` 인증키 |
 | `SBIZ_API_SIMPLE_ANALYSIS_KEY` | (빈 값) | 소진공 빅데이터 오픈API `간단분석` 인증키 |
-| `AI_SERVICE_URL` | `http://localhost:6001` | AI 서비스 URL (미설정 시 repository/fallback 계산 사용) |
+| `AI_SERVICE_URL` | `http://localhost:6001` | AI 서비스 URL (미설정 시 repository 경로로 처리) |
 | `AI_SERVICE_TOKEN` | (빈 값) | AI 서비스 인증 토큰 |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:6003` | 허용 Origin (쉼표 구분) |
 | `APP_ENV` | `local` | 실행 환경 |
@@ -149,7 +149,7 @@ br-korea-poc-backend/
 - `store_reports`의 기본 상태는 `실호출 미확인`이며, 실제 호출이 성공한 API만 `연동중`으로 표시합니다.
   - 1순위: `EXTERNAL_API_KEY` (공공데이터포털 SmallShop)
   - 2순위: `SBIZ_API_COMMERCIAL_MAP_KEY` (소진공 상권지도 certKey)
-  - 3순위: `SBIZ_API_STORE_STATUS_KEY` (소진공 업소현황 certKey, `/sbiz/api/bizonSttus/storSttus/search.json` 기반 fallback)
+  - 3순위: `SBIZ_API_STORE_STATUS_KEY` (소진공 업소현황 certKey, `/sbiz/api/bizonSttus/storSttus/search.json` 기반 대체 조회)
 
 ## 실행
 
@@ -293,7 +293,7 @@ mypy .
 
 - `POST /api/sales/query`는 프론트 응답 기준으로 `text`, `evidence`, `actions`, `processing_route`, `blocked` 등을 반환합니다.
 - AI 서비스 응답이 다른 shape여도 `services/ai_client.py`에서 프론트 계약으로 변환합니다.
-- fallback 처리 경로명은 프론트 표시 규칙에 맞춰 `stub_repository`를 사용합니다.
+- repository 처리 경로명은 프론트 표시 규칙에 맞춰 `repository`를 사용합니다.
 
 ### Audit
 
@@ -468,3 +468,14 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 ## Session Update (2026-04-21, Round 2)
 
 - 이번 라운드의 변경은 AI 서비스(`br-korea-poc-ai`)의 오케스트레이션/예외처리/컨텍스트 전달 정비이며, 백엔드 코드 변경은 없습니다.
+
+## Session Update (2026-04-21, Round 3)
+
+- `EXTERNAL_API_KEY` 기본값을 `stub-key`에서 빈 값으로 변경해 실제 인증키 입력 기준으로만 외부 연동이 동작하도록 정리했습니다.
+- 상권 인텔리전스 키 선택 로직에서 `stub-key` 센티넬 분기를 제거하고, 실키 존재 여부만으로 1순위 키를 선택하도록 단순화했습니다.
+- 매출 질의 응답의 repository 처리 경로명을 `stub_repository` → `repository`로 변경해 실데이터 경로명을 명확화했습니다.
+
+## Session Update (2026-04-21, Round 3)
+
+- `AnalyticsRepository.get_metrics()`의 "선택 기간 데이터 없음 시 최근 7일 자동 폴백" 분기를 제거해, 요청 기간 기준으로만 지표를 조회하도록 정리했습니다.
+- 상권/고객 분석 레퍼런스 payload 생성(`_build_reference_market_payload`)에서 연/분기 조건 자동 완화(period fallback) 재조회 로직을 제거했습니다.

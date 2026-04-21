@@ -61,14 +61,6 @@ class AnalyticsRepository:
 
         period = self._resolve_period(date_from=date_from, date_to=date_to)
         resolved_store_id = self._resolve_metrics_store_id(store_id)
-        if period and not self._has_metric_rows_in_period(store_id=resolved_store_id, period=period):
-            logger.info(
-                "analytics metrics period fallback: no rows in selected period (store_id=%s, from=%s, to=%s), fallback to latest 7-day window",
-                resolved_store_id or "ALL",
-                period["recent_from"],
-                period["recent_to"],
-            )
-            period = None
 
         items: list[dict] = []
         try:
@@ -300,58 +292,6 @@ class AnalyticsRepository:
         if not store_id:
             return "", {}
         return "WHERE masked_stor_cd = :store_id", {"store_id": store_id}
-
-    def _has_metric_rows_in_period(
-        self,
-        store_id: str | None,
-        period: dict[str, str],
-    ) -> bool:
-        if not self.engine:
-            return False
-
-        params: dict[str, str] = {
-            "date_from": period["recent_from"],
-            "date_to": period["recent_to"],
-        }
-        store_clause = ""
-        if store_id:
-            params["store_id"] = store_id
-            store_clause = "AND masked_stor_cd = :store_id"
-
-        checks: list[tuple[str, str]] = [
-            (
-                "raw_daily_store_item",
-                f"""
-                SELECT EXISTS(
-                    SELECT 1
-                    FROM raw_daily_store_item
-                    WHERE sale_dt BETWEEN :date_from AND :date_to
-                      {store_clause}
-                )
-                """,
-            ),
-        ]
-        if has_table(self.engine, "raw_daily_store_pay_way"):
-            checks.append(
-                (
-                    "raw_daily_store_pay_way",
-                    f"""
-                    SELECT EXISTS(
-                        SELECT 1
-                        FROM raw_daily_store_pay_way
-                        WHERE sale_dt BETWEEN :date_from AND :date_to
-                          {store_clause}
-                    )
-                    """,
-                )
-            )
-
-        with self.engine.connect() as connection:
-            for _, query in checks:
-                exists = bool(connection.execute(text(query), params).scalar_one())
-                if exists:
-                    return True
-        return False
 
     def _resolve_metrics_store_id(self, store_id: str | None) -> str | None:
         if not store_id:
@@ -1739,17 +1679,6 @@ class AnalyticsRepository:
 
         sales_where = " AND ".join(sales_filters)
         pop_where = " AND ".join(pop_filters)
-        fallback_sales_filters = [
-            condition
-            for condition in sales_filters
-            if condition not in {"base_year = :year", "base_quarter = :quarter"}
-        ]
-        fallback_pop_filters = [
-            condition
-            for condition in pop_filters
-            if condition not in {"base_year = :year", "base_quarter = :quarter"}
-        ]
-        period_fallback_used = False
 
         used_smallshop = False
         with self.engine.connect() as conn:
@@ -1778,51 +1707,7 @@ class AnalyticsRepository:
             category_rows = [row for row in pie_rows if row["category"] in ("제과", "커피")]
             category_total = sum(float(row["sales_amount"] or 0) for row in category_rows)
             if category_total <= 0:
-                if year or scope_quarter:
-                    fallback_sales_where = " AND ".join(fallback_sales_filters)
-                    fallback_sales_params = {
-                        key: value
-                        for key, value in sales_params.items()
-                        if key not in {"year", "quarter"}
-                    }
-                    fallback_pop_where = " AND ".join(fallback_pop_filters)
-                    fallback_pop_params = {
-                        key: value
-                        for key, value in pop_params.items()
-                        if key not in {"year", "quarter"}
-                    }
-                    pie_rows = (
-                        conn.execute(
-                            text(
-                                f"""
-                                SELECT
-                                    CASE
-                                        WHEN service_name LIKE '%제과%' THEN '제과'
-                                        WHEN service_name LIKE '%커피%' OR service_name LIKE '%카페%' THEN '커피'
-                                        ELSE '기타'
-                                    END AS category,
-                                    SUM(COALESCE(monthly_sales_amount, 0)) AS sales_amount
-                                FROM raw_seoul_market_sales
-                                WHERE {fallback_sales_where}
-                                GROUP BY category
-                                """
-                            ),
-                            fallback_sales_params,
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    category_rows = [row for row in pie_rows if row["category"] in ("제과", "커피")]
-                    category_total = sum(float(row["sales_amount"] or 0) for row in category_rows)
-                    if category_total <= 0:
-                        return None
-                    sales_where = fallback_sales_where
-                    pop_where = fallback_pop_where
-                    sales_params = fallback_sales_params
-                    pop_params = fallback_pop_params
-                    period_fallback_used = True
-                else:
-                    return None
+                return None
             category_sales_pie = [
                 {
                     "category": str(row["category"]),
@@ -2165,10 +2050,10 @@ class AnalyticsRepository:
 
             residence_filters = ["total_population IS NOT NULL"]
             residence_params: dict[str, object] = {}
-            if year and not period_fallback_used:
+            if year:
                 residence_filters.append("base_year = :year")
                 residence_params["year"] = year
-            if scope_quarter and not period_fallback_used:
+            if scope_quarter:
                 residence_filters.append("base_quarter = :quarter")
                 residence_params["quarter"] = scope_quarter
             if scope_gu:
@@ -2623,7 +2508,7 @@ class AnalyticsRepository:
     @staticmethod
     def _resolve_smallshop_service_key() -> tuple[str | None, str | None]:
         external_key = unquote((settings.EXTERNAL_API_KEY or "").strip())
-        if external_key and external_key != "stub-key":
+        if external_key:
             return external_key, "EXTERNAL_API_KEY"
 
         sbiz_commercial_map_key = unquote((settings.SBIZ_API_COMMERCIAL_MAP_KEY or "").strip())
