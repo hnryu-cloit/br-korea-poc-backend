@@ -655,7 +655,7 @@ class ProductionService:
                     "label": "보정 로스 수식",
                     "value": f"{round(total_adjusted_loss_amount, 2)}원",
                     "calculation": "adjusted_loss=max((ord_avg_t-sal_avg_t)-max(sal_avg_t+1-ord_avg_t+1,0),0)",
-                    "source_table": "core_stock_rate",
+                    "source_table": "core_stock_rate or raw_inventory_extract",
                 },
                 {
                     "label": "실폐기 수량",
@@ -818,7 +818,7 @@ class ProductionService:
                     "label": "재고율 기반 분류",
                     "value": f"부족 {shortage_count}개 / 과잉 {excess_count}개",
                     "calculation": "stock_rate<0 또는 품절=true: 부족, stock_rate>=0.35: 과잉, 그 외 적정",
-                    "source_table": "core_stock_rate, core_stockout_time",
+                    "source_table": "core_stock_rate/core_stockout_time or raw_inventory_extract/core_hourly_item_sales",
                 },
                 {
                     "label": "가설 유통기한",

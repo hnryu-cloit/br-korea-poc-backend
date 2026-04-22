@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class ProductionRepository(BaseRepository):
+    _BUSINESS_HOURS: tuple[int, ...] = tuple(range(8, 22))
+    _STOCKOUT_ZERO_SALES_WINDOW = 3
+
     @staticmethod
     def _build_history_filters(
         store_id: str | None = None, date_from: str | None = None, date_to: str | None = None
@@ -39,6 +42,640 @@ class ProductionRepository(BaseRepository):
     @staticmethod
     def _safe_non_negative_int(value: object) -> int:
         return max(0, ProductionRepository._safe_int(value))
+
+    @staticmethod
+    def _safe_float(value: object) -> float:
+        if value in (None, ""):
+            return 0.0
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _normalize_tmzon_hour(value: object) -> int | None:
+        text_value = str(value or "").strip()
+        if not text_value:
+            return None
+        digits = "".join(ch for ch in text_value if ch.isdigit())
+        if not digits:
+            return None
+        hour = int(digits)
+        return hour if 0 <= hour <= 23 else None
+
+    @classmethod
+    def _resolve_business_hours(
+        cls,
+        operating_hours: dict[str, int] | None = None,
+    ) -> tuple[int, ...]:
+        if not operating_hours:
+            return cls._BUSINESS_HOURS
+
+        open_hour = cls._normalize_tmzon_hour(operating_hours.get("open_hour"))
+        close_hour = cls._normalize_tmzon_hour(operating_hours.get("close_hour"))
+        if open_hour is None or close_hour is None or close_hour < open_hour:
+            return cls._BUSINESS_HOURS
+
+        return tuple(range(open_hour, close_hour + 1))
+
+    @classmethod
+    def _derive_stock_rate(cls, stock_qty: float, sale_qty: float) -> float:
+        if sale_qty > 0:
+            return round(stock_qty / sale_qty, 4)
+        if stock_qty < 0:
+            return -1.0
+        if stock_qty > 0:
+            return 1.0
+        return 0.0
+
+    @classmethod
+    def _build_inventory_metric_row(cls, row: dict[str, object], dr: int) -> dict[str, object]:
+        item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+        item_nm = str(row.get("item_nm") or item_cd).strip()
+        stock_qty = cls._safe_float(row.get("stock_qty"))
+        sale_qty = cls._safe_float(row.get("sale_qty"))
+        orderable_qty = max(stock_qty + sale_qty, 0.0)
+        return {
+            "masked_stor_cd": row.get("masked_stor_cd"),
+            "prc_dt": row.get("stock_dt"),
+            "item_cd": item_cd,
+            "item_nm": item_nm,
+            "ord_avg": orderable_qty,
+            "sal_avg": sale_qty,
+            "stk_avg": stock_qty,
+            "stk_rt": cls._derive_stock_rate(stock_qty, sale_qty),
+            "dr": dr,
+        }
+
+    @classmethod
+    def _infer_stockout_from_hourly_sales(
+        cls,
+        *,
+        inventory_rows: list[dict[str, object]],
+        hourly_rows: list[dict[str, object]],
+        operating_hours: dict[str, int] | None = None,
+    ) -> dict[str, dict[str, object]]:
+        business_hours = cls._resolve_business_hours(operating_hours)
+        tracked: dict[str, dict[str, object]] = {}
+        for row in inventory_rows:
+            item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_cd:
+                continue
+            tracked[item_cd] = {
+                "item_cd": item_cd,
+                "item_nm": str(row.get("item_nm") or item_cd).strip(),
+                "hourly_qty": {hour: 0.0 for hour in business_hours},
+            }
+
+        for row in hourly_rows:
+            item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_cd:
+                continue
+            bucket = tracked.setdefault(
+                item_cd,
+                {
+                    "item_cd": item_cd,
+                    "item_nm": str(row.get("item_nm") or item_cd).strip(),
+                    "hourly_qty": {hour: 0.0 for hour in business_hours},
+                },
+            )
+            hour = cls._normalize_tmzon_hour(row.get("tmzon_div"))
+            if hour is None or hour not in business_hours:
+                continue
+            hourly_qty = bucket["hourly_qty"]
+            if isinstance(hourly_qty, dict):
+                hourly_qty[hour] = float(hourly_qty.get(hour, 0.0)) + cls._safe_float(
+                    row.get("sale_qty")
+                )
+
+        inferred: dict[str, dict[str, object]] = {}
+        for item_cd, bucket in tracked.items():
+            hourly_qty = bucket.get("hourly_qty")
+            sales_by_hour = hourly_qty if isinstance(hourly_qty, dict) else {}
+            seen_positive_sale = False
+            zero_streak = 0
+            streak_start_hour: int | None = None
+            stockout_hour: int | None = None
+            for hour in business_hours:
+                qty = cls._safe_float(sales_by_hour.get(hour, 0.0))
+                if qty > 0:
+                    seen_positive_sale = True
+                    zero_streak = 0
+                    streak_start_hour = None
+                    continue
+                if not seen_positive_sale:
+                    continue
+                zero_streak += 1
+                if streak_start_hour is None:
+                    streak_start_hour = hour
+                if zero_streak >= cls._STOCKOUT_ZERO_SALES_WINDOW:
+                    stockout_hour = streak_start_hour
+                    break
+
+            inferred[item_cd] = {
+                "item_cd": item_cd,
+                "item_nm": bucket.get("item_nm") or item_cd,
+                "is_stockout": stockout_hour is not None,
+                "stockout_hour": stockout_hour,
+            }
+
+        return inferred
+
+    @staticmethod
+    def _summarize_inventory_rows(rows: list[dict[str, object]]) -> dict[str, object]:
+        shortage_count = 0
+        excess_count = 0
+        normal_count = 0
+        stock_rates: list[float] = []
+        for row in rows:
+            stock_rate = ProductionRepository._safe_float(row.get("stk_rt"))
+            is_stockout = bool(row.get("is_stockout"))
+            stock_rates.append(stock_rate)
+            if stock_rate < 0 or is_stockout:
+                shortage_count += 1
+            elif stock_rate >= 0.35:
+                excess_count += 1
+            else:
+                normal_count += 1
+
+        avg_stock_rate = sum(stock_rates) / len(stock_rates) if stock_rates else None
+        return {
+            "shortage_count": shortage_count,
+            "excess_count": excess_count,
+            "normal_count": normal_count,
+            "avg_stock_rate": avg_stock_rate,
+        }
+
+    def _fetch_recent_inventory_rows(
+        self, store_id: str, rank_limit: int = 2
+    ) -> list[dict[str, object]]:
+        if not self.engine or not has_table(self.engine, "raw_inventory_extract"):
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            WITH latest_dates AS (
+                                SELECT
+                                    stock_dt,
+                                    DENSE_RANK() OVER (ORDER BY stock_dt DESC) AS dr
+                                FROM (
+                                    SELECT DISTINCT stock_dt
+                                    FROM raw_inventory_extract
+                                    WHERE masked_stor_cd = :store_id
+                                      AND stock_dt IS NOT NULL
+                                ) dates
+                            )
+                            SELECT
+                                r.masked_stor_cd,
+                                d.dr,
+                                r.stock_dt,
+                                COALESCE(NULLIF(TRIM(r.item_cd), ''), NULLIF(TRIM(r.item_nm), '')) AS item_cd,
+                                COALESCE(NULLIF(TRIM(r.item_nm), ''), NULLIF(TRIM(r.item_cd), '')) AS item_nm,
+                                SUM(COALESCE(NULLIF(TRIM(r.stock_qty), '')::numeric, 0)) AS stock_qty,
+                                SUM(COALESCE(NULLIF(TRIM(r.sale_qty), '')::numeric, 0)) AS sale_qty
+                            FROM raw_inventory_extract r
+                            JOIN latest_dates d ON r.stock_dt = d.stock_dt
+                            WHERE r.masked_stor_cd = :store_id
+                              AND d.dr <= :rank_limit
+                            GROUP BY
+                                r.masked_stor_cd,
+                                d.dr,
+                                r.stock_dt,
+                                COALESCE(NULLIF(TRIM(r.item_cd), ''), NULLIF(TRIM(r.item_nm), '')),
+                                COALESCE(NULLIF(TRIM(r.item_nm), ''), NULLIF(TRIM(r.item_cd), ''))
+                            ORDER BY item_nm, d.dr
+                            """
+                        ),
+                        {"store_id": store_id, "rank_limit": rank_limit},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(row) for row in rows]
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_recent_inventory_rows query failed: store_id=%s error=%s",
+                store_id,
+                exc,
+            )
+            return []
+
+    def _fetch_latest_hourly_sales_rows(
+        self, store_id: str
+    ) -> tuple[str | None, list[dict[str, object]]]:
+        if not self.engine or not has_table(self.engine, "core_hourly_item_sales"):
+            return None, []
+        try:
+            with self.engine.connect() as conn:
+                latest_sale_dt = conn.execute(
+                    text(
+                        """
+                        SELECT MAX(sale_dt)
+                        FROM core_hourly_item_sales
+                        WHERE masked_stor_cd = :store_id
+                        """
+                    ),
+                    {"store_id": store_id},
+                ).scalar_one_or_none()
+                if not latest_sale_dt:
+                    return None, []
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                COALESCE(NULLIF(TRIM(item_cd), ''), NULLIF(TRIM(item_nm), '')) AS item_cd,
+                                COALESCE(NULLIF(TRIM(item_nm), ''), NULLIF(TRIM(item_cd), '')) AS item_nm,
+                                tmzon_div,
+                                SUM(COALESCE(sale_qty, 0)) AS sale_qty
+                            FROM core_hourly_item_sales
+                            WHERE masked_stor_cd = :store_id
+                              AND sale_dt = :sale_dt
+                            GROUP BY
+                                COALESCE(NULLIF(TRIM(item_cd), ''), NULLIF(TRIM(item_nm), '')),
+                                COALESCE(NULLIF(TRIM(item_nm), ''), NULLIF(TRIM(item_cd), '')),
+                                tmzon_div
+                            """
+                        ),
+                        {"store_id": store_id, "sale_dt": latest_sale_dt},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return str(latest_sale_dt), [dict(row) for row in rows]
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_latest_hourly_sales_rows query failed: store_id=%s error=%s",
+                store_id,
+                exc,
+            )
+            return None, []
+
+    def _fetch_inventory_rows_for_date(
+        self, store_id: str, sale_date: str
+    ) -> list[dict[str, object]]:
+        if not self.engine or not has_table(self.engine, "raw_inventory_extract"):
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                masked_stor_cd,
+                                stock_dt,
+                                COALESCE(NULLIF(TRIM(item_cd), ''), NULLIF(TRIM(item_nm), '')) AS item_cd,
+                                COALESCE(NULLIF(TRIM(item_nm), ''), NULLIF(TRIM(item_cd), '')) AS item_nm,
+                                SUM(COALESCE(NULLIF(TRIM(stock_qty), '')::numeric, 0)) AS stock_qty,
+                                SUM(COALESCE(NULLIF(TRIM(sale_qty), '')::numeric, 0)) AS sale_qty
+                            FROM raw_inventory_extract
+                            WHERE masked_stor_cd = :store_id
+                              AND stock_dt = :sale_date
+                            GROUP BY
+                                masked_stor_cd,
+                                stock_dt,
+                                COALESCE(NULLIF(TRIM(item_cd), ''), NULLIF(TRIM(item_nm), '')),
+                                COALESCE(NULLIF(TRIM(item_nm), ''), NULLIF(TRIM(item_cd), ''))
+                            """
+                        ),
+                        {"store_id": store_id, "sale_date": sale_date},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(row) for row in rows]
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_inventory_rows_for_date query failed: store_id=%s sale_date=%s error=%s",
+                store_id,
+                sale_date,
+                exc,
+            )
+            return []
+
+    def _fetch_hourly_sales_rows_for_date(
+        self, store_id: str, sale_date: str
+    ) -> list[dict[str, object]]:
+        if not self.engine or not has_table(self.engine, "core_hourly_item_sales"):
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                COALESCE(NULLIF(TRIM(item_cd), ''), NULLIF(TRIM(item_nm), '')) AS item_cd,
+                                COALESCE(NULLIF(TRIM(item_nm), ''), NULLIF(TRIM(item_cd), '')) AS item_nm,
+                                tmzon_div,
+                                SUM(COALESCE(sale_qty, 0)) AS sale_qty
+                            FROM core_hourly_item_sales
+                            WHERE masked_stor_cd = :store_id
+                              AND sale_dt = :sale_date
+                            GROUP BY
+                                COALESCE(NULLIF(TRIM(item_cd), ''), NULLIF(TRIM(item_nm), '')),
+                                COALESCE(NULLIF(TRIM(item_nm), ''), NULLIF(TRIM(item_cd), '')),
+                                tmzon_div
+                            """
+                        ),
+                        {"store_id": store_id, "sale_date": sale_date},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(row) for row in rows]
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_hourly_sales_rows_for_date query failed: store_id=%s sale_date=%s error=%s",
+                store_id,
+                sale_date,
+                exc,
+            )
+            return []
+
+    def _fetch_recorded_stockout_rows_for_date(
+        self, store_id: str, sale_date: str
+    ) -> list[dict[str, object]]:
+        if not self.engine or not has_table(self.engine, "core_stockout_time"):
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                item_cd,
+                                item_nm,
+                                is_stockout,
+                                stockout_hour
+                            FROM core_stockout_time
+                            WHERE masked_stor_cd = :store_id
+                              AND prc_dt = :sale_date
+                            """
+                        ),
+                        {"store_id": store_id, "sale_date": sale_date},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(row) for row in rows]
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_recorded_stockout_rows_for_date query failed: store_id=%s sale_date=%s error=%s",
+                store_id,
+                sale_date,
+                exc,
+            )
+            return []
+
+    def _fetch_store_operating_hours(self, store_id: str) -> dict[str, int] | None:
+        if not self.engine or not has_table(self.engine, "store_operating_hours"):
+            return None
+        try:
+            with self.engine.connect() as conn:
+                row = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                OPEN_HOUR AS open_hour,
+                                CLOSE_HOUR AS close_hour
+                            FROM store_operating_hours
+                            WHERE MASKED_STOR_CD = :store_id
+                            """
+                        ),
+                        {"store_id": store_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+            return dict(row) if row else None
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_store_operating_hours query failed: store_id=%s error=%s",
+                store_id,
+                exc,
+            )
+            return None
+
+    def list_stockout_event_targets(
+        self,
+        *,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[tuple[str, str]]:
+        if not self.engine:
+            return []
+
+        targets: set[tuple[str, str]] = set()
+        source_specs: list[tuple[str, str]] = []
+        if has_table(self.engine, "raw_inventory_extract"):
+            source_specs.append(("raw_inventory_extract", "stock_dt"))
+        if has_table(self.engine, "core_hourly_item_sales"):
+            source_specs.append(("core_hourly_item_sales", "sale_dt"))
+        if has_table(self.engine, "core_stockout_time"):
+            source_specs.append(("core_stockout_time", "prc_dt"))
+
+        if not source_specs:
+            return []
+
+        try:
+            with self.engine.connect() as conn:
+                for table_name, date_column in source_specs:
+                    clauses = [f"{date_column} IS NOT NULL"]
+                    params: dict[str, object] = {}
+                    if store_id:
+                        clauses.append("masked_stor_cd = :store_id")
+                        params["store_id"] = store_id
+                    if date_from:
+                        clauses.append(f"{date_column} >= :date_from")
+                        params["date_from"] = date_from
+                    if date_to:
+                        clauses.append(f"{date_column} <= :date_to")
+                        params["date_to"] = date_to
+                    rows = (
+                        conn.execute(
+                            text(
+                                f"""
+                                SELECT DISTINCT masked_stor_cd, {date_column} AS sale_dt
+                                FROM {table_name}
+                                WHERE {' AND '.join(clauses)}
+                                """
+                            ),
+                            params,
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    for row in rows:
+                        scoped_store_id = str(row.get("masked_stor_cd") or "").strip()
+                        scoped_sale_dt = str(row.get("sale_dt") or "").strip()
+                        if scoped_store_id and scoped_sale_dt:
+                            targets.add((scoped_store_id, scoped_sale_dt))
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "list_stockout_event_targets query failed: store_id=%s date_from=%s date_to=%s error=%s",
+                store_id,
+                date_from,
+                date_to,
+                exc,
+            )
+            return []
+
+        return sorted(targets, key=lambda target: (target[0], target[1]))
+
+    def list_inferred_stockout_events(self, store_id: str, sale_date: str) -> list[dict[str, object]]:
+        operating_hours = self._fetch_store_operating_hours(store_id=store_id)
+        business_hours = self._resolve_business_hours(operating_hours)
+        open_hour = business_hours[0] if business_hours else None
+        close_hour = business_hours[-1] if business_hours else None
+
+        recorded_rows = self._fetch_recorded_stockout_rows_for_date(store_id=store_id, sale_date=sale_date)
+        recorded_item_codes: set[str] = set()
+        events: list[dict[str, object]] = []
+
+        for row in recorded_rows:
+            item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_cd:
+                continue
+            recorded_item_codes.add(item_cd)
+            if not bool(row.get("is_stockout")):
+                continue
+            stockout_hour = self._normalize_tmzon_hour(row.get("stockout_hour"))
+            if stockout_hour is None:
+                continue
+            item_nm = str(row.get("item_nm") or item_cd).strip()
+            events.append(
+                {
+                    "masked_stor_cd": store_id,
+                    "sale_dt": sale_date,
+                    "item_cd": item_cd,
+                    "item_nm": item_nm,
+                    "is_stockout": True,
+                    "stockout_hour": stockout_hour,
+                    "rule_type": "raw_stockout_time",
+                    "source_table": "core_stockout_time",
+                    "open_hour": open_hour,
+                    "close_hour": close_hour,
+                    "zero_sales_window": None,
+                    "evidence_start_hour": stockout_hour,
+                    "evidence_end_hour": stockout_hour,
+                }
+            )
+
+        inventory_rows = self._fetch_inventory_rows_for_date(store_id=store_id, sale_date=sale_date)
+        hourly_rows = self._fetch_hourly_sales_rows_for_date(store_id=store_id, sale_date=sale_date)
+        inferred_map = self._infer_stockout_from_hourly_sales(
+            inventory_rows=inventory_rows,
+            hourly_rows=hourly_rows,
+            operating_hours=operating_hours,
+        )
+
+        for item_cd, row in inferred_map.items():
+            if item_cd in recorded_item_codes:
+                continue
+            if not bool(row.get("is_stockout")):
+                continue
+
+            stockout_hour = self._normalize_tmzon_hour(row.get("stockout_hour"))
+            if stockout_hour is None:
+                continue
+
+            item_nm = str(row.get("item_nm") or item_cd).strip()
+            evidence_end_hour = min(
+                stockout_hour + self._STOCKOUT_ZERO_SALES_WINDOW - 1,
+                close_hour if close_hour is not None else stockout_hour + self._STOCKOUT_ZERO_SALES_WINDOW - 1,
+            )
+            events.append(
+                {
+                    "masked_stor_cd": store_id,
+                    "sale_dt": sale_date,
+                    "item_cd": item_cd,
+                    "item_nm": item_nm,
+                    "is_stockout": True,
+                    "stockout_hour": stockout_hour,
+                    "rule_type": "hourly_zero_sales_3h",
+                    "source_table": "core_hourly_item_sales/raw_inventory_extract",
+                    "open_hour": open_hour,
+                    "close_hour": close_hour,
+                    "zero_sales_window": self._STOCKOUT_ZERO_SALES_WINDOW,
+                    "evidence_start_hour": stockout_hour,
+                    "evidence_end_hour": evidence_end_hour,
+                }
+            )
+
+        events.sort(key=lambda event: (str(event["masked_stor_cd"]), str(event["sale_dt"]), int(event["stockout_hour"]), str(event["item_cd"])))
+        return events
+
+    def _get_stock_rate_recent_rows_fallback(self, store_id: str) -> list[dict]:
+        inventory_rows = self._fetch_recent_inventory_rows(store_id=store_id, rank_limit=2)
+        if not inventory_rows:
+            return []
+        return [
+            self._build_inventory_metric_row(row, int(row.get("dr") or 1))
+            for row in inventory_rows
+        ]
+
+    def _get_stockout_latest_rows_fallback(self, store_id: str) -> list[dict]:
+        inventory_rows = [
+            row
+            for row in self._fetch_recent_inventory_rows(store_id=store_id, rank_limit=1)
+            if int(row.get("dr") or 0) == 1
+        ]
+        if not inventory_rows:
+            return []
+        _, hourly_rows = self._fetch_latest_hourly_sales_rows(store_id=store_id)
+        operating_hours = self._fetch_store_operating_hours(store_id=store_id)
+        stockout_map = self._infer_stockout_from_hourly_sales(
+            inventory_rows=inventory_rows,
+            hourly_rows=hourly_rows,
+            operating_hours=operating_hours,
+        )
+        return list(stockout_map.values())
+
+    def _get_inventory_status_fallback(
+        self, store_id: str, page: int, page_size: int
+    ) -> tuple[list[dict], int, dict]:
+        offset = max(0, (page - 1) * page_size)
+        inventory_rows = [
+            row
+            for row in self._fetch_recent_inventory_rows(store_id=store_id, rank_limit=1)
+            if int(row.get("dr") or 0) == 1
+        ]
+        if not inventory_rows:
+            return self._get_inventory_status_fallback(
+                store_id=store_id,
+                page=page,
+                page_size=page_size,
+            )
+
+        _, hourly_rows = self._fetch_latest_hourly_sales_rows(store_id=store_id)
+        operating_hours = self._fetch_store_operating_hours(store_id=store_id)
+        stockout_map = self._infer_stockout_from_hourly_sales(
+            inventory_rows=inventory_rows,
+            hourly_rows=hourly_rows,
+            operating_hours=operating_hours,
+        )
+
+        rows: list[dict[str, object]] = []
+        for row in inventory_rows:
+            metric_row = self._build_inventory_metric_row(row, 1)
+            stockout_row = stockout_map.get(str(metric_row["item_cd"]), {})
+            metric_row["is_stockout"] = bool(
+                stockout_row.get("is_stockout") or self._safe_float(metric_row.get("stk_avg")) < 0
+            )
+            metric_row["stockout_hour"] = stockout_row.get("stockout_hour")
+            rows.append(metric_row)
+
+        rows.sort(key=lambda item: (str(item.get("item_cd") or ""), str(item.get("item_nm") or "")))
+        summary_metrics = self._summarize_inventory_rows(rows)
+        return rows[offset : offset + page_size], len(rows), summary_metrics
 
     @staticmethod
     def _clamp_recommended_qty(current: int, forecast: int, candidate: int) -> int:
@@ -783,10 +1420,13 @@ class ProductionRepository(BaseRepository):
                     .mappings()
                     .all()
                 )
-            return [dict(r) for r in rows]
+            mapped_rows = [dict(r) for r in rows]
+            if mapped_rows:
+                return mapped_rows
+            return self._get_stock_rate_recent_rows_fallback(store_id=store_id)
         except SQLAlchemyError as exc:
             logger.warning("get_stock_rate_recent_rows 쿼리 실패: store_id=%s error=%s", store_id, exc)
-            return []
+            return self._get_stock_rate_recent_rows_fallback(store_id=store_id)
 
     def get_stockout_latest_rows(self, store_id: str) -> list[dict]:
         if not self.engine:
@@ -817,10 +1457,13 @@ class ProductionRepository(BaseRepository):
                     .mappings()
                     .all()
                 )
-            return [dict(r) for r in rows]
+            mapped_rows = [dict(r) for r in rows]
+            if mapped_rows:
+                return mapped_rows
+            return self._get_stockout_latest_rows_fallback(store_id=store_id)
         except SQLAlchemyError as exc:
             logger.warning("get_stockout_latest_rows 쿼리 실패: store_id=%s error=%s", store_id, exc)
-            return []
+            return self._get_stockout_latest_rows_fallback(store_id=store_id)
 
     def get_disuse_and_cost_latest_rows(self, store_id: str) -> list[dict]:
         if not self.engine:
@@ -902,6 +1545,12 @@ class ProductionRepository(BaseRepository):
                     {"store_id": store_id},
                 ).mappings().one()
                 summary_metrics = dict(summary_row)
+                if total_items == 0:
+                    return self._get_inventory_status_fallback(
+                        store_id=store_id,
+                        page=page,
+                        page_size=page_size,
+                    )
 
                 rows = (
                     conn.execute(
@@ -934,7 +1583,11 @@ class ProductionRepository(BaseRepository):
             return [dict(r) for r in rows], total_items, summary_metrics
         except SQLAlchemyError as exc:
             logger.warning("get_inventory_status 쿼리 실패: store_id=%s error=%s", store_id, exc)
-            return [], 0, {}
+            return self._get_inventory_status_fallback(
+                store_id=store_id,
+                page=page,
+                page_size=page_size,
+            )
 
     async def get_registration_summary(
         self,
