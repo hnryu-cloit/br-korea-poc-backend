@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.repositories.notifications_repository import NotificationsRepository
 from app.schemas.notifications import NotificationItem, NotificationListResponse
 from app.services.ordering_service import OrderingService
@@ -22,9 +24,15 @@ class NotificationsService:
     async def list_notifications(self, store_id: str | None = None) -> NotificationListResponse:
         items: list[NotificationItem] = []
 
-        production_alerts = await self.production_service.get_alerts(store_id=store_id)
-        if production_alerts.alerts:
-            alert = production_alerts.alerts[0]
+        production_result, ordering_result, sales_item = await asyncio.gather(
+            self.production_service.get_alerts(store_id=store_id),
+            self.ordering_service.list_deadline_alerts(before_minutes=20, store_id=store_id),
+            self.repository.get_recent_sales_notification(store_id=store_id),
+            return_exceptions=True,
+        )
+
+        if not isinstance(production_result, Exception) and production_result.alerts:
+            alert = production_result.alerts[0]
             items.append(
                 NotificationItem(
                     id=1,
@@ -38,12 +46,8 @@ class NotificationsService:
                 )
             )
 
-        ordering_alerts = await self.ordering_service.list_deadline_alerts(
-            before_minutes=20,
-            store_id=store_id,
-        )
-        if ordering_alerts.alerts:
-            alert = ordering_alerts.alerts[0]
+        if not isinstance(ordering_result, Exception) and ordering_result.alerts:
+            alert = ordering_result.alerts[0]
             items.append(
                 NotificationItem(
                     id=2,
@@ -82,8 +86,7 @@ class NotificationsService:
             except Exception:
                 pass  # AI 서비스 연결 실패 시 무시
 
-        sales_item = await self.repository.get_recent_sales_notification(store_id=store_id)
-        if sales_item is not None:
+        if not isinstance(sales_item, Exception) and sales_item is not None:
             items.append(NotificationItem(**sales_item))
 
         unread_count = sum(1 for item in items if item.unread)
