@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -41,15 +42,18 @@ class HomeService:
         self.prompt_settings_service = prompt_settings_service
 
     async def get_overview(self, payload: HomeOverviewRequest) -> HomeOverviewResponse:
-        production = await self.production_service.get_overview(store_id=payload.store_id)
-        ordering_summary = await self.ordering_service.get_selection_summary(
-            store_id=payload.store_id,
-            date_from=payload.business_date,
-            date_to=payload.business_date,
-        )
-        ordering_options = await self.ordering_service.list_options(
-            notification_entry=False,
-            store_id=payload.store_id,
+        production, ordering_summary, ordering_options = await asyncio.gather(
+            self.production_service.get_overview(store_id=payload.store_id),
+            self.ordering_service.get_selection_summary(
+                store_id=payload.store_id,
+                date_from=payload.business_date,
+                date_to=payload.business_date,
+            ),
+            self.ordering_service.list_options(
+                notification_entry=False,
+                store_id=payload.store_id,
+                skip_ai=True,
+            ),
         )
         sales_status = self._build_sales_status(
             ordering_summary=ordering_summary, production_danger_count=production.danger_count
@@ -128,19 +132,35 @@ class HomeService:
         ]
 
     async def get_schedule(self, store_id: str | None = None) -> ScheduleResponse:
-        try:
-            events = await self.repository.list_schedule_events(
-                store_id=store_id, today=get_now().date()
-            )
-        except SQLAlchemyError as exc:
-            logger.warning("home schedule 조회 실패(store_id=%s): %s", store_id, exc)
+        date_str = get_now().strftime("%Y-%m-%d")
+
+        events_result, production_result, ordering_result = await asyncio.gather(
+            self.repository.list_schedule_events(store_id=store_id, today=get_now().date()),
+            self.production_service.get_overview(store_id=store_id),
+            self.ordering_service.get_selection_summary(
+                store_id=store_id, date_from=date_str, date_to=date_str
+            ),
+            return_exceptions=True,
+        )
+
+        if isinstance(events_result, Exception):
+            logger.warning("home schedule 이벤트 조회 실패(store_id=%s): %s", store_id, events_result)
             events = []
+        else:
+            events = events_result
+
         notices = self._build_schedule_notices(events)
+
         try:
-            todos = await self._build_schedule_todos(store_id=store_id, events=events)
+            todos = self._build_schedule_todos(
+                production=None if isinstance(production_result, Exception) else production_result,
+                ordering_summary=None if isinstance(ordering_result, Exception) else ordering_result,
+                events=events,
+            )
         except Exception as exc:
             logger.warning("home schedule todo 조회 실패(store_id=%s): %s", store_id, exc)
             todos = []
+
         source = "live:campaign+telecom" if events else "live:empty"
         return ScheduleResponse(
             updated_at=get_now().strftime("%Y-%m-%d %H:%M"),
@@ -180,18 +200,15 @@ class HomeService:
             )
         return notices
 
-    async def _build_schedule_todos(
-        self, store_id: str | None, events: list[dict[str, str]]
+    def _build_schedule_todos(
+        self,
+        production: object | None,
+        ordering_summary: object | None,
+        events: list[dict[str, str]],
     ) -> list[ScheduleTodoItem]:
         todos: list[ScheduleTodoItem] = []
-        production = await self.production_service.get_overview(store_id=store_id)
-        ordering_summary = await self.ordering_service.get_selection_summary(
-            store_id=store_id,
-            date_from=get_now().strftime("%Y-%m-%d"),
-            date_to=get_now().strftime("%Y-%m-%d"),
-        )
 
-        if production.danger_count > 0:
+        if production is not None and production.danger_count > 0:
             todos.append(
                 ScheduleTodoItem(
                     id="todo-production-risk",
@@ -199,7 +216,7 @@ class HomeService:
                     recurring=True,
                 )
             )
-        if not ordering_summary.recommended_selected:
+        if ordering_summary is not None and not ordering_summary.recommended_selected:
             todos.append(
                 ScheduleTodoItem(
                     id="todo-ordering-review",

@@ -190,10 +190,11 @@ class OrderingService:
         self,
         notification_entry: bool = False,
         store_id: str | None = None,
+        skip_ai: bool = False,
     ) -> OrderingOptionsResponse:
         business_date = self._today_kst()
         options = await self.repository.list_options(store_id=store_id)
-        ai_payload = await self._get_ai_ordering_recommendation(store_id=store_id, current_date=business_date)
+        ai_payload = None if skip_ai else await self._get_ai_ordering_recommendation(store_id=store_id, current_date=business_date)
         ai_options = (ai_payload or {}).get("options") or []
         merged_options = [
             self._merge_option_payloads(option, ai_options[index] if index < len(ai_options) else None, index=index)
