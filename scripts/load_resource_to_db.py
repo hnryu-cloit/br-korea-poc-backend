@@ -4,7 +4,6 @@ print("SCRIPT STARTING")
 import csv
 import json
 import sys
-from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,8 @@ from app.infrastructure.db.connection import get_database_engine, get_safe_datab
 # Migration은 raw/운영 테이블을 만들고, 이 스크립트는 manifest 정의대로
 # resource 파일을 해당 테이블에 적재한다.
 
+BATCH_SIZE = 1000
+
 
 def normalize_cell(value: Any) -> str | None:
     if value is None:
@@ -32,28 +33,37 @@ def normalize_cell(value: Any) -> str | None:
     return str(value).strip()
 
 
-def read_csv_rows(path: Path) -> list[list[str | None]]:
+def open_csv_reader(path: Path) -> tuple[Any, csv.reader[Any]]:
     for encoding in ("utf-8-sig", "cp949", "euc-kr", "utf-8"):
         try:
-            with path.open("r", encoding=encoding, newline="", errors="replace") as file:
-                reader = csv.reader(file)
-                return [[normalize_cell(cell) for cell in row] for row in reader]
+            file = path.open("r", encoding=encoding, newline="", errors="replace")
+            reader = csv.reader(file)
+            next(iter(reader), None)
+            file.seek(0)
+            return file, csv.reader(file)
         except UnicodeDecodeError:
+            file.close()
             continue
     raise UnicodeDecodeError("csv", b"", 0, 1, f"Unable to decode {path}")
 
 
-def iter_xlsx_rows(path: Path, sheet_name: str | None = None) -> tuple[str, list[list[str | None]]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    try:
-        target_sheet = sheet_name or workbook.sheetnames[0]
-        worksheet = workbook[target_sheet]
-        rows = [
-            [normalize_cell(cell) for cell in row] for row in worksheet.iter_rows(values_only=True)
-        ]
-        return target_sheet, rows
-    finally:
-        workbook.close()
+def flush_tabular_batch(
+    connection: Any,
+    *,
+    table: str,
+    columns: list[str],
+    payload_rows: list[dict[str, str | None]],
+) -> int:
+    if not payload_rows:
+        return 0
+
+    all_columns = columns + ["source_file", "source_sheet", "loaded_at"]
+    sql = text(
+        f'INSERT INTO "{table}" ({", ".join(all_columns)}) '
+        f'VALUES ({", ".join(f":{column}" for column in all_columns)})'
+    )
+    connection.execute(sql, payload_rows)
+    return len(payload_rows)
 
 
 def insert_tabular_rows(
@@ -61,18 +71,13 @@ def insert_tabular_rows(
     *,
     table: str,
     columns: list[str],
-    rows: Iterable[list[str | None]],
+    rows: Any,
     source_file: str,
     source_sheet: str | None,
     loaded_at: str,
 ) -> int:
-    all_columns = columns + ["source_file", "source_sheet", "loaded_at"]
-    sql = text(
-        f'INSERT INTO "{table}" ({", ".join(all_columns)}) '
-        f'VALUES ({", ".join(f":{column}" for column in all_columns)})'
-    )
-
-    payload_rows = []
+    row_count = 0
+    payload_rows: list[dict[str, str | None]] = []
     for row in rows:
         if not any(value not in (None, "") for value in row):
             continue
@@ -85,20 +90,46 @@ def insert_tabular_rows(
         payload["loaded_at"] = loaded_at
         payload_rows.append(payload)
 
-    if payload_rows:
-        connection.execute(sql, payload_rows)
+        if len(payload_rows) >= BATCH_SIZE:
+            row_count += flush_tabular_batch(
+                connection, table=table, columns=columns, payload_rows=payload_rows
+            )
+            payload_rows = []
+
+    row_count += flush_tabular_batch(connection, table=table, columns=columns, payload_rows=payload_rows)
+    return row_count
+
+
+def flush_workbook_rows_batch(connection: Any, payload_rows: list[dict[str, Any]]) -> int:
+    if not payload_rows:
+        return 0
+
+    connection.execute(
+        text(
+            """
+            INSERT INTO raw_workbook_rows(
+                workbook_name, sheet_name, row_index, row_values_json, source_file, loaded_at
+            ) VALUES (
+                :workbook_name, :sheet_name, :row_index, :row_values_json, :source_file, :loaded_at
+            )
+            """
+        ),
+        payload_rows,
+    )
     return len(payload_rows)
 
 
 def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
     backend_root = settings.backend_root
-    loaded_at = datetime.now().isoformat(timespec="seconds")
+    print(f"Loading dataset {dataset['name']} into {dataset['table']}...")
 
     # dataset은 db/manifests/resource_load_manifest.json의 단일 항목이다.
     for relative_path in dataset["paths"]:
+        loaded_at = datetime.now().isoformat(timespec="seconds")
         source_path = (backend_root / relative_path).resolve()
         source_file = str(source_path.relative_to(settings.project_root))
         table = dataset["table"]
+        print(f"  -> ingesting {source_file}")
         connection.execute(
             text(f'DELETE FROM "{table}" WHERE source_file = :source_file'),
             {"source_file": source_file},
@@ -111,42 +142,49 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
 
         try:
             if dataset["loader"] == "csv":
-                rows = read_csv_rows(source_path)
                 source_sheet = "csv"
-                row_count = insert_tabular_rows(
-                    connection,
-                    table=table,
-                    columns=dataset["columns"],
-                    rows=rows[1:],
-                    source_file=source_file,
-                    source_sheet=source_sheet,
-                    loaded_at=loaded_at,
-                )
+                file, reader = open_csv_reader(source_path)
+                try:
+                    next(reader, None)
+                    row_count = insert_tabular_rows(
+                        connection,
+                        table=table,
+                        columns=dataset["columns"],
+                        rows=([normalize_cell(cell) for cell in row] for row in reader),
+                        source_file=source_file,
+                        source_sheet=source_sheet,
+                        loaded_at=loaded_at,
+                    )
+                finally:
+                    file.close()
             elif dataset["loader"] == "xlsx":
-                source_sheet, rows = iter_xlsx_rows(
-                    source_path, sheet_name=dataset.get("sheet") or dataset.get("sheet_name")
-                )
-                row_count = insert_tabular_rows(
-                    connection,
-                    table=table,
-                    columns=dataset["columns"],
-                    rows=rows[1:],
-                    source_file=source_file,
-                    source_sheet=source_sheet,
-                    loaded_at=loaded_at,
-                )
+                workbook = load_workbook(source_path, read_only=True, data_only=True)
+                try:
+                    source_sheet = dataset.get("sheet") or dataset.get("sheet_name") or workbook.sheetnames[0]
+                    worksheet = workbook[source_sheet]
+                    row_iter = worksheet.iter_rows(values_only=True)
+                    next(row_iter, None)
+                    row_count = insert_tabular_rows(
+                        connection,
+                        table=table,
+                        columns=dataset["columns"],
+                        rows=([normalize_cell(cell) for cell in row] for row in row_iter),
+                        source_file=source_file,
+                        source_sheet=source_sheet,
+                        loaded_at=loaded_at,
+                    )
+                finally:
+                    workbook.close()
             elif dataset["loader"] == "workbook_rows":
                 workbook = load_workbook(source_path, read_only=True, data_only=True)
                 try:
+                    connection.execute(
+                        text("DELETE FROM raw_workbook_rows WHERE source_file = :source_file"),
+                        {"source_file": source_file},
+                    )
                     for sheet in workbook.sheetnames:
-                        connection.execute(
-                            text(
-                                "DELETE FROM raw_workbook_rows WHERE source_file = :source_file AND sheet_name = :sheet_name"
-                            ),
-                            {"source_file": source_file, "sheet_name": sheet},
-                        )
                         worksheet = workbook[sheet]
-                        payload_rows = []
+                        payload_rows: list[dict[str, Any]] = []
                         for index, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
                             normalized = [normalize_cell(cell) for cell in row]
                             if not any(value not in (None, "") for value in normalized):
@@ -161,20 +199,12 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                                     "loaded_at": loaded_at,
                                 }
                             )
-                            row_count += 1
-                        if payload_rows:
-                            connection.execute(
-                                text(
-                                    """
-                                    INSERT INTO raw_workbook_rows(
-                                        workbook_name, sheet_name, row_index, row_values_json, source_file, loaded_at
-                                    ) VALUES (
-                                        :workbook_name, :sheet_name, :row_index, :row_values_json, :source_file, :loaded_at
-                                    )
-                                    """
-                                ),
-                                payload_rows,
-                            )
+
+                            if len(payload_rows) >= BATCH_SIZE:
+                                row_count += flush_workbook_rows_batch(connection, payload_rows)
+                                payload_rows = []
+
+                        row_count += flush_workbook_rows_batch(connection, payload_rows)
                 finally:
                     workbook.close()
                 source_sheet = "*"
@@ -184,6 +214,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
             status = "failed"
             message = str(exc)
 
+        print(f"  <- {status} {source_file} ({row_count} rows)")
         connection.execute(
             text(
                 """
@@ -218,9 +249,8 @@ def main() -> None:
             "PostgreSQL driver is not installed. Install psycopg before loading resource data."
         )
 
-    print("Beginning transaction...")
+    print("Creating ingestion run...")
     with engine.begin() as connection:
-        print("Transaction started. Inserting ingestion_run...")
         run_id = connection.execute(
             text(
                 """
@@ -236,9 +266,12 @@ def main() -> None:
             },
         ).scalar_one()
 
-        try:
-            for dataset in manifest["datasets"]:
+    try:
+        for dataset in manifest["datasets"]:
+            print(f"Starting transaction for dataset {dataset['name']}...")
+            with engine.begin() as connection:
                 load_dataset(connection, dataset, run_id)
+        with engine.begin() as connection:
             connection.execute(
                 text(
                     """
@@ -254,7 +287,8 @@ def main() -> None:
                     "run_id": run_id,
                 },
             )
-        except Exception as exc:
+    except Exception as exc:
+        with engine.begin() as connection:
             connection.execute(
                 text(
                     """
@@ -270,7 +304,7 @@ def main() -> None:
                     "run_id": run_id,
                 },
             )
-            raise
+        raise
 
     print(f"Loaded resource data into {get_safe_database_url()}")
 

@@ -39,15 +39,15 @@
     },
     {
       "name": "daily_store_item_tmzon",
-      "loader": "xlsx",
+      "loader": "csv",
       "table": "raw_daily_store_item_tmzon",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_01.xlsx",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_02.xlsx",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_03.xlsx",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_04.xlsx",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_05.xlsx",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_06.xlsx"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_01.csv",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_02.csv",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_03.csv",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_04.csv",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_05.csv",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/01. 일자별 시간대별 상품별 매출 데이터/일자별+시간대별+상품별+매출_06.csv"
       ],
       "columns": [
         "masked_stor_cd",
@@ -166,10 +166,10 @@
     },
     {
       "name": "daily_store_pay_way",
-      "loader": "xlsx",
+      "loader": "csv",
       "table": "raw_daily_store_pay_way",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/03. 일자별 결제 수단별 매출 데이터/일자별+결제+수단별+매출.xlsx"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/03. 일자별 결제 수단별 매출 데이터/일자별+결제+수단별+매출.csv"
       ],
       "columns": [
         "masked_stor_cd",
@@ -197,10 +197,10 @@
     },
     {
       "name": "daily_store_item",
-      "loader": "xlsx",
+      "loader": "csv",
       "table": "raw_daily_store_item",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/04. 일자별 상품별 매출/일자별+상품별+매출.xlsx"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/04. 일자별 상품별 매출/일자별+상품별+매출.csv"
       ],
       "columns": [
         "masked_stor_cd",
@@ -232,11 +232,11 @@
     },
     {
       "name": "daily_store_online",
-      "loader": "xlsx",
+      "loader": "csv",
       "table": "raw_daily_store_online",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+오프라인.xlsx",
-        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+온라인.xlsx"
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+오프라인.csv",
+        "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+온라인.csv"
       ],
       "columns": [
         "masked_stor_cd",
@@ -253,11 +253,11 @@
     },
     {
       "name": "production_extract",
-      "loader": "xlsx",
+      "loader": "csv",
       "table": "raw_production_extract",
       "sheet": "Sheet1",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/04. 생산/생산 데이터 추출.xlsx"
+        "../resource/04. POC 대상 데이터_제공데이터/04. 생산/생산 데이터 추출.csv"
       ],
       "columns": [
         "MASKED_STOR_CD",
@@ -329,11 +329,11 @@
     },
     {
       "name": "inventory_extract",
-      "loader": "xlsx",
+      "loader": "csv",
       "table": "raw_inventory_extract",
       "sheet": "Sheet1",
       "paths": [
-        "../resource/04. POC 대상 데이터_제공데이터/06. 재고/재고+데이터+추출.xlsx"
+        "../resource/04. POC 대상 데이터_제공데이터/06. 재고/재고+데이터+추출.csv"
       ],
       "columns": [
         "MASKED_STOR_CD",
