@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from app.schemas.explainability import ExplainabilityPayload
 
 class ProductionItem(BaseModel):
     sku_id: str
@@ -40,6 +41,7 @@ class ProductionOverviewResponse(BaseModel):
     production_lead_time_minutes: int
     danger_count: int
     items: list[ProductionItem]
+    explainability: ExplainabilityPayload | None = None
 
 
 class ProductionSkuDecision(BaseModel):
@@ -129,6 +131,7 @@ class ProductionAlertsResponse(BaseModel):
     generated_at: str
     lead_time_minutes: int
     alerts: list[ProductionAlertItem]
+    explainability: ExplainabilityPayload | None = None
 
 
 class ProductionRegistrationRequest(BaseModel):
@@ -258,6 +261,7 @@ class WasteSummaryResponse(BaseModel):
     highlights: list[dict[str, str | float | int]]
     actions: list[str]
     evidence: dict[str, Any]
+    explainability: ExplainabilityPayload | None = None
 
 
 class InventoryStatusItem(BaseModel):
@@ -282,3 +286,4 @@ class InventoryStatusResponse(BaseModel):
     evidence: dict[str, Any]
     items: list[InventoryStatusItem]
     pagination: Pagination
+    explainability: ExplainabilityPayload | None = None

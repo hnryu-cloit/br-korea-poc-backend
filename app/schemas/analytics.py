@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.explainability import ExplainabilityPayload
 
 class AnalyticsMetric(BaseModel):
     label: str
@@ -15,6 +16,7 @@ class AnalyticsMetric(BaseModel):
 
 class AnalyticsMetricsResponse(BaseModel):
     items: list[AnalyticsMetric]
+    explainability: ExplainabilityPayload | None = None
 
 
 class StoreProfileResponse(BaseModel):
@@ -79,6 +81,7 @@ class SalesTrendResponse(BaseModel):
     insight_chips: list[SalesTrendInsightChip]
     dow_points: list[DowPoint]
     hour_points: list[HourPoint]
+    explainability: ExplainabilityPayload | None = None
 
 
 class WeatherImpactCorrelation(BaseModel):
@@ -99,6 +102,7 @@ class WeatherImpactResponse(BaseModel):
     date_from: str
     date_to: str
     items: list[WeatherImpactBySido]
+    explainability: ExplainabilityPayload | None = None
 
 
 class TradeAreaSalesSlice(BaseModel):
@@ -250,6 +254,7 @@ class MarketIntelligenceResponse(BaseModel):
     population_analysis: PopulationAnalysis
     regional_status: RegionalStatus
     customer_characteristics: CustomerCharacteristics
+    explainability: ExplainabilityPayload | None = None
 
 
 class MarketInsightItem(BaseModel):
@@ -290,8 +295,10 @@ class MarketInsightsResponse(BaseModel):
     audience: Literal["store_owner", "hq_admin"] = "store_owner"
     source: Literal["ai"] = "ai"
     trace_id: str | None = None
+    explainability: ExplainabilityPayload | None = None
 
 
 class HQMarketInsightsResponse(BaseModel):
     summary: MarketInsightsResponse
     branches: list[BranchScoreboardItem]
+    explainability: ExplainabilityPayload | None = None

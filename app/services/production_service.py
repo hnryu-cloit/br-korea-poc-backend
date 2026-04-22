@@ -43,6 +43,7 @@ import logging
 
 from app.services.audit_service import AuditService
 from app.services.ai_client import AIServiceClient
+from app.services.explainability_service import create_ready_payload
 from app.core.ttl_cache import TTLMemoryCache
 
 logger = logging.getLogger(__name__)
@@ -444,6 +445,18 @@ class ProductionService:
             production_lead_time_minutes=60,
             danger_count=danger_count,
             items=[ProductionItem(**item) for item in raw_items],
+            explainability=create_ready_payload(
+                trace_id=f"production-overview-{store_id or 'all'}",
+                actions=[
+                    "품절 위험 SKU를 우선 생산 항목으로 지정하고 담당자를 배정하세요.",
+                    "주의 SKU는 1시간 단위로 재고·판매속도를 재점검하세요.",
+                ],
+                evidence=[
+                    f"품절 위험: {danger_count}개",
+                    f"주의 필요: {warning_count}개",
+                    f"안전 재고: {safe_count}개",
+                ],
+            ),
         )
 
     async def get_sku_list(
@@ -551,6 +564,11 @@ class ProductionService:
             generated_at=get_now().strftime("%Y-%m-%d %H:%M:%S"),
             lead_time_minutes=60,
             alerts=alerts,
+            explainability=create_ready_payload(
+                trace_id=f"production-alerts-{store_id or 'all'}",
+                actions=["알림에 표시된 SKU 순서대로 생산/재고 조치를 즉시 실행하세요."],
+                evidence=[f"생성 알림 수: {len(alerts)}"],
+            ),
         )
 
     async def get_waste_summary(self, store_id: str | None = None) -> WasteSummaryResponse:
@@ -705,11 +723,18 @@ class ProductionService:
                 "실폐기와 보정로스 차이가 큰 품목은 재고 등록 정확도를 점검하세요.",
             ],
             evidence=evidence,
-            meta={
-                "generated_at": get_now().strftime("%Y-%m-%d %H:%M:%S"),
-                "cache_ttl_sec": self._waste_ttl_sec,
-                "data_freshness": "live",
-            },
+            explainability=create_ready_payload(
+                trace_id=f"production-waste-{store_id}",
+                actions=[
+                    "보정 로스 상위 품목의 다음 주문/생산량을 즉시 하향 조정하세요.",
+                    "폐기와 보정로스 차이가 큰 품목은 재고 실사 주기를 단축하세요.",
+                ],
+                evidence=[
+                    f"총 보정 로스: {round(total_adjusted_loss_amount, 2)}원",
+                    f"총 실폐기 금액: {round(total_disuse_amount, 2)}원",
+                    f"품목 수: {len(items)}",
+                ],
+            ),
         )
         self._response_cache.set(
             cache_key,
@@ -869,11 +894,18 @@ class ProductionService:
                 total_items=total_items,
                 total_pages=max(1, math.ceil(total_items / max(page_size, 1))),
             ),
-            meta={
-                "generated_at": get_now().strftime("%Y-%m-%d %H:%M:%S"),
-                "cache_ttl_sec": self._inventory_ttl_sec,
-                "data_freshness": "live",
-            },
+            explainability=create_ready_payload(
+                trace_id=f"production-inventory-status-{store_id}",
+                actions=[
+                    "부족 품목은 즉시 생산/발주 타이밍을 앞당기세요.",
+                    "과잉 품목은 다음 발주량을 줄이고 판촉 소진 계획을 실행하세요.",
+                ],
+                evidence=[
+                    f"부족: {shortage_count}개",
+                    f"과잉: {excess_count}개",
+                    f"평균 재고율: {avg_stock_rate}",
+                ],
+            ),
         )
         self._response_cache.set(
             cache_key,

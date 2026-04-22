@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     channels,
     dashboard,
     data_catalog,
+    explainability,
     health,
     home,
     hq,
@@ -34,6 +35,7 @@ api_router.include_router(schema_catalog.router)
 api_router.include_router(simulation.router)
 api_router.include_router(channels.router)
 api_router.include_router(review.router)
+api_router.include_router(explainability.router)
 api_router.include_router(ordering.router)
 api_router.include_router(production.router)
 api_router.include_router(production.v1_router)

@@ -26,6 +26,7 @@ from app.schemas.ordering import (
 from app.schemas.simulation import SimulationInput, SimulationResponse
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
+from app.services.explainability_service import create_ready_payload
 
 _KST = timezone(timedelta(hours=9))
 _DEFAULT_DEADLINE_HOUR = 14
@@ -60,8 +61,9 @@ class OrderingService:
         self.ai_client = ai_client
 
     @staticmethod
-    def _today_kst() -> str:
-        return _now_kst().strftime("%Y-%m-%d")
+    def _today_kst(reference_datetime: datetime | None = None) -> str:
+        base = reference_datetime or _now_kst()
+        return base.strftime("%Y-%m-%d")
 
     @staticmethod
     def _safe_str(value: object | None) -> str | None:
@@ -191,8 +193,9 @@ class OrderingService:
         notification_entry: bool = False,
         store_id: str | None = None,
         skip_ai: bool = False,
+        reference_datetime: datetime | None = None,
     ) -> OrderingOptionsResponse:
-        business_date = self._today_kst()
+        business_date = self._today_kst(reference_datetime)
         options = await self.repository.list_options(store_id=store_id)
         ai_payload = None if skip_ai else await self._get_ai_ordering_recommendation(store_id=store_id, current_date=business_date)
         ai_options = (ai_payload or {}).get("options") or []
@@ -224,7 +227,7 @@ class OrderingService:
             weather = self._normalize_weather_payload(weather_payload)
 
         if deadline_at is None:
-            deadline = await self.get_deadline(store_id=store_id)
+            deadline = await self.get_deadline(store_id=store_id, reference_datetime=reference_datetime)
             deadline_at = deadline["deadline"]
             deadline_minutes = deadline["minutes_remaining"]
 
@@ -238,6 +241,18 @@ class OrderingService:
             trend_summary=trend_summary,
             business_date=business_date,
             options=[OrderOption(**o) for o in merged_options],
+            explainability=create_ready_payload(
+                trace_id=f"ordering-options-{store_id or 'default'}",
+                actions=[
+                    "추천안 3개를 비교한 뒤 최종 주문안을 확정하세요.",
+                    "마감 전 재고 부족 위험 품목을 우선 점검하세요.",
+                ],
+                evidence=[
+                    f"주문 마감: {deadline_at}",
+                    f"남은 시간: {deadline_minutes}분",
+                    f"추천 옵션 수: {len(merged_options)}",
+                ],
+            ),
         )
 
     async def get_notification_context(self, notification_id: int, store_id: str | None = None) -> OrderingContextResponse:
@@ -257,6 +272,7 @@ class OrderingService:
         self,
         before_minutes: int = 20,
         store_id: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> OrderingAlertsResponse:
         options = await self.repository.list_options(store_id=store_id)
         focus_option_id = self._derive_focus_option_id(options)
@@ -290,8 +306,13 @@ class OrderingService:
                     )
                 )
         return OrderingAlertsResponse(
-            generated_at=_now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+            generated_at=(reference_datetime or _now_kst()).strftime("%Y-%m-%d %H:%M:%S"),
             alerts=alerts,
+            explainability=create_ready_payload(
+                trace_id=f"ordering-alerts-{store_id or 'default'}",
+                actions=["주문 마감 알림을 확인하고 주문 화면으로 즉시 이동하세요."],
+                evidence=[f"알림 건수: {len(alerts)}"],
+            ),
         )
 
     async def get_deadline(
@@ -299,6 +320,7 @@ class OrderingService:
         store_id: str | None = None,
         deadline_hour: int = _DEFAULT_DEADLINE_HOUR,
         deadline_minute: int = _DEFAULT_DEADLINE_MINUTE,
+        reference_datetime: datetime | None = None,
     ) -> dict:
         """주문 마감까지 남은 시간 정보를 반환합니다."""
         sid = store_id or "default"
@@ -314,7 +336,7 @@ class OrderingService:
                 "is_urgent": alert_level == "urgent",
                 "is_passed": alert_level == "passed",
             }
-        now = _now_kst()
+        now = reference_datetime or _now_kst()
         delta = _minutes_to_deadline(now, deadline_hour, deadline_minute)
         deadline_str = f"{deadline_hour:02d}:{deadline_minute:02d}"
         return {
@@ -434,6 +456,15 @@ class OrderingService:
             auto_rate=data["auto_rate"],
             manual_rate=data["manual_rate"],
             total_count=data["total_count"],
+            explainability=create_ready_payload(
+                trace_id=f"ordering-history-{normalized_store_id}",
+                actions=["자동/수동 발주 비중을 점검하고 다음 주문 기준을 조정하세요."],
+                evidence=[
+                    f"자동 비율: {data['auto_rate']:.2f}",
+                    f"수동 비율: {data['manual_rate']:.2f}",
+                    f"조회 건수: {data['total_count']}",
+                ],
+            ),
         )
 
     @staticmethod
@@ -558,6 +589,11 @@ class OrderingService:
                 confidence=float(ai_payload["confidence"])
                 if ai_payload.get("confidence") is not None
                 else None,
+                explainability=create_ready_payload(
+                    trace_id=f"ordering-history-insights-{normalized_store_id}",
+                    actions=["이상징후 항목을 우선순위대로 점검하고 재주문 여부를 확정하세요."],
+                    evidence=[f"이상징후 건수: {len(ai_payload.get('anomalies') or [])}"],
+                ),
             )
         except (TypeError, ValueError) as exc:
             raise RuntimeError("Invalid AI ordering insights payload") from exc

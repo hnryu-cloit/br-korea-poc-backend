@@ -48,6 +48,7 @@ from app.schemas.analytics import (
     BranchScoreboardItem,
 )
 from app.services.ai_client import AIServiceClient
+from app.services.explainability_service import create_ready_payload
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,15 @@ class AnalyticsService:
         items = await self.repository.get_metrics(
             store_id=store_id, date_from=date_from, date_to=date_to
         )
-        return AnalyticsMetricsResponse(items=[AnalyticsMetric(**item) for item in items])
+        response_items = [AnalyticsMetric(**item) for item in items]
+        return AnalyticsMetricsResponse(
+            items=response_items,
+            explainability=create_ready_payload(
+                trace_id=f"analytics-metrics-{store_id or 'all'}",
+                actions=["지표 변동이 큰 항목 1개를 선택해 오늘 운영 액션으로 연결하세요."],
+                evidence=[f"조회 지표 수: {len(response_items)}"],
+            ),
+        )
 
     async def get_weather_impact(
         self,
@@ -85,7 +94,16 @@ class AnalyticsService:
         payload = await self.repository.get_weather_impact(
             store_id=store_id, date_from=date_from, date_to=date_to
         )
-        return WeatherImpactResponse(**payload)
+        response = WeatherImpactResponse(**payload)
+        response.explainability = create_ready_payload(
+            trace_id=f"analytics-weather-impact-{store_id or 'all'}",
+            actions=["강수/기온 영향이 큰 기간에 맞춰 재고·인력 배치를 조정하세요."],
+            evidence=[
+                f"분석 기간: {response.date_from}~{response.date_to}",
+                f"권역 수: {len(response.items)}",
+            ],
+        )
+        return response
 
     def get_store_profile(self, store_id: str | None = None):
         row = self.repository.get_store_profile(store_id=store_id)
@@ -112,7 +130,7 @@ class AnalyticsService:
 
     def get_sales_trend(self, store_id: str | None = None):
         data = self.repository.get_sales_trend(store_id=store_id)
-        return SalesTrendResponse(
+        response = SalesTrendResponse(
             headline=data["headline"],
             headline_trend=data["headline_trend"],
             points=[SalesTrendPoint(**p) for p in data["points"]],
@@ -120,6 +138,15 @@ class AnalyticsService:
             dow_points=[DowPoint(**d) for d in data["dow_points"]],
             hour_points=[HourPoint(**h) for h in data["hour_points"]],
         )
+        response.explainability = create_ready_payload(
+            trace_id=f"analytics-sales-trend-{store_id or 'all'}",
+            actions=["하락 구간 요일/시간대에 맞춰 프로모션 또는 인력 운영을 조정하세요."],
+            evidence=[
+                f"추세 포인트 수: {len(response.points)}",
+                f"인사이트 칩 수: {len(response.insight_chips)}",
+            ],
+        )
+        return response
 
     def get_market_intelligence(
         self,
@@ -154,7 +181,7 @@ class AnalyticsService:
                 exc,
             )
             raise RuntimeError("상권 원천 실데이터 조회에 실패했습니다.") from exc
-        return MarketIntelligenceResponse(
+        response = MarketIntelligenceResponse(
             radius_km=float(data.get("radius_km", 3.0)),
             category_sales_pie=[TradeAreaSalesSlice(**item) for item in data.get("category_sales_pie", [])],
             competitors=[
@@ -262,6 +289,19 @@ class AnalyticsService:
                 )
             ),
         )
+        response.explainability = create_ready_payload(
+            trace_id=f"analytics-market-intelligence-{store_id or 'all'}",
+            actions=[
+                "상위 경쟁점과 차별화할 상품/프로모션 1개를 이번 주 실행 계획에 반영하세요.",
+                "유동인구 추세가 높은 시간대 중심으로 운영 우선순위를 재배치하세요.",
+            ],
+            evidence=[
+                f"경쟁점 수: {len(response.competitors)}",
+                f"카테고리 비중 항목 수: {len(response.category_sales_pie)}",
+                f"데이터 소스 수: {len(response.data_sources)}",
+            ],
+        )
+        return response
 
     async def get_market_insights(
         self,
@@ -308,7 +348,11 @@ class AnalyticsService:
                 branch_snapshots=[],
                 store_name=store_profile.store_nm if store_profile else None,
             )
-            return self._to_market_insights_response(cached, audience="store_owner")
+            return self._to_market_insights_response(
+                cached,
+                audience="store_owner",
+                trace_id=f"analytics-market-insights-{store_id or 'all'}",
+            )
 
         ai_result = await self._generate_market_insights_or_raise(
             audience="store_owner",
@@ -322,7 +366,11 @@ class AnalyticsService:
             ai_result,
             ttl_sec=self._market_insights_ttl_sec,
         )
-        return self._to_market_insights_response(ai_result, audience="store_owner")
+        return self._to_market_insights_response(
+            ai_result,
+            audience="store_owner",
+            trace_id=f"analytics-market-insights-{store_id or 'all'}",
+        )
 
     async def get_hq_market_insights(
         self,
@@ -388,13 +436,25 @@ class AnalyticsService:
                 branch_snapshots=branch_snapshots,
                 store_name=None,
             )
-            summary = self._to_market_insights_response(cached, audience="hq_admin")
+            summary = self._to_market_insights_response(
+                cached,
+                audience="hq_admin",
+                trace_id=f"analytics-hq-market-insights-{gu or dong or 'all'}",
+            )
             branches = (
                 summary.branch_scoreboard
                 if summary.branch_scoreboard
                 else [self._to_branch_score(item) for item in branch_snapshots]
             )
-            return HQMarketInsightsResponse(summary=summary, branches=branches)
+            return HQMarketInsightsResponse(
+                summary=summary,
+                branches=branches,
+                explainability=create_ready_payload(
+                    trace_id=f"analytics-hq-market-insights-{gu or dong or 'all'}",
+                    actions=["지점별 위험도 상위 매장부터 운영 코칭 계획을 확정하세요."],
+                    evidence=[f"지점 스코어보드 건수: {len(branches)}"],
+                ),
+            )
 
         ai_result = await self._generate_market_insights_or_raise(
             audience="hq_admin",
@@ -408,13 +468,23 @@ class AnalyticsService:
             ai_result,
             ttl_sec=self._market_insights_ttl_sec,
         )
-        summary = self._to_market_insights_response(ai_result, audience="hq_admin")
+        summary = self._to_market_insights_response(
+            ai_result,
+            audience="hq_admin",
+            trace_id=f"analytics-hq-market-insights-{gu or dong or 'all'}",
+        )
+        branches = (
+            summary.branch_scoreboard
+            if summary.branch_scoreboard
+            else [self._to_branch_score(item) for item in branch_snapshots]
+        )
         return HQMarketInsightsResponse(
             summary=summary,
-            branches=(
-                summary.branch_scoreboard
-                if summary.branch_scoreboard
-                else [self._to_branch_score(item) for item in branch_snapshots]
+            branches=branches,
+            explainability=create_ready_payload(
+                trace_id=f"analytics-hq-market-insights-{gu or dong or 'all'}",
+                actions=["지점별 위험도 상위 매장부터 운영 코칭 계획을 확정하세요."],
+                evidence=[f"지점 스코어보드 건수: {len(branches)}"],
             ),
         )
 
@@ -528,7 +598,12 @@ class AnalyticsService:
             self._market_insights_refreshing.discard(cache_key)
 
     @staticmethod
-    def _to_market_insights_response(payload: dict, *, audience: str) -> MarketInsightsResponse:
+    def _to_market_insights_response(
+        payload: dict,
+        *,
+        audience: str,
+        trace_id: str,
+    ) -> MarketInsightsResponse:
         return MarketInsightsResponse(
             **{
                 "executive_summary": str(payload.get("executive_summary") or ""),
@@ -541,6 +616,15 @@ class AnalyticsService:
                 "audience": "hq_admin" if audience == "hq_admin" else "store_owner",
                 "source": "ai",
                 "trace_id": payload.get("trace_id"),
+                "explainability": create_ready_payload(
+                    trace_id=trace_id,
+                    actions=[str(action.get("action") or action.get("title") or "").strip() for action in (payload.get("action_plan") or []) if isinstance(action, dict)],
+                    evidence=[
+                        f"핵심 인사이트 수: {len(payload.get('key_insights') or [])}",
+                        f"리스크 경고 수: {len(payload.get('risk_warnings') or [])}",
+                        f"근거 레퍼런스 수: {len(payload.get('evidence_refs') or [])}",
+                    ],
+                ),
             }
         )
 

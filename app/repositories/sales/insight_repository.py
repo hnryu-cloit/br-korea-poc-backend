@@ -68,11 +68,39 @@ class InsightRepositoryMixin:
             )
             raise RuntimeError("매출 인사이트 조회 중 DB 오류가 발생했습니다.") from exc
 
+        # 실데이터가 일부만 존재해도 화면이 전부 실패하지 않도록 섹션별 안내 응답을 채운다.
         required_sections = ("peak_hours", "channel_mix", "payment_mix", "menu_mix")
-        if any(not insights.get(section) for section in required_sections):
-            raise LookupError("매출 인사이트 실데이터가 부족합니다.")
+        fallback_titles = {
+            "peak_hours": "시간대 운영 코칭",
+            "channel_mix": "채널 전환 인사이트",
+            "payment_mix": "결제/할인 민감도",
+            "menu_mix": "메뉴 믹스 추천",
+        }
+        for section in required_sections:
+            if insights.get(section):
+                continue
+            insights[section] = self._build_missing_section(fallback_titles[section])
 
         return insights
+
+    @staticmethod
+    def _build_missing_section(title: str) -> dict:
+        return {
+            "title": title,
+            "summary": "현재 조건에서 실데이터가 충분하지 않아 점검이 필요합니다.",
+            "metrics": [
+                {
+                    "label": "데이터 상태",
+                    "value": "부족",
+                    "detail": "조회 기간 또는 점포 조건을 변경해 다시 확인해 주세요.",
+                }
+            ],
+            "actions": [
+                "조회 기간을 넓혀 다시 확인해 주세요.",
+                "점포를 변경해 데이터 적재 상태를 확인해 주세요.",
+            ],
+            "status": "review",
+        }
 
     def _fetch_peak_hours_from_tmzon(
         self, store_id: str | None, date_from: str | None, date_to: str | None

@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from app.schemas.explainability import ExplainabilityPayload
 
 class OrderingOptionItemLine(BaseModel):
     sku_id: str | None = None
@@ -44,6 +45,7 @@ class OrderingOptionsResponse(BaseModel):
     trend_summary: str | None = None
     business_date: str | None = None
     options: list[OrderOption]
+    explainability: ExplainabilityPayload | None = None
 
 
 class OrderingContextResponse(BaseModel):
@@ -66,6 +68,7 @@ class OrderingDeadlineAlert(BaseModel):
 class OrderingAlertsResponse(BaseModel):
     generated_at: str
     alerts: list[OrderingDeadlineAlert]
+    explainability: ExplainabilityPayload | None = None
 
 
 class OrderSelectionRequest(BaseModel):
@@ -127,6 +130,7 @@ class OrderingHistoryResponse(BaseModel):
     auto_rate: float
     manual_rate: float
     total_count: int
+    explainability: ExplainabilityPayload | None = None
 
 
 class OrderingHistoryInsightKpi(BaseModel):
@@ -159,3 +163,4 @@ class OrderingHistoryInsightsResponse(BaseModel):
     sources: list[str] = []
     retrieved_contexts: list[str] = []
     confidence: float | None = None
+    explainability: ExplainabilityPayload | None = None

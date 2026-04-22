@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
 
 from app.core.auth import require_roles
+from app.core.reference_datetime import resolve_date_range_by_reference
 from app.core.deps import get_analytics_service
 from app.schemas.analytics import (
     AnalyticsMetricsResponse,
@@ -29,10 +30,18 @@ async def get_analytics_metrics(
     store_id: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> AnalyticsMetricsResponse:
     try:
-        return await service.get_metrics(store_id=store_id, date_from=date_from, date_to=date_to)
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
+        return await service.get_metrics(
+            store_id=store_id,
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -146,9 +155,17 @@ async def get_weather_impact(
     store_id: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> WeatherImpactResponse:
-    return await service.get_weather_impact(store_id=store_id, date_from=date_from, date_to=date_to)
+    resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+        x_reference_datetime, date_from, date_to
+    )
+    return await service.get_weather_impact(
+        store_id=store_id,
+        date_from=resolved_date_from,
+        date_to=resolved_date_to,
+    )
 
 
 @router.get("/market-intelligence/weekly-report")
