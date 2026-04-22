@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS raw_daily_store_item (
     loaded_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS raw_daily_store_online (
+CREATE TABLE IF NOT EXISTS raw_daily_store_channel (
     masked_stor_cd TEXT,
     masked_stor_nm TEXT,
     sale_dt TEXT,

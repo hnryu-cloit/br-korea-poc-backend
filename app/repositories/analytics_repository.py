@@ -138,7 +138,7 @@ class AnalyticsRepository:
                     s.sido,
                     SUM(CAST(COALESCE(NULLIF(CAST(c.ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS delivery_orders,
                     0 AS offline_orders
-                FROM raw_daily_store_online c
+                FROM raw_daily_store_channel c
                 JOIN raw_store_master s ON s.masked_stor_cd = c.masked_stor_cd
                 WHERE c.sale_dt BETWEEN :date_from AND :date_to
                 {store_filter}
@@ -337,11 +337,11 @@ class AnalyticsRepository:
                     SELECT
                         sale_dt,
                         SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS total_sales,
-                        SUM(CASE WHEN online_div_cd IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
+                        SUM(CASE WHEN ho_chnl_div IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
                         0 AS offline_orders,
                         SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS online_sales,
                         SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS total_orders
-                    FROM raw_daily_store_online
+                    FROM raw_daily_store_channel
                     {store_filter}
                     GROUP BY sale_dt
                 )
@@ -367,11 +367,11 @@ class AnalyticsRepository:
                     SELECT
                         sale_dt,
                         SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS total_sales,
-                        SUM(CASE WHEN online_div_cd IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
+                        SUM(CASE WHEN ho_chnl_div IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
                         0 AS offline_orders,
                         SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS online_sales,
                         SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS total_orders
-                    FROM raw_daily_store_online
+                    FROM raw_daily_store_channel
                     {store_filter}
                     GROUP BY sale_dt
                 ),
@@ -1124,11 +1124,11 @@ class AnalyticsRepository:
                 conn.execute(
                     text(
                         """
-                            SELECT online_div_cd,
+                            SELECT ho_chnl_div,
                                    SUM(CAST(sale_amt AS NUMERIC)) AS amt
-                            FROM raw_daily_store_online
+                            FROM raw_daily_store_channel
                             WHERE sale_dt >= :this_start
-                            GROUP BY online_div_cd ORDER BY amt DESC LIMIT 3
+                            GROUP BY ho_chnl_div ORDER BY amt DESC LIMIT 3
                         """
                     ),
                     {"this_start": _fmt(this_month_start)},
@@ -1139,7 +1139,7 @@ class AnalyticsRepository:
             for r in ch_rows:
                 channel_chips.append(
                     {
-                        "label": r["online_div_cd"] or "기타",
+                        "label": r["ho_chnl_div"] or "기타",
                         "value": f'{int(float(r["amt"] or 0)):,}원',
                         "trend": "up",
                     }

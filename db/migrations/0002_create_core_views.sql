@@ -73,4 +73,4 @@ SELECT
     source_file,
     source_sheet,
     loaded_at
-FROM raw_daily_store_online;
+FROM raw_daily_store_channel;

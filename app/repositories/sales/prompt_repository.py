@@ -756,7 +756,7 @@ class PromptRepositoryMixin:
         return str(row["max_sale_dt"])
 
     async def get_query_response(self, prompt: str) -> dict:
-        source_relation = "raw_daily_store_online" if self.engine else None
+        source_relation = "raw_daily_store_channel" if self.engine else None
 
         campaign_context = self._fetch_campaign_context()
         if campaign_context and self._is_campaign_prompt(prompt):

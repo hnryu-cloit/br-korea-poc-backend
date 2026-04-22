@@ -233,7 +233,7 @@
     {
       "name": "daily_store_online",
       "loader": "xlsx",
-      "table": "raw_daily_store_online",
+      "table": "raw_daily_store_channel",
       "paths": [
         "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+오프라인.xlsx",
         "../resource/04. POC 대상 데이터_제공데이터/02. 매출/05. 일자별 온_오프라인 구분/일자별+온라인.xlsx"

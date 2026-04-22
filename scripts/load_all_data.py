@@ -23,7 +23,7 @@ def load_all_data():
         ("DAILY_STOR_CPI_TMZON", "raw_daily_store_cpi_tmzon"),
         ("DAILY_STOR_ITEM.xlsx", "raw_daily_store_item"),
         ("DAILY_STOR_ITEM_TMZON", "raw_daily_store_item_tmzon"),
-        ("DAILY_STOR_CHL_TMZON", "raw_daily_store_online"),
+        ("DAILY_STOR_CHL_TMZON", "raw_daily_store_channel"),
         ("PAY_CD", "raw_pay_cd"),
         ("PROD_DTL", "raw_production_extract"),
         ("ORD_DTL", "raw_order_extract"),

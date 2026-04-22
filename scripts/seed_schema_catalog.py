@@ -32,7 +32,7 @@ TABLE_OVERRIDES: dict[str, dict[str, Any]] = {
         "description": "시간대별 상품 매출 원본 적재 테이블",
         "grain": "1 row per store + sale_dt + tmzon_div + item_cd",
     },
-    "raw_daily_store_online": {
+    "raw_daily_store_channel": {
         "layer": "raw",
         "domain": "sales",
         "description": "채널/온오프라인 매출 원본 적재 테이블",

@@ -16,7 +16,68 @@ from app.infrastructure.db.connection import get_database_engine, get_safe_datab
 
 
 def split_statements(sql: str) -> list[str]:
-    return [statement.strip() for statement in sql.split(";") if statement.strip()]
+    statements: list[str] = []
+    current: list[str] = []
+    in_single_quote = False
+    in_double_quote = False
+    dollar_tag: str | None = None
+    idx = 0
+
+    while idx < len(sql):
+        ch = sql[idx]
+        next_two = sql[idx : idx + 2]
+
+        if dollar_tag is None and not in_single_quote and not in_double_quote and ch == "$":
+            end_idx = sql.find("$", idx + 1)
+            if end_idx != -1:
+                candidate = sql[idx : end_idx + 1]
+                if candidate.startswith("$") and candidate.endswith("$"):
+                    dollar_tag = candidate
+                    current.append(candidate)
+                    idx = end_idx + 1
+                    continue
+
+        if dollar_tag is not None:
+            if sql.startswith(dollar_tag, idx):
+                current.append(dollar_tag)
+                idx += len(dollar_tag)
+                dollar_tag = None
+                continue
+            current.append(ch)
+            idx += 1
+            continue
+
+        if ch == "'" and not in_double_quote:
+            if in_single_quote and next_two == "''":
+                current.append(next_two)
+                idx += 2
+                continue
+            in_single_quote = not in_single_quote
+            current.append(ch)
+            idx += 1
+            continue
+
+        if ch == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current.append(ch)
+            idx += 1
+            continue
+
+        if ch == ";" and not in_single_quote and not in_double_quote:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            idx += 1
+            continue
+
+        current.append(ch)
+        idx += 1
+
+    trailing = "".join(current).strip()
+    if trailing:
+        statements.append(trailing)
+    return statements
 
 
 def main() -> None:

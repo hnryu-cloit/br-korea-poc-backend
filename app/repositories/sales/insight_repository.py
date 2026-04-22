@@ -38,7 +38,7 @@ class InsightRepositoryMixin:
             if peak_hours:
                 insights["peak_hours"] = peak_hours
 
-            # 채널 전환 인사이트: raw_daily_store_online 직접 사용
+            # 채널 전환 인사이트: raw_daily_store_channel 직접 사용
             channel_mix = self._fetch_channel_mix_from_online(
                 store_id=store_id, date_from=date_from, date_to=date_to
             )
@@ -140,7 +140,7 @@ class InsightRepositoryMixin:
     def _fetch_channel_mix_from_online(
         self, store_id: str | None, date_from: str | None, date_to: str | None
     ) -> dict | None:
-        """raw_daily_store_online 기반 채널별 매출 분석"""
+        """raw_daily_store_channel 기반 채널별 매출 분석"""
         where_clause, params = self._build_filters(
             "masked_stor_cd", "sale_dt", store_id, date_from, date_to
         )
@@ -154,7 +154,7 @@ class InsightRepositoryMixin:
                             COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
                             SUM(sale_amt) AS sale_amt,
                             SUM(ord_cnt) AS ord_cnt
-                        FROM raw_daily_store_online
+                        FROM raw_daily_store_channel
                         {where_clause}
                         GROUP BY COALESCE(NULLIF(ho_chnl_div, ''), '기타')
                         ORDER BY SUM(sale_amt) DESC

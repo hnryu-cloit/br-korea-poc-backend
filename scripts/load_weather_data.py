@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -15,23 +16,23 @@ from app.infrastructure.db.connection import get_database_engine, get_safe_datab
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 SIDO_COORDINATES: dict[str, tuple[float, float]] = {
-    "서울": (37.5665, 126.9780),
-    "경기": (37.4138, 127.5183),
-    "인천": (37.4563, 126.7052),
-    "강원": (37.8228, 128.1555),
-    "충북": (36.6358, 127.4914),
-    "충남": (36.6588, 126.6728),
-    "대전": (36.3504, 127.3845),
-    "세종": (36.4800, 127.2890),
-    "전북": (35.7175, 127.1530),
-    "전남": (34.8679, 126.9910),
-    "광주": (35.1595, 126.8526),
-    "경북": (36.4919, 128.8889),
-    "경남": (35.4606, 128.2132),
-    "대구": (35.8714, 128.6014),
-    "울산": (35.5384, 129.3114),
-    "부산": (35.1796, 129.0756),
-    "제주": (33.4996, 126.5312),
+    "서울특별시": (37.5665, 126.9780),
+    "경기도": (37.4138, 127.5183),
+    "인천광역시": (37.4563, 126.7052),
+    "강원도": (37.8228, 128.1555),
+    "충청북도": (36.6358, 127.4914),
+    "충청남도": (36.6588, 126.6728),
+    "대전광역시": (36.3504, 127.3845),
+    "세종특별자치시": (36.4800, 127.2890),
+    "전라북도": (35.7175, 127.1530),
+    "전라남도": (34.8679, 126.9910),
+    "광주광역시": (35.1595, 126.8526),
+    "경상북도": (36.4919, 128.8889),
+    "경상남도": (35.4606, 128.2132),
+    "대구광역시": (35.8714, 128.6014),
+    "울산광역시": (35.5384, 129.3114),
+    "부산광역시": (35.1796, 129.0756),
+    "제주특별자치도": (33.4996, 126.5312),
 }
 
 
@@ -87,27 +88,44 @@ def fetch_weather_rows(
             "longitude": longitude,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "daily": "temperature_2m_mean,precipitation_sum",
+            "hourly": "temperature_2m,precipitation",
             "timezone": "Asia/Seoul",
         },
     )
     response.raise_for_status()
     payload = response.json()
-    daily = payload.get("daily") or {}
-    days = daily.get("time") or []
-    temperatures = daily.get("temperature_2m_mean") or []
-    precipitations = daily.get("precipitation_sum") or []
+    hourly = payload.get("hourly") or {}
+    hours = hourly.get("time") or []
+    temperatures = hourly.get("temperature_2m") or []
+    precipitations = hourly.get("precipitation") or []
+
+    daily_buckets: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"temp_sum": 0.0, "temp_count": 0.0, "precipitation_sum": 0.0}
+    )
+    for hour, temp, rain in zip(hours, temperatures, precipitations):
+        hour_text = str(hour)
+        day_text = hour_text.split("T", 1)[0]
+        bucket = daily_buckets[day_text]
+        if temp is not None:
+            bucket["temp_sum"] += float(temp)
+            bucket["temp_count"] += 1.0
+        if rain is not None:
+            bucket["precipitation_sum"] += float(rain)
 
     rows: list[dict[str, object]] = []
-    for day, temp, rain in zip(days, temperatures, precipitations):
-        day_date = parse_date(str(day))
+    for day_text in sorted(daily_buckets):
+        bucket = daily_buckets[day_text]
+        day_date = parse_date(day_text)
+        avg_temp_c = (
+            bucket["temp_sum"] / bucket["temp_count"] if bucket["temp_count"] else 0.0
+        )
         rows.append(
             {
                 "weather_dt": day_date.strftime("%Y%m%d"),
                 "sido": sido,
-                "avg_temp_c": float(temp or 0),
-                "precipitation_mm": float(rain or 0),
-                "source_provider": "open-meteo",
+                "avg_temp_c": round(avg_temp_c, 2),
+                "precipitation_mm": round(bucket["precipitation_sum"], 2),
+                "source_provider": "open-meteo-hourly-aggregated",
                 "loaded_at": datetime.now(),
             }
         )

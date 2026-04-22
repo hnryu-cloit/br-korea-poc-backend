@@ -169,7 +169,7 @@ class DailyStorItem(BaseModel):
 # HO_CHNL_DIV: 판매유형 (온라인 / 오프라인)
 
 
-class DailyStorOnline(BaseModel):
+class DailyStorChannel(BaseModel):
     masked_stor_cd: str  # 점포코드
     masked_stor_nm: str  # 점포명
     sale_dt: str  # 판매일자 (YYYYMMDD)
