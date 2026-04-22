@@ -77,7 +77,7 @@ def test_build_new_items_returns_safe_and_no_recommendation_when_forecast_zero()
     assert item["depletion_time"] == "-"
 
 
-def test_infer_stockout_from_hourly_sales_marks_first_hour_of_three_zero_hours() -> None:
+def test_infer_stockout_from_hourly_sales_marks_only_terminal_zero_sales_window() -> None:
     repository = ProductionRepository(engine=None)
 
     stockout_map = repository._infer_stockout_from_hourly_sales(
@@ -90,7 +90,7 @@ def test_infer_stockout_from_hourly_sales_marks_first_hour_of_three_zero_hours()
     )
 
     assert stockout_map["SKU_A"]["is_stockout"] is True
-    assert stockout_map["SKU_A"]["stockout_hour"] == 10
+    assert stockout_map["SKU_A"]["stockout_hour"] == 14
 
 
 def test_infer_stockout_from_hourly_sales_does_not_mark_items_without_prior_sale() -> None:
@@ -119,6 +119,22 @@ def test_infer_stockout_from_hourly_sales_ignores_after_close_zero_sales_window(
 
     assert stockout_map["SKU_C"]["is_stockout"] is False
     assert stockout_map["SKU_C"]["stockout_hour"] is None
+
+
+def test_infer_stockout_from_hourly_sales_does_not_mark_gap_if_later_sales_resume() -> None:
+    repository = ProductionRepository(engine=None)
+
+    stockout_map = repository._infer_stockout_from_hourly_sales(
+        inventory_rows=[{"item_cd": "SKU_RESUME", "item_nm": "Resume"}],
+        hourly_rows=[
+            {"item_cd": "SKU_RESUME", "item_nm": "Resume", "tmzon_div": "08", "sale_qty": 2},
+            {"item_cd": "SKU_RESUME", "item_nm": "Resume", "tmzon_div": "15", "sale_qty": 1},
+            {"item_cd": "SKU_RESUME", "item_nm": "Resume", "tmzon_div": "20", "sale_qty": 1},
+        ],
+    )
+
+    assert stockout_map["SKU_RESUME"]["is_stockout"] is False
+    assert stockout_map["SKU_RESUME"]["stockout_hour"] is None
 
 
 def test_infer_stockout_from_hourly_sales_uses_fixed_window_when_operating_hours_invalid() -> None:

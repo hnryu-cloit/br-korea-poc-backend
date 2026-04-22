@@ -152,25 +152,17 @@ class ProductionRepository(BaseRepository):
         for item_cd, bucket in tracked.items():
             hourly_qty = bucket.get("hourly_qty")
             sales_by_hour = hourly_qty if isinstance(hourly_qty, dict) else {}
-            seen_positive_sale = False
-            zero_streak = 0
-            streak_start_hour: int | None = None
-            stockout_hour: int | None = None
+            last_positive_sale_hour: int | None = None
             for hour in business_hours:
                 qty = cls._safe_float(sales_by_hour.get(hour, 0.0))
                 if qty > 0:
-                    seen_positive_sale = True
-                    zero_streak = 0
-                    streak_start_hour = None
-                    continue
-                if not seen_positive_sale:
-                    continue
-                zero_streak += 1
-                if streak_start_hour is None:
-                    streak_start_hour = hour
-                if zero_streak >= cls._STOCKOUT_ZERO_SALES_WINDOW:
-                    stockout_hour = streak_start_hour
-                    break
+                    last_positive_sale_hour = hour
+
+            stockout_hour: int | None = None
+            if last_positive_sale_hour is not None:
+                trailing_zero_hours = business_hours[-1] - last_positive_sale_hour
+                if trailing_zero_hours >= cls._STOCKOUT_ZERO_SALES_WINDOW:
+                    stockout_hour = last_positive_sale_hour + 1
 
             inferred[item_cd] = {
                 "item_cd": item_cd,
