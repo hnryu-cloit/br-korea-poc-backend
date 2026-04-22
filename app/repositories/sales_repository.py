@@ -43,7 +43,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
         # 1. 사용할 테이블·컬럼 결정
         item_relation = "raw_daily_store_item"
         amt_col = "sale_amt"
-        net_col = "sale_amt"
+        net_col = "net_sale_amt"
         qty_col = "sale_qty"
 
         store_filter = ""

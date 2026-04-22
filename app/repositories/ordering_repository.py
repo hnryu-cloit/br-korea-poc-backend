@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy import inspect, text
@@ -13,22 +13,39 @@ _OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 _DEFAULT_WEATHER_COORD = (37.5665, 126.9780)  # 서울
 _SIDO_COORDINATES: dict[str, tuple[float, float]] = {
     "서울": (37.5665, 126.9780),
+    "서울특별시": (37.5665, 126.9780),
     "경기": (37.4138, 127.5183),
+    "경기도": (37.4138, 127.5183),
     "인천": (37.4563, 126.7052),
+    "인천광역시": (37.4563, 126.7052),
     "강원": (37.8228, 128.1555),
+    "강원도": (37.8228, 128.1555),
     "충북": (36.6358, 127.4914),
+    "충청북도": (36.6358, 127.4914),
     "충남": (36.6588, 126.6728),
+    "충청남도": (36.6588, 126.6728),
     "대전": (36.3504, 127.3845),
+    "대전광역시": (36.3504, 127.3845),
     "세종": (36.4800, 127.2890),
+    "세종특별자치시": (36.4800, 127.2890),
     "전북": (35.7175, 127.1530),
+    "전라북도": (35.7175, 127.1530),
     "전남": (34.8679, 126.9910),
+    "전라남도": (34.8679, 126.9910),
     "광주": (35.1595, 126.8526),
+    "광주광역시": (35.1595, 126.8526),
     "경북": (36.4919, 128.8889),
+    "경상북도": (36.4919, 128.8889),
     "경남": (35.4606, 128.2132),
+    "경상남도": (35.4606, 128.2132),
     "대구": (35.8714, 128.6014),
+    "대구광역시": (35.8714, 128.6014),
     "울산": (35.5384, 129.3114),
+    "울산광역시": (35.5384, 129.3114),
     "부산": (35.1796, 129.0756),
+    "부산광역시": (35.1796, 129.0756),
     "제주": (33.4996, 126.5312),
+    "제주특별자치도": (33.4996, 126.5312),
 }
 _WEATHER_CODE_LABELS: dict[int, str] = {
     0: "맑음",
@@ -460,7 +477,7 @@ class OrderingRepository:
                     filter_clause, params = self._build_history_filters(store_id=store_id, date_from=date_from, date_to=date_to)
                     recent_filter_clause, recent_params = self._build_history_filters(
                         store_id=store_id,
-                        date_from=date_from or (datetime.now().date().isoformat()),
+                        date_from=date_from or ((datetime.now().date() - timedelta(days=6)).isoformat()),
                         date_to=date_to,
                     )
                     total = connection.execute(
