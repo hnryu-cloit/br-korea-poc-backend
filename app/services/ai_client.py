@@ -69,6 +69,7 @@ class AIServiceClient:
         prompt: str,
         store_id: str,
         domain: str | None = None,
+        business_date: str | None = None,
         system_instruction: str | None = None,
     ) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
@@ -79,6 +80,8 @@ class AIServiceClient:
         body: dict[str, object] = {"store_id": normalized_store_id, "query": prompt}
         if domain:
             body["domain"] = domain
+        if business_date:
+            body["business_date"] = business_date
         if system_instruction:
             body["system_instruction"] = system_instruction
         result = await self._post("/sales/query", body, timeout=90.0)

@@ -390,7 +390,12 @@ def test_sales_prompts() -> None:
 def test_sales_query() -> None:
     response = client.post(
         "/api/sales/query",
-        json={"prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘", "store_id": "POC_001"},
+        json={
+            "prompt": "이번 주 배달 건수가 지난주보다 줄어든 원인을 알려줘",
+            "store_id": "POC_001",
+            "domain": "sales",
+            "business_date": "2026-03-05",
+        },
     )
     assert response.status_code == 200
     payload = response.json()

@@ -129,7 +129,12 @@ class SalesService:
         ai_result: Optional[dict] = None
         processing_route = "repository"
         if self.ai_client:
-            ai_result = await self.ai_client.query_sales(safe_prompt, store_id=payload.store_id)
+            ai_result = await self.ai_client.query_sales(
+                safe_prompt,
+                store_id=payload.store_id,
+                domain=payload.domain,
+                business_date=payload.business_date,
+            )
 
         if ai_result is not None:
             response = ai_result

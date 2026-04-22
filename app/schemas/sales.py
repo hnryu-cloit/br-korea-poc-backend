@@ -25,6 +25,8 @@ class SalesComparison(BaseModel):
 class SalesQueryRequest(BaseModel):
     prompt: str
     store_id: str = Field(..., min_length=1)
+    domain: str = Field(default="sales")
+    business_date: str = Field(default="2026-03-05")
 
 
 class SalesQueryResponse(BaseModel):

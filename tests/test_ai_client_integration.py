@@ -81,13 +81,20 @@ async def test_query_sales_sends_bearer_token(client: AIServiceClient) -> None:
         return_value=httpx.Response(200, json=stub)
     )
 
-    await client.query_sales("테스트", store_id="POC_001")
+    await client.query_sales(
+        "테스트",
+        store_id="POC_001",
+        domain="sales",
+        business_date="2026-03-05",
+    )
 
     request = route.calls.last.request
     assert request.headers["Authorization"] == f"Bearer {TOKEN}"
     assert request.headers["X-Request-Id"]
     assert json.loads(request.content)["query"] == "테스트"
     assert json.loads(request.content)["store_id"] == "POC_001"
+    assert json.loads(request.content)["domain"] == "sales"
+    assert json.loads(request.content)["business_date"] == "2026-03-05"
 
 
 # ── predict_production ────────────────────────────────────────────────────────
