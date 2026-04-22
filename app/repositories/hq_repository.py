@@ -66,7 +66,7 @@ class HQRepository:
                         )
                         SELECT
                             NULLIF(TRIM(CAST(sm.masked_stor_cd AS TEXT)), '') AS store_id,
-                            COALESCE(NULLIF(TRIM(sm.masked_stor_nm), ''), NULLIF(TRIM(CAST(sm.masked_stor_cd AS TEXT)), ''), '미지정 매장') AS store,
+                            COALESCE(NULLIF(TRIM(sm.maked_stor_nm), ''), NULLIF(TRIM(CAST(sm.masked_stor_cd AS TEXT)), ''), '미지정 매장') AS store,
                             COALESCE(NULLIF(TRIM(sm.region), ''), '전체') AS region,
                             lo.option_id,
                             lo.reason,
@@ -152,7 +152,7 @@ class HQRepository:
                         )
                         SELECT
                             NULLIF(TRIM(CAST(sm.masked_stor_cd AS TEXT)), '') AS store_id,
-                            COALESCE(NULLIF(TRIM(sm.masked_stor_nm), ''), NULLIF(TRIM(CAST(sm.masked_stor_cd AS TEXT)), ''), '미지정 매장') AS store,
+                            COALESCE(NULLIF(TRIM(sm.maked_stor_nm), ''), NULLIF(TRIM(CAST(sm.masked_stor_cd AS TEXT)), ''), '미지정 매장') AS store,
                             COALESCE(NULLIF(TRIM(sm.region), ''), '전체') AS region,
                             COALESCE(oa.order_count_7d, 0) AS order_count_7d,
                             COALESCE(oa.recommended_count_7d, 0) AS recommended_count_7d,
