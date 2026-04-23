@@ -884,7 +884,7 @@ class ProductionService:
             if is_stockout or stock_rate < 0:
                 status = "부족"
             elif stock_rate >= 0.35:
-                status = "과잉"
+                status = "여유"
             else:
                 status = "적정"
 
@@ -917,7 +917,7 @@ class ProductionService:
         items.sort(key=lambda row: row.stock_rate)
         top_shortage = [item for item in items if item.status == "부족"][:3]
         top_excess = sorted(
-            [item for item in items if item.status == "과잉"],
+            [item for item in items if item.status == "여유"],
             key=lambda row: row.stock_rate,
             reverse=True,
         )[:3]
@@ -934,8 +934,8 @@ class ProductionService:
             "items": [
                 {
                     "label": "재고율 기반 분류",
-                    "value": f"부족 {shortage_count}개 / 과잉 {excess_count}개",
-                    "calculation": "stock_rate<0 또는 품절=true: 부족, stock_rate>=0.35: 과잉, 그 외 적정",
+                    "value": f"부족 {shortage_count}개 / 여유 {excess_count}개",
+                    "calculation": "stock_rate<0 또는 품절=true: 부족, stock_rate>=0.35: 여유, 그 외 적정",
                     "source_table": "core_stock_rate/core_stockout_time or raw_inventory_extract/core_hourly_item_sales",
                 },
                 {
@@ -969,14 +969,14 @@ class ProductionService:
             ]
             + [
                 {
-                    "label": "과잉 위험 TOP",
+                    "label": "여유 품목 TOP",
                     "value": f"{item.item_nm} ({item.stock_rate:.2f})",
                 }
                 for item in top_excess
             ],
             actions=[
                 "부족 품목은 다음 생산/발주 사이클을 앞당겨 품절 시각을 늦추세요.",
-                "과잉 품목은 다음날 발주량을 축소하고, 프로모션/세트로 소진을 유도하세요.",
+                "여유 품목은 다음날 발주량을 축소하고, 프로모션/세트로 소진을 유도하세요.",
                 "유통기한 가설 1일 품목은 마감 전 재고 소진 우선순위를 높이세요.",
             ],
             evidence=evidence,
@@ -991,11 +991,11 @@ class ProductionService:
                 trace_id=f"production-inventory-status-{store_id}",
                 actions=[
                     "부족 품목은 즉시 생산/발주 타이밍을 앞당기세요.",
-                    "과잉 품목은 다음 발주량을 줄이고 판촉 소진 계획을 실행하세요.",
+                    "여유 품목은 다음 발주량을 줄이고 판촉 소진 계획을 실행하세요.",
                 ],
                 evidence=[
                     f"부족: {shortage_count}개",
-                    f"과잉: {excess_count}개",
+                    f"여유: {excess_count}개",
                     f"평균 재고율: {avg_stock_rate}",
                 ],
             ),
