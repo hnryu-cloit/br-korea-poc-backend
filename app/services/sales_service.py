@@ -70,6 +70,89 @@ class SalesService:
             domain=payload.domain,
         )
 
+    @staticmethod
+    def _is_tday_prompt(prompt: str) -> bool:
+        lowered = prompt.lower()
+        return "티데이" in prompt or "tday" in lowered
+
+    @staticmethod
+    def _format_currency(value: float | int | None) -> str:
+        amount = float(value or 0)
+        return f"{int(round(amount)):,}원"
+
+    def _build_tday_query_response(
+        self,
+        *,
+        payload: dict,
+        request_context: SalesQueryRequestContext,
+    ) -> dict:
+        period = next(iter(payload.get("periods", [])), {})
+        period_text = " ~ ".join(
+            [text for text in [period.get("start_date"), period.get("end_date")] if text]
+        ) or "프로모션 기간 정보 없음"
+        product_mix = payload.get("product_mix", []) or []
+        top_mix = ", ".join(
+            f"{item.get('item_nm')} {float(item.get('share_pct') or 0):.1f}%"
+            for item in product_mix[:3]
+            if item.get("item_nm")
+        ) or "상품별 매출 비중 데이터 없음"
+        comparison = payload.get("comparison") or {}
+        comparison_note = str(comparison.get("message") or "")
+        sales_change_pct = comparison.get("sales_change_pct")
+        usage_gap_pct = comparison.get("usage_ratio_gap_pct")
+        comparison_line = ""
+        if sales_change_pct is not None:
+            comparison_line = f" 비교 기준 대비 전체 매출은 {float(sales_change_pct):+.1f}%입니다."
+            if usage_gap_pct is not None:
+                comparison_line += f" 티데이 사용 금액 비중 차이는 {float(usage_gap_pct):+.1f}%p입니다."
+
+        text = (
+            f"{payload.get('campaign_name') or '티데이'} 프로모션은 {period_text} 동안 진행됐습니다. "
+            f"이 기간 전체 매출은 {self._format_currency(payload.get('promotion_period_sales'))}이고, "
+            f"티데이 사용 금액은 {self._format_currency(payload.get('usage_amount'))}로 "
+            f"전체 매출 대비 {float(payload.get('usage_ratio_pct') or 0):.1f}% 수준입니다. "
+            f"상품별 매출 비중은 {top_mix} 순입니다."
+            f"{(' ' + comparison_note) if comparison_note else ''}{comparison_line}"
+        )
+        evidence = [
+            f"프로모션 기간: {period_text}",
+            f"전체 매출: {self._format_currency(payload.get('promotion_period_sales'))}",
+            f"티데이 사용 금액 비중: {float(payload.get('usage_ratio_pct') or 0):.1f}%",
+            f"상품별 매출 비중 상위: {top_mix}",
+        ]
+        if comparison_note:
+            evidence.append(comparison_note)
+        actions = [
+            "상위 상품 비중이 높은 SKU를 다음 티데이 프로모션 진열 우선순위에 반영하세요.",
+            "티데이 사용 금액 비중이 낮으면 행사 기간 결제 안내 문구와 직원 안내 동선을 점검하세요.",
+        ]
+        return {
+            "text": text,
+            "evidence": evidence,
+            "actions": actions,
+            "answer": {
+                "text": text,
+                "evidence": evidence,
+                "actions": actions,
+            },
+            "request_context": request_context.model_dump(),
+            "agent_trace": {
+                "keywords": ["티데이", "프로모션"],
+                "intent": "tday_promotion_analysis",
+                "relevant_tables": [
+                    "raw_telecom_discount_policy",
+                    "raw_daily_store_pay_way",
+                    "raw_daily_store_item",
+                ],
+                "sql": None,
+                "queried_period": {
+                    "date_from": period.get("start_date"),
+                    "date_to": period.get("end_date"),
+                },
+                "row_count": len(product_mix),
+            },
+        }
+
     async def list_prompts(
         self,
         domain: str = "sales",
@@ -164,22 +247,34 @@ class SalesService:
             return response
 
         # 2. AI 또는 repository 조회 (마스킹된 쿼리 사용)
-        ai_result: Optional[dict] = None
         processing_route = "repository"
-        if self.ai_client:
-            ai_result = await self.ai_client.query_sales(
-                safe_prompt,
+        if self._is_tday_prompt(safe_prompt):
+            tday_payload = await self.repository.get_campaign_effect(
                 store_id=payload.store_id,
-                domain=payload.domain,
-                business_date=payload.business_date,
-                business_time=payload.business_time,
+                date_to=payload.business_date,
+                prompt_hint=safe_prompt,
             )
-
-        if ai_result is not None:
-            response = ai_result
-            processing_route = "ai_proxy"
+            response = self._build_tday_query_response(
+                payload=tday_payload,
+                request_context=request_context,
+            )
+            processing_route = "repository_tday"
         else:
-            response = await self.repository.get_query_response(safe_prompt)
+            ai_result: Optional[dict] = None
+            if self.ai_client:
+                ai_result = await self.ai_client.query_sales(
+                    safe_prompt,
+                    store_id=payload.store_id,
+                    domain=payload.domain,
+                    business_date=payload.business_date,
+                    business_time=payload.business_time,
+                )
+
+            if ai_result is not None:
+                response = ai_result
+                processing_route = "ai_proxy"
+            else:
+                response = await self.repository.get_query_response(safe_prompt)
 
         if isinstance(response, dict):
             answer_payload = response.get("answer") if isinstance(response.get("answer"), dict) else None
