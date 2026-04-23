@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.deps import get_production_service
 from app.main import app
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.repositories.bootstrap_repository import BootstrapRepository
@@ -206,6 +207,11 @@ def test_dashboard_summary_cards() -> None:
     if payload["cards"]:
         domains = {card["domain"] for card in payload["cards"]}
         assert {"production", "ordering", "sales"} <= domains
+        sales_card = next(card for card in payload["cards"] if card["domain"] == "sales")
+        sales_overview = sales_card["sales_overview"]
+        assert len(sales_overview["current_hour_sales_points"]) == 6
+        assert len(sales_overview["today_sales_points"]) == 6
+        assert len(sales_overview["monthly_sales_points"]) == 6
 
 
 def test_home_schedule() -> None:
@@ -254,6 +260,68 @@ def test_production_inventory_status_pagination() -> None:
     payload = response.json()
     assert isinstance(payload["items"], list)
     assert "pagination" in payload
+    pagination = payload["pagination"]
+    assert {"page", "page_size", "total_items", "total_pages"} <= set(pagination.keys())
+    assert pagination["page"] == 1
+    assert pagination["page_size"] == 5
+    assert len(payload["items"]) <= 5
+
+
+def test_production_waste_summary_pagination() -> None:
+    class _FakeWasteSummaryService:
+        async def get_waste_summary(
+            self,
+            store_id: str | None = None,
+            page: int = 1,
+            page_size: int = 10,
+            reference_date: str | None = None,
+        ):
+            assert store_id == "POC_001"
+            assert page == 1
+            assert page_size == 5
+            assert reference_date == "2026-04-23"
+            return {
+                "items": [
+                    {
+                        "item_nm": "글레이즈드",
+                        "image_url": None,
+                        "adjusted_loss_qty": 0,
+                        "confirmed_disuse_qty": 7,
+                        "estimated_expiry_loss_qty": 0,
+                        "adjusted_loss_amount": 0,
+                        "disuse_amount": 21000,
+                        "assumed_shelf_life_days": 1,
+                        "expiry_risk_level": "높음",
+                    }
+                ],
+                "total_adjusted_loss_amount": 0,
+                "total_disuse_amount": 33000,
+                "total_estimated_expiry_loss_qty": 0,
+                "monthly_top_items": [
+                    {"item_nm": "글레이즈드", "confirmed_disuse_qty": 7},
+                    {"item_nm": "카카오", "confirmed_disuse_qty": 4},
+                ],
+                "summary": {"store_id": "POC_001", "item_count": 2, "target_month": "2026-04", "gap_amount": -33000},
+                "highlights": [{"label": "월간 최다 폐기 품목", "item_nm": "글레이즈드", "value": 7}],
+                "actions": [],
+                "evidence": {},
+                "pagination": {"page": 1, "page_size": 5, "total_items": 2, "total_pages": 1},
+            }
+
+    app.dependency_overrides[get_production_service] = lambda: _FakeWasteSummaryService()
+    try:
+        response = client.get(
+            "/api/production/waste-summary?page=1&page_size=5&store_id=POC_001",
+            headers={"X-Reference-Datetime": "2026-04-23T09:00:00+09:00"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_production_service, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["items"], list)
+    assert "pagination" in payload
+    assert "monthly_top_items" in payload
     pagination = payload["pagination"]
     assert {"page", "page_size", "total_items", "total_pages"} <= set(pagination.keys())
     assert pagination["page"] == 1

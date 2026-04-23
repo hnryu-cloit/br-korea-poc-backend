@@ -252,15 +252,22 @@ class WasteItem(BaseModel):
     expiry_risk_level: str
 
 
+class WasteMonthlyTopItem(BaseModel):
+    item_nm: str
+    confirmed_disuse_qty: float
+
+
 class WasteSummaryResponse(BaseModel):
     items: list[WasteItem]
     total_adjusted_loss_amount: float
     total_disuse_amount: float
     total_estimated_expiry_loss_qty: float
+    monthly_top_items: list[WasteMonthlyTopItem] = Field(default_factory=list)
     summary: dict[str, float | int | str]
     highlights: list[dict[str, str | float | int]]
     actions: list[str]
     evidence: dict[str, Any]
+    pagination: Pagination
     explainability: ExplainabilityPayload | None = None
 
 

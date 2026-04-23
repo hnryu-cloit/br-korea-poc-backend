@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.utils import get_now
 from app.infrastructure.db.utils import has_table
 from app.repositories.sales.campaign_repository import CampaignRepositoryMixin
 from app.repositories.sales.insight_repository import InsightRepositoryMixin
@@ -236,19 +237,23 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
         self,
         store_id: str | None = None,
         business_date: str | None = None,
-    ) -> dict[str, int]:
+    ) -> dict[str, int | list[dict[str, int | str]]]:
         if not self.engine:
             raise RuntimeError("sales database engine is not configured")
 
         target_date = (
             datetime.strptime(business_date, "%Y-%m-%d").date()
             if business_date
-            else datetime.utcnow().date()
+            else get_now().date()
         )
         target_dt = target_date.strftime("%Y%m%d")
         month_start = target_date.replace(day=1)
         last_month_end = month_start - timedelta(days=1)
         last_month_start = last_month_end.replace(day=1)
+        target_hour = get_now().hour
+        weekday_dates = self._build_recent_dates(target_date, 6)
+        weekday_labels = self._build_weekday_labels(target_date, 6)
+        month_points = self._build_month_points(target_date, 6)
 
         store_filter = ""
         item_store_filter = ""
@@ -257,7 +262,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "month_start": month_start.strftime("%Y%m%d"),
             "last_month_start": last_month_start.strftime("%Y%m%d"),
             "last_month_end": last_month_end.strftime("%Y%m%d"),
-            "target_hour": datetime.now().hour,
+            "target_hour": target_hour,
         }
         if store_id:
             store_filter = "AND masked_stor_cd = :store_id"
@@ -271,6 +276,16 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "last_month_sales": 0,
             "last_month_same_weekday_avg_sales": 0,
             "last_month_same_hour_avg_sales": 0,
+            "monthly_sales_points": [
+                {"label": point["label"], "value": 0} for point in month_points
+            ],
+            "today_sales_points": [
+                {"label": label, "value": 0} for label in weekday_labels
+            ],
+            "current_hour_sales_points": self._build_hour_points(
+                target_hour=target_hour,
+                rows=[],
+            ),
         }
 
         try:
@@ -429,6 +444,98 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                         result["last_month_same_hour_avg_sales"] = int(
                             round(sum(hour_values) / len(hour_values))
                         )
+
+                    hour_rows = (
+                        connection.execute(
+                            text(
+                                f"""
+                                SELECT CAST(tmzon_div AS INTEGER) AS hour_div,
+                                       COALESCE(
+                                           SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                           0
+                                       ) AS amount
+                                FROM raw_daily_store_item_tmzon
+                                WHERE sale_dt = :target_dt
+                                  AND CAST(tmzon_div AS INTEGER) BETWEEN :hour_start AND :target_hour
+                                  {store_filter}
+                                GROUP BY hour_div
+                                ORDER BY hour_div
+                                """
+                            ),
+                            {
+                                **params,
+                                "hour_start": max(target_hour - 5, 0),
+                            },
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    result["current_hour_sales_points"] = self._build_hour_points(
+                        target_hour=target_hour,
+                        rows=hour_rows,
+                    )
+
+                today_rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT CAST(sale_dt AS TEXT) AS sale_dt,
+                                   COALESCE(
+                                       SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                       0
+                                   ) AS amount
+                            FROM raw_daily_store_item
+                            WHERE sale_dt >= :today_window_start AND sale_dt <= :target_dt
+                              {store_filter}
+                            GROUP BY sale_dt
+                            ORDER BY sale_dt
+                            """
+                        ),
+                        {
+                            **params,
+                            "today_window_start": weekday_dates[0],
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+                result["today_sales_points"] = self._build_points(
+                    labels=weekday_labels,
+                    keys=weekday_dates,
+                    rows=today_rows,
+                    row_key="sale_dt",
+                )
+
+                month_rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT SUBSTRING(CAST(sale_dt AS TEXT), 1, 6) AS month_key,
+                                   COALESCE(
+                                       SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                       0
+                                   ) AS amount
+                            FROM raw_daily_store_item
+                            WHERE sale_dt >= :month_window_start AND sale_dt <= :target_dt
+                              {store_filter}
+                            GROUP BY month_key
+                            ORDER BY month_key
+                            """
+                        ),
+                        {
+                            **params,
+                            "month_window_start": month_points[0]["key"] + "01",
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+                result["monthly_sales_points"] = self._build_points(
+                    labels=[point["label"] for point in month_points],
+                    keys=[point["key"] for point in month_points],
+                    rows=month_rows,
+                    row_key="month_key",
+                )
         except SQLAlchemyError as exc:
             logger.exception(
                 "Failed to aggregate dashboard sales overview (store_id=%s, business_date=%s): %s",
@@ -439,3 +546,70 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             raise RuntimeError("대시보드 매출 집계 중 DB 오류가 발생했습니다.") from exc
 
         return result
+
+    @staticmethod
+    def _build_recent_dates(target_date: date_type, points: int) -> list[str]:
+        return [
+            (target_date - timedelta(days=points - index - 1)).strftime("%Y%m%d")
+            for index in range(points)
+        ]
+
+    @staticmethod
+    def _build_weekday_labels(target_date: date_type, points: int) -> list[str]:
+        labels = ["월", "화", "수", "목", "금", "토", "일"]
+        return [
+            labels[(target_date - timedelta(days=points - index - 1)).weekday()]
+            for index in range(points)
+        ]
+
+    @staticmethod
+    def _build_month_points(target_date: date_type, points: int) -> list[dict[str, str]]:
+        month_points: list[dict[str, str]] = []
+        month_cursor = target_date.replace(day=1)
+        month_starts: list[date_type] = []
+        for _ in range(points):
+            month_starts.append(month_cursor)
+            month_cursor = (month_cursor - timedelta(days=1)).replace(day=1)
+
+        for month_start in reversed(month_starts):
+            month_points.append(
+                {
+                    "key": month_start.strftime("%Y%m"),
+                    "label": f"{month_start.year % 100:02d}.{month_start.month:02d}",
+                }
+            )
+        return month_points
+
+    @staticmethod
+    def _build_points(
+        labels: list[str],
+        keys: list[str],
+        rows: list[dict],
+        row_key: str,
+    ) -> list[dict[str, int | str]]:
+        values_by_key = {
+            str(row.get(row_key)): int(round(float(row.get("amount") or 0)))
+            for row in rows
+        }
+        return [
+            {"label": label, "value": values_by_key.get(key, 0)}
+            for label, key in zip(labels, keys, strict=False)
+        ]
+
+    @staticmethod
+    def _build_hour_points(
+        target_hour: int,
+        rows: list[dict],
+    ) -> list[dict[str, int | str]]:
+        values_by_hour = {
+            int(row.get("hour_div")): int(round(float(row.get("amount") or 0)))
+            for row in rows
+            if row.get("hour_div") is not None
+        }
+        return [
+            {
+                "label": f"{(target_hour - 5 + index) % 24}시",
+                "value": values_by_hour.get((target_hour - 5 + index) % 24, 0),
+            }
+            for index in range(6)
+        ]

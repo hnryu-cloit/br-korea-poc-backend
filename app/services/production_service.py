@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from app.core.utils import get_now
 import copy
 import math
@@ -571,11 +572,39 @@ class ProductionService:
             ),
         )
 
-    async def get_waste_summary(self, store_id: str | None = None) -> WasteSummaryResponse:
+    async def get_waste_summary(
+        self,
+        store_id: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+        reference_date: str | None = None,
+    ) -> WasteSummaryResponse:
         if not store_id:
             raise ValueError("store_id is required")
 
-        cache_key = self._cache_key("waste-summary", store_id=store_id)
+        page = max(1, page)
+        page_size = max(1, min(page_size, 100))
+        now = (
+            datetime.strptime(reference_date, "%Y-%m-%d")
+            if reference_date
+            else get_now()
+        )
+        target_month = now.strftime("%Y-%m")
+        month_start = now.replace(day=1)
+        if month_start.month == 12:
+            next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            next_month_start = month_start.replace(month=month_start.month + 1)
+        date_from = month_start.strftime("%Y-%m-%d")
+        date_to = (next_month_start - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        cache_key = self._cache_key(
+            "waste-summary",
+            store_id=store_id,
+            page=page,
+            page_size=page_size,
+            target_month=target_month,
+        )
         cached_payload = self._cached_payload(cache_key)
         if cached_payload:
             return WasteSummaryResponse.model_validate(cached_payload)
@@ -591,10 +620,15 @@ class ProductionService:
                 continue
             by_item.setdefault(item_key, {})[int(row.get("dr") or 1)] = row
 
-        disuse_rows = self.repository.get_disuse_and_cost_latest_rows(store_id=store_id)
-        disuse_map = {
-            str(row.get("item_cd") or row.get("item_nm") or "").strip(): row for row in disuse_rows
+        latest_rows = self.repository.get_disuse_and_cost_latest_rows(store_id=store_id)
+        latest_disuse_map = {
+            str(row.get("item_cd") or row.get("item_nm") or "").strip(): row for row in latest_rows
         }
+        monthly_rows = self.repository.get_monthly_disuse_rows(
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
         items: list[WasteItem] = []
         total_adjusted_loss_amount = 0.0
@@ -608,7 +642,10 @@ class ProductionService:
             if not pivot:
                 continue
 
-            item_nm = str(pivot.get("item_nm") or "")
+            item_nm = str(pivot.get("item_nm") or "").strip()
+            if not item_nm:
+                continue
+
             surplus_qty = max(
                 self._safe_float(pivot.get("ord_avg")) - self._safe_float(pivot.get("sal_avg")),
                 0.0,
@@ -623,9 +660,11 @@ class ProductionService:
             )
             adjusted_loss_qty = max(surplus_qty - absorb_qty, 0.0)
 
-            disuse_row = disuse_map.get(str(pivot.get("item_cd") or item_nm).strip()) or {}
-            confirmed_disuse_qty = self._safe_float(disuse_row.get("total_disuse_qty"))
+            disuse_row = latest_disuse_map.get(str(pivot.get("item_cd") or item_nm).strip()) or {}
+            confirmed_disuse_qty = round(self._safe_float(disuse_row.get("total_disuse_qty")), 2)
             avg_cost = self._safe_float(disuse_row.get("avg_cost"))
+            adjusted_loss_amount = round(adjusted_loss_qty * avg_cost, 2)
+            disuse_amount = round(confirmed_disuse_qty * avg_cost, 2)
             shelf_life_days = self._assumed_shelf_life_days(item_nm)
             estimated_expiry_loss_qty = (
                 adjusted_loss_qty
@@ -639,8 +678,6 @@ class ProductionService:
                 if adjusted_loss_qty > 0
                 else "낮음"
             )
-            adjusted_loss_amount = round(adjusted_loss_qty * avg_cost, 2)
-            disuse_amount = round(confirmed_disuse_qty * avg_cost, 2)
 
             total_adjusted_loss_amount += adjusted_loss_amount
             total_disuse_amount += disuse_amount
@@ -650,7 +687,7 @@ class ProductionService:
                     item_nm=item_nm,
                     image_url=self._resolve_image_url(item_nm),
                     adjusted_loss_qty=round(adjusted_loss_qty, 2),
-                    confirmed_disuse_qty=round(confirmed_disuse_qty, 2),
+                    confirmed_disuse_qty=confirmed_disuse_qty,
                     estimated_expiry_loss_qty=round(estimated_expiry_loss_qty, 2),
                     adjusted_loss_amount=adjusted_loss_amount,
                     disuse_amount=disuse_amount,
@@ -659,33 +696,61 @@ class ProductionService:
                 )
             )
 
-        items.sort(key=lambda row: row.adjusted_loss_amount, reverse=True)
-        if not items:
-            raise LookupError("해당 점포의 폐기 손실 데이터가 없습니다.")
+        items.sort(key=lambda item: item.adjusted_loss_amount, reverse=True)
 
-        top_item = items[0]
+        total_items = len(items)
+        total_pages = max(1, math.ceil(total_items / page_size))
+        current_page = min(page, total_pages)
+        start_index = (current_page - 1) * page_size
+        paginated_items = items[start_index : start_index + page_size]
+
+        monthly_top_items: list[dict[str, float | str]] = []
+        monthly_total_disuse_amount = 0.0
+        monthly_total_disuse_qty = 0.0
+        for row in monthly_rows:
+            item_nm = str(row.get("item_nm") or "").strip()
+            if not item_nm:
+                continue
+            confirmed_disuse_qty = round(self._safe_float(row.get("total_disuse_qty")), 2)
+            total_amount = round(self._safe_float(row.get("total_disuse_amount")), 2)
+            if confirmed_disuse_qty <= 0 and total_amount <= 0:
+                continue
+            monthly_total_disuse_qty += confirmed_disuse_qty
+            monthly_total_disuse_amount += total_amount
+            monthly_top_items.append(
+                {
+                    "item_nm": item_nm,
+                    "confirmed_disuse_qty": confirmed_disuse_qty,
+                    "disuse_amount": total_amount,
+                }
+            )
+        monthly_top_items.sort(
+            key=lambda item: (-float(item["confirmed_disuse_qty"]), -float(item["disuse_amount"]), str(item["item_nm"]))
+        )
+        monthly_top_items = monthly_top_items[:3]
+
         base_evidence: dict[str, Any] = {
-            "summary_reason": "D+1 흡수 보정 로스와 실폐기를 분리 집계했습니다.",
+            "summary_reason": "표는 기존 폐기 손실 계산 기준을 유지하고, 상단 TOP 3만 당월 누적 폐기 데이터 기준입니다.",
             "processing_route": "repository",
             "fallback_used": False,
             "items": [
                 {
-                    "label": "보정 로스 수식",
-                    "value": f"{round(total_adjusted_loss_amount, 2)}원",
+                    "label": "표 기준",
+                    "value": "기존 폐기 손실 계산",
                     "calculation": "adjusted_loss=max((ord_avg_t-sal_avg_t)-max(sal_avg_t+1-ord_avg_t+1,0),0)",
                     "source_table": "core_stock_rate or raw_inventory_extract",
                 },
                 {
-                    "label": "실폐기 수량",
-                    "value": f"{round(sum(item.confirmed_disuse_qty for item in items), 2)}개",
-                    "calculation": "confirmed_disuse=SUM(disuse_qty latest_date)",
+                    "label": "월간 TOP 3 기준",
+                    "value": target_month,
+                    "calculation": "SUM(disuse_qty within target month)",
                     "source_table": "raw_inventory_extract",
                 },
                 {
-                    "label": "가설 유통기한",
-                    "value": "품목군 키워드 규칙",
-                    "calculation": "도넛/샌드/샐러드=1일, 케이크=2일, 음료=0일",
-                    "source_table": "assumption_rule",
+                    "label": "실폐기 금액",
+                    "value": f"{round(total_disuse_amount, 2)}원",
+                    "calculation": "confirmed_disuse=SUM(disuse_qty latest_date)",
+                    "source_table": "raw_inventory_extract",
                 },
             ],
         }
@@ -696,43 +761,71 @@ class ProductionService:
         )
 
         response = WasteSummaryResponse(
-            items=items,
+            items=paginated_items,
             total_adjusted_loss_amount=round(total_adjusted_loss_amount, 2),
             total_disuse_amount=round(total_disuse_amount, 2),
             total_estimated_expiry_loss_qty=round(total_estimated_expiry_loss_qty, 2),
+            monthly_top_items=[
+                {
+                    "item_nm": str(item["item_nm"]),
+                    "confirmed_disuse_qty": round(float(item["confirmed_disuse_qty"]), 2),
+                }
+                for item in monthly_top_items
+            ],
             summary={
                 "store_id": store_id,
-                "item_count": len(items),
+                "item_count": total_items,
+                "target_month": target_month,
+                "monthly_total_disuse_amount": round(monthly_total_disuse_amount, 2),
+                "monthly_total_disuse_qty": round(monthly_total_disuse_qty, 2),
                 "gap_amount": round(total_adjusted_loss_amount - total_disuse_amount, 2),
             },
-            highlights=[
-                {
-                    "label": "보정 로스 최대 품목",
-                    "item_nm": top_item.item_nm,
-                    "value": top_item.adjusted_loss_amount,
-                },
-                {
-                    "label": "유통기한 가설 손실 최대 품목",
-                    "item_nm": max(items, key=lambda row: row.estimated_expiry_loss_qty).item_nm,
-                    "value": max(items, key=lambda row: row.estimated_expiry_loss_qty).estimated_expiry_loss_qty,
-                },
-            ],
+            highlights=(
+                [
+                    {
+                        "label": "월간 최다 폐기 품목",
+                        "item_nm": str(monthly_top_items[0]["item_nm"]),
+                        "value": round(float(monthly_top_items[0]["confirmed_disuse_qty"]), 2),
+                    },
+                    {
+                        "label": "월간 총 손실 금액",
+                        "item_nm": target_month,
+                        "value": round(monthly_total_disuse_amount, 2),
+                    },
+                ]
+                if monthly_top_items
+                else [
+                    {
+                        "label": "월간 총 손실 금액",
+                        "item_nm": target_month,
+                        "value": round(monthly_total_disuse_amount, 2),
+                    }
+                ]
+            ),
             actions=[
-                "보정 로스 상위 3개 품목의 다음날 발주량을 하향 조정하세요.",
-                "가정 유통기한 1일 품목은 당일 마감 2시간 전 판촉/세트 전환을 적용하세요.",
-                "실폐기와 보정로스 차이가 큰 품목은 재고 등록 정확도를 점검하세요.",
+                "폐기 손실 상위 품목의 다음날 발주량과 생산량을 함께 점검하세요.",
+                "월간 폐기 상위 3개 품목은 발주와 생산 기준을 함께 재조정하세요.",
+                "단기 유통기한 품목은 마감 전 판촉 또는 세트 전환을 적용하세요.",
             ],
             evidence=evidence,
+            pagination=Pagination(
+                page=current_page,
+                page_size=page_size,
+                total_items=total_items,
+                total_pages=total_pages,
+            ),
             explainability=create_ready_payload(
                 trace_id=f"production-waste-{store_id}",
                 actions=[
-                    "보정 로스 상위 품목의 다음 주문/생산량을 즉시 하향 조정하세요.",
-                    "폐기와 보정로스 차이가 큰 품목은 재고 실사 주기를 단축하세요.",
+                    "폐기 손실 상위 품목의 생산량과 발주량을 즉시 조정하세요.",
+                    "월간 폐기 상위 품목은 재고 실사 주기를 단축하세요.",
                 ],
                 evidence=[
+                    f"대상 월: {target_month}",
                     f"총 보정 로스: {round(total_adjusted_loss_amount, 2)}원",
                     f"총 실폐기 금액: {round(total_disuse_amount, 2)}원",
-                    f"품목 수: {len(items)}",
+                    f"월간 총 실폐기 금액: {round(monthly_total_disuse_amount, 2)}원",
+                    f"품목 수: {total_items}",
                 ],
             ),
         )
@@ -791,7 +884,7 @@ class ProductionService:
             if is_stockout or stock_rate < 0:
                 status = "부족"
             elif stock_rate >= 0.35:
-                status = "과잉"
+                status = "여유"
             else:
                 status = "적정"
 
@@ -824,7 +917,7 @@ class ProductionService:
         items.sort(key=lambda row: row.stock_rate)
         top_shortage = [item for item in items if item.status == "부족"][:3]
         top_excess = sorted(
-            [item for item in items if item.status == "과잉"],
+            [item for item in items if item.status == "여유"],
             key=lambda row: row.stock_rate,
             reverse=True,
         )[:3]
@@ -841,8 +934,8 @@ class ProductionService:
             "items": [
                 {
                     "label": "재고율 기반 분류",
-                    "value": f"부족 {shortage_count}개 / 과잉 {excess_count}개",
-                    "calculation": "stock_rate<0 또는 품절=true: 부족, stock_rate>=0.35: 과잉, 그 외 적정",
+                    "value": f"부족 {shortage_count}개 / 여유 {excess_count}개",
+                    "calculation": "stock_rate<0 또는 품절=true: 부족, stock_rate>=0.35: 여유, 그 외 적정",
                     "source_table": "core_stock_rate/core_stockout_time or raw_inventory_extract/core_hourly_item_sales",
                 },
                 {
@@ -876,14 +969,14 @@ class ProductionService:
             ]
             + [
                 {
-                    "label": "과잉 위험 TOP",
+                    "label": "여유 품목 TOP",
                     "value": f"{item.item_nm} ({item.stock_rate:.2f})",
                 }
                 for item in top_excess
             ],
             actions=[
                 "부족 품목은 다음 생산/발주 사이클을 앞당겨 품절 시각을 늦추세요.",
-                "과잉 품목은 다음날 발주량을 축소하고, 프로모션/세트로 소진을 유도하세요.",
+                "여유 품목은 다음날 발주량을 축소하고, 프로모션/세트로 소진을 유도하세요.",
                 "유통기한 가설 1일 품목은 마감 전 재고 소진 우선순위를 높이세요.",
             ],
             evidence=evidence,
@@ -898,11 +991,11 @@ class ProductionService:
                 trace_id=f"production-inventory-status-{store_id}",
                 actions=[
                     "부족 품목은 즉시 생산/발주 타이밍을 앞당기세요.",
-                    "과잉 품목은 다음 발주량을 줄이고 판촉 소진 계획을 실행하세요.",
+                    "여유 품목은 다음 발주량을 줄이고 판촉 소진 계획을 실행하세요.",
                 ],
                 evidence=[
                     f"부족: {shortage_count}개",
-                    f"과잉: {excess_count}개",
+                    f"여유: {excess_count}개",
                     f"평균 재고율: {avg_stock_rate}",
                 ],
             ),

@@ -71,6 +71,11 @@ class DashboardOrderingDeadlineItem(BaseModel):
     deadline_time: str
 
 
+class DashboardSalesTrendPoint(BaseModel):
+    label: str
+    value: int
+
+
 class DashboardSalesOverview(BaseModel):
     monthly_sales: int
     today_sales: int
@@ -78,6 +83,9 @@ class DashboardSalesOverview(BaseModel):
     last_month_sales: int
     last_month_same_weekday_avg_sales: int
     last_month_same_hour_avg_sales: int
+    monthly_sales_points: list[DashboardSalesTrendPoint]
+    today_sales_points: list[DashboardSalesTrendPoint]
+    current_hour_sales_points: list[DashboardSalesTrendPoint]
 
 
 class DashboardSummaryCardBase(BaseModel):
