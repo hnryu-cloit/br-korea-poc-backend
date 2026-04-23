@@ -168,43 +168,62 @@ def test_ordering_history_insights_requires_store_id() -> None:
     assert response.status_code == 422
 
 
-def test_home_overview() -> None:
-    response = client.get("/api/home/overview")
+def test_dashboard_notices() -> None:
+    response = client.get("/api/dashboard/notices")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["items"], list)
+    if payload["items"]:
+        first = payload["items"][0]
+        assert "id" in first
+        assert "name" in first
+        assert "tag" in first
+
+
+def test_dashboard_alerts() -> None:
+    response = client.get("/api/dashboard/alerts")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["low_stock_products"], list)
+    assert "order_deadline" in payload
+    if payload["low_stock_products"]:
+        first = payload["low_stock_products"][0]
+        assert "id" in first
+        assert "name" in first
+        assert "remaining_stock" in first
+        assert "cta_path" in first
+    if payload["order_deadline"] is not None:
+        assert "deadline_at" in payload["order_deadline"]
+        assert payload["order_deadline"]["cta_path"] == "/ordering"
+
+
+def test_dashboard_summary_cards() -> None:
+    response = client.get("/api/dashboard/summary-cards")
     assert response.status_code == 200
     payload = response.json()
     assert "updated_at" in payload
-    assert isinstance(payload["stats"], list)
     assert isinstance(payload["cards"], list)
-    assert isinstance(payload["imminent_deadlines"], list)
-    ordering_card = next(card for card in payload["cards"] if card["domain"] == "ordering")
-    assert isinstance(ordering_card["delivery_scheduled"], bool)
+    if payload["cards"]:
+        domains = {card["domain"] for card in payload["cards"]}
+        assert {"production", "ordering", "sales"} <= domains
 
 
 def test_home_schedule() -> None:
     response = client.get("/api/home/schedule")
     assert response.status_code == 200
     payload = response.json()
-    assert "updated_at" in payload
-    assert "source" in payload
-    assert isinstance(payload["events"], list)
-    assert isinstance(payload["notices"], list)
+    assert "selected_date" in payload
+    assert isinstance(payload["calendar_events"], list)
+    assert isinstance(payload["daily_events"], list)
     assert isinstance(payload["todos"], list)
-    if payload["events"]:
-        first = payload["events"][0]
+    if payload["calendar_events"]:
+        first = payload["calendar_events"][0]
         assert "date" in first
         assert "title" in first
         assert "category" in first
         assert "type" in first
         assert "startDate" in first
         assert "endDate" in first
-    if payload["notices"]:
-        first_notice = payload["notices"][0]
-        assert "id" in first_notice
-        assert "title" in first_notice
-        assert "category" in first_notice
-        assert "type" in first_notice
-        assert "startDate" in first_notice
-        assert "endDate" in first_notice
     if payload["todos"]:
         first_todo = payload["todos"][0]
         assert "id" in first_todo
