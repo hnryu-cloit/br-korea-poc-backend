@@ -206,6 +206,11 @@ def test_dashboard_summary_cards() -> None:
     if payload["cards"]:
         domains = {card["domain"] for card in payload["cards"]}
         assert {"production", "ordering", "sales"} <= domains
+        sales_card = next(card for card in payload["cards"] if card["domain"] == "sales")
+        sales_overview = sales_card["sales_overview"]
+        assert len(sales_overview["current_hour_sales_points"]) == 6
+        assert len(sales_overview["today_sales_points"]) == 6
+        assert len(sales_overview["monthly_sales_points"]) == 6
 
 
 def test_home_schedule() -> None:

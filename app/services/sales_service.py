@@ -310,7 +310,7 @@ class SalesService:
         self,
         store_id: str | None = None,
         business_date: str | None = None,
-    ) -> dict[str, int]:
+    ) -> dict[str, int | list[dict[str, int | str]]]:
         return await self.repository.get_dashboard_overview(
             store_id=store_id,
             business_date=business_date,
