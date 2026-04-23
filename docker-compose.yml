@@ -66,8 +66,8 @@ services:
       - AI_SERVICE_URL=http://ai:6001
       - CORS_ORIGINS=http://localhost:5173,http://localhost:6003
     depends_on:
-      load:
-        condition: service_completed_successfully
+      # load:
+      #   condition: service_completed_successfully
       ai:
         condition: service_started
 
