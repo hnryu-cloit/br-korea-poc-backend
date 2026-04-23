@@ -207,6 +207,43 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
         )
 
 
+def populate_store_clusters(connection: Any) -> int:
+    connection.execute(text("DELETE FROM store_clusters"))
+    result = connection.execute(
+        text(
+            """
+            INSERT INTO store_clusters (
+                masked_stor_cd,
+                sido,
+                store_type,
+                cluster_id,
+                cluster_label,
+                updated_at
+            )
+            SELECT
+                masked_stor_cd,
+                NULLIF(TRIM(COALESCE(sido, '')), '') AS sido,
+                NULLIF(TRIM(COALESCE(store_type, '')), '') AS store_type,
+                CONCAT(
+                    COALESCE(NULLIF(TRIM(COALESCE(sido, '')), ''), 'UNKNOWN'),
+                    '|',
+                    COALESCE(NULLIF(TRIM(COALESCE(store_type, '')), ''), 'UNKNOWN')
+                ) AS cluster_id,
+                CONCAT(
+                    COALESCE(NULLIF(TRIM(COALESCE(sido, '')), ''), 'UNKNOWN'),
+                    ' / ',
+                    COALESCE(NULLIF(TRIM(COALESCE(store_type, '')), ''), 'UNKNOWN')
+                ) AS cluster_label,
+                :loaded_at
+            FROM raw_store_master
+            WHERE NULLIF(TRIM(COALESCE(masked_stor_cd, '')), '') IS NOT NULL
+            """
+        ),
+        {"loaded_at": datetime.now()},
+    )
+    return result.rowcount or 0
+
+
 def main() -> None:
     print("Starting main...")
     manifest = json.loads(settings.manifest_path.read_text(encoding="utf-8"))
@@ -239,6 +276,28 @@ def main() -> None:
         try:
             for dataset in manifest["datasets"]:
                 load_dataset(connection, dataset, run_id)
+            cluster_row_count = populate_store_clusters(connection)
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO ingestion_files(
+                        run_id, table_name, source_file, source_sheet, row_count, loaded_at, status, message
+                    ) VALUES (
+                        :run_id, :table_name, :source_file, :source_sheet, :row_count, :loaded_at, :status, :message
+                    )
+                    """
+                ),
+                {
+                    "run_id": run_id,
+                    "table_name": "store_clusters",
+                    "source_file": "derived:raw_store_master",
+                    "source_sheet": None,
+                    "row_count": cluster_row_count,
+                    "loaded_at": datetime.now().isoformat(timespec="seconds"),
+                    "status": "success",
+                    "message": "store clusters populated from raw_store_master",
+                },
+            )
             connection.execute(
                 text(
                     """
