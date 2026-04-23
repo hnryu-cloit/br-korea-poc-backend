@@ -131,7 +131,7 @@ br-korea-poc-backend/
 │   │       │   ├── data_catalog.py     # GET /api/data/catalog, /api/data/preview/{table}
 │   │       │   ├── explainability.py   # GET /api/explainability/{trace_id}
 │   │       │   ├── health.py           # GET /api/health
-│   │       │   ├── home.py             # GET /api/home/overview
+│   │       │   ├── home.py             # GET /api/home/schedule
 │   │       │   ├── hq.py               # GET /api/hq/coaching, /api/hq/inspection
 │   │       │   ├── notifications.py    # GET /api/notifications
 │   │       │   ├── ordering.py         # 주문 옵션/선택/이력/요약
@@ -348,7 +348,10 @@ mypy .
 | `GET /health` | 서버 헬스체크 |
 | `GET /api/health` | API 라우터 헬스체크 |
 | `GET /api/bootstrap` | 앱 초기화 데이터 |
-| `GET /api/home/overview` | 홈 대시보드 요약 |
+| `GET /api/home/schedule` | 홈 일정 패널 |
+| `GET /api/dashboard/notices` | 대시보드 공지 |
+| `GET /api/dashboard/alerts` | 대시보드 경고 요약 |
+| `GET /api/dashboard/summary-cards` | 대시보드 요약 카드 |
 | `GET /api/data/catalog` | raw/core 테이블 목록 |
 | `GET /api/data/preview/{table_name}` | 테이블 미리보기 |
 | `GET /api/analytics/metrics` | 상단 운영 지표 |
@@ -558,7 +561,7 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 - `app.main`에 `/static/menu-images` 정적 마운트를 추가해 `resource/05. 던킨도너츠 메뉴/*.png` 파일을 URL로 직접 서빙합니다.
 - `production` 응답(`items`, `item-detail`)에 `image_url` 필드를 추가했고, 품목명 기반 매칭 실패 시 `null`을 반환하도록 처리했습니다.
 - 프론트에서 기본 플레이스홀더를 사용하도록 연계되어, backend `image_url`이 없는 품목도 화면 깨짐 없이 표시됩니다.
-- `notifications`, `home/overview`, `production/waste-summary`, `production/inventory-status` 500 원인을 정비해 `http://localhost:6003` Origin 기준 CORS 정상 응답(ACAO 포함)을 확인했습니다.
+- `notifications`, `dashboard/notices`, `dashboard/alerts`, `dashboard/summary-cards`, `production/waste-summary`, `production/inventory-status` 500 원인을 정비해 `http://localhost:6003` Origin 기준 CORS 정상 응답(ACAO 포함)을 확인했습니다.
 - 주문 도메인에서 `GET /api/ordering/history` 필터(`date_from/date_to/item_nm/is_auto`)를 지원하도록 확장했습니다.
 - `GET /api/ordering/history/insights`를 추가해 발주 이력 기반 KPI/이상징후/변동 품목 인사이트를 제공합니다.
 - `GET /api/analytics/market-intelligence`의 합성 랜덤 데이터 응답을 제거하고, 상권/고객 분석 필드를 실데이터(서울시 상권 reference + 소진공 실호출) 기준으로만 생성하도록 변경했습니다.

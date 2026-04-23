@@ -306,6 +306,16 @@ class SalesService:
         )
         return response
 
+    async def get_dashboard_overview(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+    ) -> dict[str, int]:
+        return await self.repository.get_dashboard_overview(
+            store_id=store_id,
+            business_date=business_date,
+        )
+
     async def get_campaign_effect(
         self,
         store_id: str | None = None,

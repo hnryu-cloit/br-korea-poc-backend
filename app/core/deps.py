@@ -20,6 +20,7 @@ from app.services.ai_client import AIServiceClient
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import AuditService
 from app.services.bootstrap_service import BootstrapService
+from app.services.dashboard_service import DashboardService
 from app.services.data_catalog_service import DataCatalogService
 from app.services.home_service import HomeService
 from app.services.hq_service import HQService
@@ -77,6 +78,15 @@ def get_home_service() -> HomeService:
         ordering_service=get_ordering_service(),
         repository=HomeRepository(engine=get_database_engine()),
         prompt_settings_service=get_prompt_settings_service(),
+    )
+
+
+def get_dashboard_service() -> DashboardService:
+    return DashboardService(
+        production_service=get_production_service(),
+        ordering_service=get_ordering_service(),
+        sales_service=get_sales_service(),
+        repository=HomeRepository(engine=get_database_engine()),
     )
 
 

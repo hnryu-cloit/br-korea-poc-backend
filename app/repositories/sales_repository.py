@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+from calendar import monthrange
+from datetime import date as date_type
+from datetime import datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -226,5 +229,213 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 exc,
             )
             raise RuntimeError("매출 요약 집계 중 DB 오류가 발생했습니다.") from exc
+
+        return result
+
+    async def get_dashboard_overview(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+    ) -> dict[str, int]:
+        if not self.engine:
+            raise RuntimeError("sales database engine is not configured")
+
+        target_date = (
+            datetime.strptime(business_date, "%Y-%m-%d").date()
+            if business_date
+            else datetime.utcnow().date()
+        )
+        target_dt = target_date.strftime("%Y%m%d")
+        month_start = target_date.replace(day=1)
+        last_month_end = month_start - timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+
+        store_filter = ""
+        item_store_filter = ""
+        params: dict[str, str | int] = {
+            "target_dt": target_dt,
+            "month_start": month_start.strftime("%Y%m%d"),
+            "last_month_start": last_month_start.strftime("%Y%m%d"),
+            "last_month_end": last_month_end.strftime("%Y%m%d"),
+            "target_hour": datetime.now().hour,
+        }
+        if store_id:
+            store_filter = "AND masked_stor_cd = :store_id"
+            item_store_filter = "AND t.masked_stor_cd = :store_id"
+            params["store_id"] = store_id
+
+        result = {
+            "monthly_sales": 0,
+            "today_sales": 0,
+            "current_hour_sales": 0,
+            "last_month_sales": 0,
+            "last_month_same_weekday_avg_sales": 0,
+            "last_month_same_hour_avg_sales": 0,
+        }
+
+        try:
+            with self.engine.connect() as connection:
+                monthly_row = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT COALESCE(
+                                SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                0
+                            ) AS amount
+                            FROM raw_daily_store_item
+                            WHERE sale_dt >= :month_start AND sale_dt <= :target_dt
+                              {store_filter}
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .first()
+                )
+                if monthly_row:
+                    result["monthly_sales"] = int(round(float(monthly_row["amount"] or 0)))
+
+                today_row = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT COALESCE(
+                                SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                0
+                            ) AS amount
+                            FROM raw_daily_store_item
+                            WHERE sale_dt = :target_dt
+                              {store_filter}
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .first()
+                )
+                if today_row:
+                    result["today_sales"] = int(round(float(today_row["amount"] or 0)))
+
+                last_month_row = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT COALESCE(
+                                SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                0
+                            ) AS amount
+                            FROM raw_daily_store_item
+                            WHERE sale_dt >= :last_month_start AND sale_dt <= :last_month_end
+                              {store_filter}
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .first()
+                )
+                if last_month_row:
+                    result["last_month_sales"] = int(round(float(last_month_row["amount"] or 0)))
+
+                weekday_rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT CAST(sale_dt AS TEXT) AS sale_dt,
+                                   COALESCE(
+                                       SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                       0
+                                   ) AS amount
+                            FROM raw_daily_store_item
+                            WHERE sale_dt >= :last_month_start AND sale_dt <= :last_month_end
+                              {store_filter}
+                            GROUP BY sale_dt
+                            ORDER BY sale_dt
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+                weekday_values: list[float] = []
+                for row in weekday_rows:
+                    raw_date = str(row["sale_dt"])
+                    try:
+                        parsed = date_type(
+                            int(raw_date[:4]),
+                            int(raw_date[4:6]),
+                            int(raw_date[6:8]),
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if parsed.weekday() == target_date.weekday():
+                        weekday_values.append(float(row["amount"] or 0))
+                if weekday_values:
+                    result["last_month_same_weekday_avg_sales"] = int(
+                        round(sum(weekday_values) / len(weekday_values))
+                    )
+
+                if has_table(self.engine, "raw_daily_store_item_tmzon"):
+                    current_hour_row = (
+                        connection.execute(
+                            text(
+                                f"""
+                                SELECT COALESCE(
+                                    SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                    0
+                                ) AS amount
+                                FROM raw_daily_store_item_tmzon
+                                WHERE sale_dt = :target_dt
+                                  AND CAST(tmzon_div AS INTEGER) = :target_hour
+                                  {store_filter}
+                                """
+                            ),
+                            params,
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if current_hour_row:
+                        result["current_hour_sales"] = int(
+                            round(float(current_hour_row["amount"] or 0))
+                        )
+
+                    last_hour_rows = (
+                        connection.execute(
+                            text(
+                                f"""
+                                SELECT sale_dt,
+                                       COALESCE(
+                                           AVG(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                           0
+                                       ) AS amount
+                                FROM raw_daily_store_item_tmzon t
+                                WHERE sale_dt >= :last_month_start AND sale_dt <= :last_month_end
+                                  AND CAST(tmzon_div AS INTEGER) = :target_hour
+                                  {item_store_filter}
+                                GROUP BY sale_dt
+                                ORDER BY sale_dt
+                                """
+                            ),
+                            params,
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    hour_values = [float(row["amount"] or 0) for row in last_hour_rows]
+                    if hour_values:
+                        result["last_month_same_hour_avg_sales"] = int(
+                            round(sum(hour_values) / len(hour_values))
+                        )
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "Failed to aggregate dashboard sales overview (store_id=%s, business_date=%s): %s",
+                store_id,
+                business_date,
+                exc,
+            )
+            raise RuntimeError("대시보드 매출 집계 중 DB 오류가 발생했습니다.") from exc
 
         return result

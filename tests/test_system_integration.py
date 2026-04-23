@@ -334,19 +334,28 @@ def ai_client() -> TestClient:
     ai_app.dependency_overrides.clear()
 
 
-def test_home_overview_matches_frontend_contract() -> None:
+def test_dashboard_split_contract_matches_frontend() -> None:
     client = TestClient(backend_app)
 
-    response = client.get("/api/home/overview")
+    notices = client.get("/api/dashboard/notices")
+    alerts = client.get("/api/dashboard/alerts")
+    cards = client.get("/api/dashboard/summary-cards")
+    schedule = client.get("/api/home/schedule")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert set(payload.keys()) == {"updated_at", "stats", "cards", "imminent_deadlines"}
-    assert len(payload["stats"]) == 4
-    assert len(payload["cards"]) == 3
+    assert notices.status_code == 200
+    assert alerts.status_code == 200
+    assert cards.status_code == 200
+    assert schedule.status_code == 200
 
-    ordering_card = next(card for card in payload["cards"] if card["domain"] == "ordering")
-    assert isinstance(ordering_card["delivery_scheduled"], bool)
+    assert set(notices.json().keys()) == {"items"}
+    assert set(alerts.json().keys()) == {"low_stock_products", "order_deadline"}
+    assert set(cards.json().keys()) == {"updated_at", "cards"}
+    assert set(schedule.json().keys()) == {
+        "selected_date",
+        "calendar_events",
+        "daily_events",
+        "todos",
+    }
 
 
 def test_ai_fastapi_simulation_route_returns_contract(ai_client: TestClient) -> None:
