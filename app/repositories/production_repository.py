@@ -741,19 +741,25 @@ class ProductionRepository(BaseRepository):
 
         try:
             with self.engine.connect() as connection:
-                latest_date = connection.execute(
-                    text(
-                        f"""
-                        SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
-                        FROM {relation}
-                        WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
-                        {store_filter}
-                        ORDER BY date_value DESC
-                        LIMIT 1
-                        """
-                    ),
-                    params_date,
-                ).scalar_one_or_none()
+                latest_date: str | None = None
+                if reference_date:
+                    reference_dt = self._parse_date_str(reference_date)
+                    if reference_dt is not None:
+                        latest_date = reference_dt.strftime("%Y%m%d")
+                if latest_date is None:
+                    latest_date = connection.execute(
+                        text(
+                            f"""
+                            SELECT DISTINCT CAST({date_column} AS TEXT) AS date_value
+                            FROM {relation}
+                            WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
+                            {store_filter}
+                            ORDER BY date_value DESC
+                            LIMIT 1
+                            """
+                        ),
+                        params_date,
+                    ).scalar_one_or_none()
                 if not latest_date:
                     logger.debug("_fetch_metric_map 기준 날짜 없음: relation=%s store_id=%s", relation, store_id)
                     logger.debug(
@@ -1045,8 +1051,9 @@ class ProductionRepository(BaseRepository):
         sale_map: dict[str, dict[str, object]],
         order_confirm_map: dict[str, dict[str, object]],
         hourly_sale_map: dict[str, dict[str, object]],
+        active_keys: set[str] | None = None,
     ) -> list[dict]:
-        combined_keys = (
+        combined_keys = active_keys or (
             set(production_map)
             | set(secondary_map)
             | set(stock_map)
@@ -1151,6 +1158,7 @@ class ProductionRepository(BaseRepository):
                 ("confrm_qty",),
                 store_id=store_id,
                 window_days=14,
+                reference_date=business_date,
             )
 
         if self.engine and has_table(self.engine, "core_hourly_item_sales"):
@@ -1162,7 +1170,12 @@ class ProductionRepository(BaseRepository):
                 ("sale_qty",),
                 store_id=store_id,
                 window_days=7,
+                reference_date=business_date,
             )
+
+        active_keys = set(stock_map) | set(sale_map)
+        if not active_keys:
+            active_keys = set(order_confirm_map) | set(hourly_sale_map)
 
         items = self._build_new_items(
             production_map,
@@ -1171,6 +1184,7 @@ class ProductionRepository(BaseRepository):
             sale_map,
             order_confirm_map,
             hourly_sale_map,
+            active_keys=active_keys,
         )
         if items:
             logger.debug(

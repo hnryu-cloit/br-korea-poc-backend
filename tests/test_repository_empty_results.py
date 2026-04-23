@@ -111,6 +111,52 @@ async def test_production_repository_returns_empty_items_without_engine() -> Non
 
 
 @pytest.mark.asyncio
+async def test_production_repository_list_items_only_uses_active_skus_for_reference_date(monkeypatch) -> None:
+    repository = ProductionRepository(engine=object())
+
+    monkeypatch.setattr(
+        "app.repositories.production_repository.has_table",
+        lambda engine, table_name: True,
+    )
+
+    captured_calls: list[tuple[str, int, str | None]] = []
+
+    def _fake_fetch_metric_map(
+        relation: str,
+        date_candidates: tuple[str, ...],
+        item_name_candidates: tuple[str, ...],
+        item_code_candidates: tuple[str, ...],
+        metric_candidates: tuple[str, ...],
+        store_id: str | None = None,
+        window_days: int = 0,
+        reference_date: str | None = None,
+    ) -> dict[str, dict[str, object]]:
+        captured_calls.append((relation, window_days, reference_date))
+        if relation == "raw_inventory_extract" and metric_candidates == ("stock_qty",):
+            return {"ACTIVE": {"item_cd": "ACTIVE", "item_nm": "활성상품", "qty": 10}}
+        if relation == "raw_inventory_extract" and metric_candidates == ("sale_qty",):
+            return {"ACTIVE": {"item_cd": "ACTIVE", "item_nm": "활성상품", "qty": 8}}
+        if relation == "raw_production_extract":
+            return {
+                "ACTIVE": {"item_cd": "ACTIVE", "item_nm": "활성상품", "qty": 12},
+                "OLD": {"item_cd": "OLD", "item_nm": "과거상품", "qty": 15},
+            }
+        if relation == "raw_order_extract":
+            return {"OLD": {"item_cd": "OLD", "item_nm": "과거상품", "qty": 9}}
+        if relation == "core_hourly_item_sales":
+            return {"OLD": {"item_cd": "OLD", "item_nm": "과거상품", "qty": 7}}
+        return {}
+
+    repository._fetch_metric_map = _fake_fetch_metric_map  # type: ignore[method-assign]
+
+    items = await repository.list_items(store_id="POC_010", business_date="2026-03-05")
+
+    assert [item["sku_id"] for item in items] == ["ACTIVE"]
+    assert ("raw_order_extract", 14, "2026-03-05") in captured_calls
+    assert ("core_hourly_item_sales", 7, "2026-03-05") in captured_calls
+
+
+@pytest.mark.asyncio
 async def test_production_service_overview_is_empty_when_repository_is_empty() -> None:
     service = ProductionService(repository=ProductionRepository(engine=None))
 
