@@ -2,7 +2,44 @@
 
 BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
+## 최근 업데이트 (2026-04-23)
+
+- 프론트 사이드바 상단 `AgentGo Biz` 로고 클릭 동선이 대문(`/`)으로 변경되었습니다.
+  - 이번 세션에서 백엔드 API/스키마 코드는 변경하지 않았습니다.
+- 프론트 `/settings` 화면 셸이 `Settings v3` 원본 HTML 구조로 정렬되었습니다.
+  - 이번 세션에서 백엔드 API/스키마 코드는 추가 변경하지 않았습니다.
+- 프론트 `/settings` 내부 패널/모달이 `Settings v3` 원본 마크업 기준으로 재작성되었습니다.
+  - 이번 세션에서 백엔드 API/스키마 코드는 변경하지 않았습니다.
+- 프론트 settings 코드가 `VIBE_CODING_GUIDE` 기준으로 로직 분리(hooks/mockdata) 리팩토링되었습니다.
+  - 이번 세션에서 백엔드 API/스키마 코드는 변경하지 않았습니다.
+- 프론트 `/settings` 스타일 파일이 feature 전용 CSS에서 전역 스타일 엔트리로 통합되었습니다.
+  - 이번 세션에서 백엔드 API/스키마 코드는 변경하지 않았습니다.
+- 프론트 `/settings` 추가 패널(`Agents/Connectors/RBAC`) 인라인 스타일 정리가 진행되었습니다.
+  - 이번 세션에서 백엔드 API/스키마 코드는 변경하지 않았습니다.
+- 프론트 `/settings` 전체 화면 비율 보정(AppLayout padding 해제 + settings 셸 full-viewport)이 반영되었습니다.
+  - 이번 세션에서 백엔드 코드/계약 변경은 없습니다.
+
 ## 최근 업데이트 (2026-04-22)
+
+- Plan 구현: explainability 병렬 보강 + 기준일시 실사용
+  - `app/schemas/explainability.py`, `app/services/explainability_service.py`를 추가했습니다.
+  - `GET /api/explainability/{trace_id}` 엔드포인트를 추가했습니다.
+  - sales/ordering/production/analytics/notifications 주요 응답에 `explainability` 필드를 확장했습니다.
+  - `X-Reference-Datetime`를 실제 조회 기본값으로 반영했습니다.
+    - sales/analytics: `date_from/date_to` 기본값
+    - production: `business_date` 기본값
+    - ordering: 마감 계산 기준 시각
+
+- CORS 허용 헤더를 확장했습니다.
+  - 프론트가 전달하는 `X-Store-Id`, `X-Reference-Datetime`를 허용해 기준 점포/기준 일시 헤더가 preflight에서 차단되지 않도록 정비했습니다.
+
+- 본사 Settings v3 UI 개편 연계
+  - 이번 세션의 코드 변경은 프론트(`/settings`) 화면 개편 중심이며, 백엔드 API 계약 변경은 없습니다.
+  - 기존 설정/감사 로그 API(`GET/PUT /api/settings/prompt`, `GET /api/audit/logs`)를 동일하게 사용합니다.
+
+- QA 운영 자산 동기화
+  - 기준 QA 마스터 참조 파일을 `../docs/reference/qa-master.csv`로 추가했습니다.
+  - QA 실행 이력 기록 도구 `../docs/qa/qa-run-log.py`를 기준 경로로 문서화했습니다.
 
 - QA 안정화 패치 반영
   - `AuditService`가 저장소 비가용 시에도 감사 로그 안전 payload를 생성해 요청 플로우를 중단하지 않도록 보강했습니다.
@@ -92,6 +129,7 @@ br-korea-poc-backend/
 │   │       │   ├── bootstrap.py        # GET /api/bootstrap
 │   │       │   ├── channels.py         # GET /api/channels/drafts
 │   │       │   ├── data_catalog.py     # GET /api/data/catalog, /api/data/preview/{table}
+│   │       │   ├── explainability.py   # GET /api/explainability/{trace_id}
 │   │       │   ├── health.py           # GET /api/health
 │   │       │   ├── home.py             # GET /api/home/overview
 │   │       │   ├── hq.py               # GET /api/hq/coaching, /api/hq/inspection
@@ -106,7 +144,8 @@ br-korea-poc-backend/
 │   ├── core/
 │   │   ├── auth.py                     # X-User-Role 헤더 기반 역할 식별
 │   │   ├── config.py                   # 환경 변수 설정 (pydantic-settings)
-│   │   └── deps.py                     # FastAPI 의존성 주입 함수
+│   │   ├── deps.py                     # FastAPI 의존성 주입 함수
+│   │   └── reference_datetime.py       # 기준 일시 파서/기본 기간 해석
 │   ├── infrastructure/
 │   │   └── db/
 │   │       └── connection.py           # SQLAlchemy 엔진 싱글턴
@@ -129,6 +168,7 @@ br-korea-poc-backend/
 │   │   ├── contracts.py
 │   │   ├── data_catalog.py
 │   │   ├── db_schemas.py               # raw/core 테이블 Pydantic 모델
+│   │   ├── explainability.py
 │   │   ├── notifications.py
 │   │   ├── home.py
 │   │   ├── ordering.py
@@ -143,6 +183,7 @@ br-korea-poc-backend/
 │   │   ├── audit_service.py
 │   │   ├── bootstrap_service.py
 │   │   ├── data_catalog_service.py
+│   │   ├── explainability_service.py   # explainability payload 캐시/생성
 │   │   ├── notifications_service.py
 │   │   ├── home_service.py
 │   │   ├── ordering_service.py
@@ -532,7 +573,7 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 - 주문 추천 옵션 응답(`GET /api/ordering/options`)은 AI 날씨 정보가 비어 있을 때 Open-Meteo 예보 API를 폴백으로 호출해 구조화된 `weather` 객체를 채웁니다.
 - `GET /api/analytics/metrics`는 `store_id=STORE_DEMO` 또는 미존재 점포 ID 요청 시 전체 매장 집계로 자동 폴백하도록 보정해 KPI가 0값으로 고정되는 케이스를 줄였습니다.
 - `GET /api/analytics/metrics`에서 사용자가 선택한 기간(`date_from/date_to`)에 데이터가 전혀 없으면, 자동으로 최근 가용 7일 구간으로 폴백해 0집계 고정 현상을 완화했습니다.
-- 프론트 기본 환경값을 `VITE_DEFAULT_STORE_ID=POC_012`로 정리해, backend `analytics/metrics`의 점포 필터가 초기 실행부터 온라인/할인 KPI 검증 가능한 점포를 사용하도록 동기화했습니다.
+- 프론트 기본 환경값은 `VITE_DEFAULT_STORE_ID=POC_010`, `VITE_DEFAULT_REFERENCE_DATETIME=2026-03-05T00:00` 기준으로 동기화합니다.
 - `할인 결제 비중`은 0.1% 미만의 소수값도 `0.03%` 형태로 표시하도록 포맷을 보정해, 실제 할인 결제 집계가 `0.0%`로만 보이는 표시 한계를 줄였습니다.
 
 - 상권 화면의 글로벌 실패 문구는 메인 분석 API(`/api/analytics/market-intelligence`) 오류 기준으로만 노출되도록 프론트 표시 정책이 조정되었습니다(보조 API 오류와 분리).
@@ -563,3 +604,14 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 - Docker 실행 시 backend 컨테이너가 메뉴 이미지 인덱스를 읽을 수 있도록 `/menu-images` 경로 후보를 추가했습니다.
 - `docker-compose.yml`의 backend 서비스에 `./br-korea-poc-front/public/images:/menu-images:ro` 볼륨을 연결해 `/api/production/items`의 `image_url` 누락을 완화했습니다.
+
+## Session Update (2026-04-23, sales insights partial fallback)
+
+- `app/repositories/sales/insight_repository.py`에서 `peak_hours/channel_mix/payment_mix/menu_mix` 중 일부 섹션 데이터가 비어도 전체 `404`를 반환하지 않도록 처리했습니다.
+- 누락 섹션은 `status="review"`와 `데이터 상태=부족` 메트릭을 포함한 안내 섹션으로 채워 `/api/sales/insights`가 부분 성공(200) 응답을 반환합니다.
+- `raw_daily_store_channel` 집계 중 `SUM(text)` 타입 오류가 발생하는 환경에서도 해당 섹션만 점검 상태로 내려 화면 전체 실패를 방지합니다.
+
+## Session Update (2026-04-23, signals/sidebar removal scope)
+
+- 이번 라운드의 `signals` 페이지 제거 및 사이드바 항목 제거는 프론트엔드 라우팅/메뉴 작업입니다.
+- 백엔드 API/스키마 코드는 변경하지 않았습니다.

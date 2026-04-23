@@ -2,6 +2,7 @@ from typing import Optional, Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.explainability import ExplainabilityPayload
 
 class SalesPrompt(BaseModel):
     label: str
@@ -47,6 +48,7 @@ class SalesQueryResponse(BaseModel):
     sources: Optional[list[str]] = None
     visual_data: Optional[dict[str, Any]] = None
     data_lineage: Optional[list[dict[str, Any]]] = Field(default_factory=list, description="AI가 생성 및 실행한 쿼리 히스토리 (투명성 검증용)")
+    explainability: ExplainabilityPayload | None = None
 
 
 
@@ -73,6 +75,7 @@ class SalesInsightsResponse(BaseModel):
     filtered_store_id: Optional[str] = None
     filtered_date_from: Optional[str] = None
     filtered_date_to: Optional[str] = None
+    explainability: ExplainabilityPayload | None = None
 
 
 class SalesWeeklyItem(BaseModel):
@@ -96,6 +99,7 @@ class SalesSummaryResponse(BaseModel):
     avg_margin_rate: float = 0.0
     avg_net_profit_per_item: float = 0.0
     estimated_today_profit: float = 0.0
+    explainability: ExplainabilityPayload | None = None
 
 
 class SalesCampaignEffectResponse(BaseModel):
@@ -103,3 +107,4 @@ class SalesCampaignEffectResponse(BaseModel):
     summary: str = "캠페인 효과 데이터가 준비되지 않았습니다."
     metrics: list[SalesInsightMetric] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
+    explainability: ExplainabilityPayload | None = None

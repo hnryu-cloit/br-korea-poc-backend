@@ -3,6 +3,11 @@
 > 출처: `POC 대상 테이블 구조(작성중)_V3.xlsx`
 > 구현: FastAPI + Pydantic (`app/schemas/db_schemas.py`)
 
+## Session Update (2026-04-22)
+
+- 본 세션은 프론트 본사 설정 화면(`Settings Page v3`) 개편 작업으로, 백엔드 DB 스키마 변경은 없습니다.
+- 따라서 `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
 ---
 
 ## 원본 테이블 분류

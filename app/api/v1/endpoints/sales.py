@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 
 from app.core.auth import get_current_role
+from app.core.reference_datetime import resolve_date_range_by_reference
 from app.core.deps import get_sales_service
 from app.schemas.sales import (
     SalesCampaignEffectResponse,
@@ -11,6 +12,10 @@ from app.schemas.sales import (
     SalesSummaryResponse,
 )
 from app.services.sales_service import SalesService
+from app.services.explainability_service import (
+    build_trace_id,
+    create_pending_payload,
+)
 
 router = APIRouter(prefix="/sales", tags=["sales"])
 
@@ -38,10 +43,31 @@ async def list_sales_prompts(
 @router.post("/query", response_model=SalesQueryResponse)
 async def query_sales(
     payload: SalesQueryRequest,
+    background_tasks: BackgroundTasks,
     role: str = Depends(get_current_role),
+    x_store_id: str | None = Header(default=None, alias="X-Store-Id"),
     service: SalesService = Depends(get_sales_service),
 ) -> SalesQueryResponse:
-    return await service.query(payload, actor_role=role)
+    if not payload.store_id and x_store_id:
+        payload.store_id = x_store_id
+    result = await service.query(payload, actor_role=role)
+    trace_id = build_trace_id("sales")
+    pending = create_pending_payload(
+        trace_id,
+        actions=result.actions,
+        evidence=result.evidence,
+    )
+    result.explainability = pending
+    background_tasks.add_task(
+        service.enrich_sales_query_explainability,
+        trace_id=trace_id,
+        store_id=payload.store_id,
+        prompt=payload.prompt,
+        base_text=result.text,
+        base_actions=result.actions,
+        base_evidence=result.evidence,
+    )
+    return result
 
 
 @router.get("/insights", response_model=SalesInsightsResponse)
@@ -49,10 +75,18 @@ async def get_sales_insights(
     store_id: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: SalesService = Depends(get_sales_service),
 ) -> SalesInsightsResponse:
     try:
-        return await service.get_insights(store_id=store_id, date_from=date_from, date_to=date_to)
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
+        return await service.get_insights(
+            store_id=store_id,
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LookupError as exc:
@@ -66,10 +100,18 @@ async def get_sales_summary(
     store_id: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: SalesService = Depends(get_sales_service),
 ) -> SalesSummaryResponse:
     try:
-        return await service.get_summary(store_id=store_id, date_from=date_from, date_to=date_to)
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
+        return await service.get_summary(
+            store_id=store_id,
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LookupError as exc:
@@ -83,11 +125,15 @@ async def get_sales_campaign_effect(
     store_id: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: SalesService = Depends(get_sales_service),
 ) -> SalesCampaignEffectResponse:
     try:
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
         return await service.get_campaign_effect(
-            store_id=store_id, date_from=date_from, date_to=date_to
+            store_id=store_id, date_from=resolved_date_from, date_to=resolved_date_to
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

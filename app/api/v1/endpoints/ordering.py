@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from app.core.reference_datetime import parse_reference_datetime
 from app.core.deps import get_ordering_service
 from app.schemas.ordering import (
     OrderingAlertsResponse,
@@ -21,9 +22,14 @@ router = APIRouter(prefix="/ordering", tags=["ordering"])
 async def list_order_options(
     notification_entry: bool = Query(default=False),
     store_id: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingOptionsResponse:
-    return await service.list_options(notification_entry=notification_entry, store_id=store_id)
+    return await service.list_options(
+        notification_entry=notification_entry,
+        store_id=store_id,
+        reference_datetime=parse_reference_datetime(x_reference_datetime),
+    )
 
 
 @router.get("/context/{notification_id}", response_model=OrderingContextResponse)
@@ -39,9 +45,14 @@ async def get_ordering_context(
 async def list_ordering_alerts(
     before_minutes: int = Query(default=20, ge=1, le=120),
     store_id: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingAlertsResponse:
-    return await service.list_deadline_alerts(before_minutes=before_minutes, store_id=store_id)
+    return await service.list_deadline_alerts(
+        before_minutes=before_minutes,
+        store_id=store_id,
+        reference_datetime=parse_reference_datetime(x_reference_datetime),
+    )
 
 
 @router.post("/selections", response_model=OrderSelectionResponse)
@@ -68,9 +79,13 @@ async def list_order_selection_history(
 @router.get("/deadline")
 async def get_ordering_deadline(
     store_id: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: OrderingService = Depends(get_ordering_service),
 ) -> dict:
-    return await service.get_deadline(store_id=store_id)
+    return await service.get_deadline(
+        store_id=store_id,
+        reference_datetime=parse_reference_datetime(x_reference_datetime),
+    )
 
 
 @router.get("/selections/summary", response_model=OrderSelectionSummaryResponse)

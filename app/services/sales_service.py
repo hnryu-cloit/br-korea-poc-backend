@@ -15,6 +15,11 @@ from app.schemas.sales import (
 )
 from app.services.ai_client import AIServiceClient
 from app.services.audit_service import AuditService
+from app.services.explainability_service import (
+    create_failed_payload,
+    create_ready_payload,
+    ensure_non_empty_actions_evidence,
+)
 from app.services.prompt_settings_service import PromptSettingsService
 
 _COMPARISON_KEYWORDS = ["배달", "매출", "전년 동월", "채널"]
@@ -154,6 +159,14 @@ class SalesService:
             masked_fields=merged_masked,
             **response,
         )
+        ensured_actions, ensured_evidence = ensure_non_empty_actions_evidence(
+            result.actions,
+            result.evidence,
+            fallback_action=f"{payload.store_id} 매장의 오늘 핵심 지표 1개를 선택해 즉시 점검하세요.",
+            fallback_evidence=f"{payload.store_id} 매장 질의 결과를 기준으로 생성한 기본 근거입니다.",
+        )
+        result.actions = ensured_actions
+        result.evidence = ensured_evidence
         if self.audit_service:
             await self.audit_service.record(
                 domain="sales",
@@ -165,6 +178,74 @@ class SalesService:
                 metadata={"prompt": safe_prompt, "query_type": query_type, "comparison": False},
             )
         return result
+
+    async def enrich_sales_query_explainability(
+        self,
+        *,
+        trace_id: str,
+        store_id: str,
+        prompt: str,
+        base_text: str,
+        base_actions: list[str],
+        base_evidence: list[str],
+    ) -> None:
+        fallback_action = (
+            f"{store_id} 매장 응답을 먼저 실행하고, 필요 시 동일 질의를 기준일시 유지 상태로 재조회하세요."
+        )
+        fallback_evidence = f"{store_id} 매장 응답 본문을 기반으로 보강 근거를 생성했습니다."
+        if not self.ai_client:
+            create_ready_payload(
+                trace_id,
+                actions=base_actions,
+                evidence=base_evidence,
+            )
+            return
+
+        enrichment_prompt = dedent(
+            f"""
+            다음 매출 응답을 보강하세요.
+            - 액션은 점주가 즉시 수행 가능한 문장 2~3개
+            - 근거는 수치/기간/비교 기준을 포함한 문장 2~3개
+            - 반드시 JSON: {{"actions":["..."],"evidence":["..."]}}
+
+            [점포] {store_id}
+            [사용자 질문] {prompt}
+            [현재 응답] {base_text}
+            [기존 액션] {'; '.join(base_actions)}
+            [기존 근거] {'; '.join(base_evidence)}
+            """
+        ).strip()
+
+        try:
+            enriched = await self.ai_client.query_sales(
+                prompt=enrichment_prompt,
+                store_id=store_id,
+                domain="sales",
+                system_instruction="JSON 형식으로 actions/evidence만 반환하세요.",
+            )
+            actions = base_actions
+            evidence = base_evidence
+            if isinstance(enriched, dict):
+                candidate_actions = enriched.get("actions")
+                candidate_evidence = enriched.get("evidence")
+                actions, evidence = ensure_non_empty_actions_evidence(
+                    candidate_actions if isinstance(candidate_actions, list) else base_actions,
+                    candidate_evidence if isinstance(candidate_evidence, list) else base_evidence,
+                    fallback_action=fallback_action,
+                    fallback_evidence=fallback_evidence,
+                )
+            create_ready_payload(
+                trace_id,
+                actions=actions,
+                evidence=evidence,
+            )
+        except Exception as exc:  # noqa: BLE001
+            create_failed_payload(
+                trace_id,
+                actions=base_actions,
+                evidence=base_evidence,
+                error_reason=f"sales_enrichment_failed:{type(exc).__name__}",
+            )
 
     async def get_insights(
         self,
@@ -186,7 +267,27 @@ class SalesService:
             if not section:
                 continue
             section["status"] = "active" if section.get("status") == "active" else "review"
-        return SalesInsightsResponse(**payload)
+        response = SalesInsightsResponse(**payload)
+        insight_actions: list[str] = []
+        insight_evidence: list[str] = []
+        for section in (
+            response.peak_hours,
+            response.channel_mix,
+            response.payment_mix,
+            response.menu_mix,
+            response.campaign_seasonality,
+        ):
+            if not section:
+                continue
+            insight_actions.extend(section.actions or [])
+            for metric in section.metrics or []:
+                insight_evidence.append(f"{section.title} - {metric.label}: {metric.value}")
+        response.explainability = create_ready_payload(
+            trace_id=f"sales-insights-{store_id or 'all'}",
+            actions=insight_actions,
+            evidence=insight_evidence,
+        )
+        return response
 
     async def get_summary(
         self,
@@ -195,7 +296,20 @@ class SalesService:
         date_to: str | None = None,
     ) -> SalesSummaryResponse:
         payload = await self.repository.get_summary(store_id=store_id, date_from=date_from, date_to=date_to)
-        return SalesSummaryResponse(**payload)
+        response = SalesSummaryResponse(**payload)
+        response.explainability = create_ready_payload(
+            trace_id=f"sales-summary-{store_id or 'all'}",
+            actions=[
+                "오늘 매출/순이익 변동이 큰 SKU 1개를 선정해 재고와 판매속도를 즉시 점검하세요.",
+                "주간 데이터 기준으로 저성과 품목의 프로모션 또는 진열 위치를 조정하세요.",
+            ],
+            evidence=[
+                f"오늘 매출: {response.today_revenue:,.0f}",
+                f"오늘 순매출: {response.today_net_revenue:,.0f}",
+                f"평균 마진율: {response.avg_margin_rate:.2f}",
+            ],
+        )
+        return response
 
     async def get_campaign_effect(
         self,
@@ -260,6 +374,11 @@ class SalesService:
             summary=summary,
             metrics=metrics,
             actions=actions,
+            explainability=create_ready_payload(
+                trace_id=f"sales-campaign-{store_id or 'all'}",
+                actions=actions,
+                evidence=[f"{metric['label']}: {metric['value']}" for metric in metrics],
+            ),
         )
 
     async def _apply_ai_summaries_to_insights(

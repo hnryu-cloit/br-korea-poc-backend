@@ -1,7 +1,8 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from app.core.reference_datetime import resolve_reference_date
 from app.core.deps import get_production_service
 from app.schemas.production import (
     GetProductionSkuListResponse,
@@ -27,9 +28,12 @@ v1_router = APIRouter(prefix="/v1/production", tags=["production"])
 @router.get("/overview", response_model=ProductionOverviewResponse)
 async def get_production_overview(
     store_id: str | None = Query(default=None),
+    business_date: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionOverviewResponse:
-    return await service.get_overview(store_id=store_id)
+    resolved_business_date = business_date or resolve_reference_date(x_reference_datetime)
+    return await service.get_overview(store_id=store_id, business_date=resolved_business_date)
 
 
 @router.get("/skus", response_model=GetProductionSkuListResponse)
@@ -38,19 +42,34 @@ async def get_production_sku_list(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=100),
     store_id: str | None = Query(default=None),
+    business_date: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> GetProductionSkuListResponse:
-    return await service.get_sku_list(page=page, page_size=page_size, store_id=store_id)
+    resolved_business_date = business_date or resolve_reference_date(x_reference_datetime)
+    return await service.get_sku_list(
+        page=page,
+        page_size=page_size,
+        store_id=store_id,
+        business_date=resolved_business_date,
+    )
 
 
 @router.get("/items/{sku_id}", response_model=ProductionSkuDetailResponse)
 async def get_production_sku_detail(
     sku_id: str,
     store_id: str | None = Query(default=None),
+    business_date: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionSkuDetailResponse:
     try:
-        return await service.get_sku_detail(sku_id=sku_id, store_id=store_id)
+        resolved_business_date = business_date or resolve_reference_date(x_reference_datetime)
+        return await service.get_sku_detail(
+            sku_id=sku_id,
+            store_id=store_id,
+            business_date=resolved_business_date,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
