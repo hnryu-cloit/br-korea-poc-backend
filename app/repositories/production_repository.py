@@ -1135,6 +1135,22 @@ class ProductionRepository(BaseRepository):
                 store_id=store_id,
                 reference_date=business_date,
             )
+        else:
+            logger.warning(
+                "list_items: raw_inventory_extract 테이블 없음 (engine=%s)", bool(self.engine)
+            )
+
+        if self.engine and has_table(self.engine, "raw_daily_store_item"):
+            sale_map = self._fetch_metric_map(
+                "raw_daily_store_item",
+                ("sale_dt",),
+                ("item_nm", "item_name"),
+                ("item_cd", "item_code", "sku_id"),
+                ("sale_qty",),
+                store_id=store_id,
+                reference_date=business_date,
+            )
+        elif self.engine and has_table(self.engine, "raw_inventory_extract"):
             sale_map = self._fetch_metric_map(
                 "raw_inventory_extract",
                 ("stock_dt",),
@@ -1143,10 +1159,6 @@ class ProductionRepository(BaseRepository):
                 ("sale_qty",),
                 store_id=store_id,
                 reference_date=business_date,
-            )
-        else:
-            logger.warning(
-                "list_items: raw_inventory_extract 테이블 없음 (engine=%s)", bool(self.engine)
             )
 
         if self.engine and has_table(self.engine, "raw_order_extract"):
@@ -1173,7 +1185,9 @@ class ProductionRepository(BaseRepository):
                 reference_date=business_date,
             )
 
-        active_keys = set(stock_map) | set(sale_map)
+        active_keys = set(sale_map)
+        if not active_keys:
+            active_keys = set(stock_map)
         if not active_keys:
             active_keys = set(order_confirm_map) | set(hourly_sale_map)
 

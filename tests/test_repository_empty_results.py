@@ -134,7 +134,7 @@ async def test_production_repository_list_items_only_uses_active_skus_for_refere
         captured_calls.append((relation, window_days, reference_date))
         if relation == "raw_inventory_extract" and metric_candidates == ("stock_qty",):
             return {"ACTIVE": {"item_cd": "ACTIVE", "item_nm": "활성상품", "qty": 10}}
-        if relation == "raw_inventory_extract" and metric_candidates == ("sale_qty",):
+        if relation == "raw_daily_store_item" and metric_candidates == ("sale_qty",):
             return {"ACTIVE": {"item_cd": "ACTIVE", "item_nm": "활성상품", "qty": 8}}
         if relation == "raw_production_extract":
             return {
