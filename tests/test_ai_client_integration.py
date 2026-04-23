@@ -36,6 +36,21 @@ async def test_query_sales_success(client: AIServiceClient) -> None:
             "actions": ["광고 입찰가 조정"],
         },
         "source_data_period": "최근 1개월",
+        "request_context": {
+            "store_id": "POC_001",
+            "business_date": "2026-03-05",
+            "business_time": "14:00",
+            "prompt": "諛곕떖 留ㅼ텧 遺꾩꽍?댁쨾",
+            "domain": "sales",
+        },
+        "grounding": {
+            "keywords": ["諛곕떖", "留ㅼ텧"],
+            "intent": "channel sales analysis",
+            "relevant_tables": ["raw_daily_store_channel"],
+            "sql": "SELECT 1",
+            "row_count": 1,
+        },
+        "queried_period": {"type": "date", "value": "20260305"},
         "channel_analysis": {},
         "profit_simulation": {},
     }

@@ -8,8 +8,11 @@ from app.repositories.sales_repository import SalesRepository
 from app.schemas.sales import (
     SalesCampaignEffectResponse,
     SalesInsightsResponse,
+    SalesAnswer,
+    SalesQueryAgentTrace,
     SalesPrompt,
     SalesQueryRequest,
+    SalesQueryRequestContext,
     SalesQueryResponse,
     SalesSummaryResponse,
 )
@@ -53,6 +56,19 @@ class SalesService:
         self.ai_client = ai_client
         self.audit_service = audit_service
         self.prompt_settings_service = prompt_settings_service
+
+    @staticmethod
+    def _build_request_context(
+        payload: SalesQueryRequest,
+        safe_prompt: str,
+    ) -> SalesQueryRequestContext:
+        return SalesQueryRequestContext(
+            store_id=payload.store_id,
+            business_date=payload.business_date,
+            business_time=payload.business_time,
+            prompt=safe_prompt,
+            domain=payload.domain,
+        )
 
     async def list_prompts(
         self,
@@ -106,13 +122,30 @@ class SalesService:
     async def query(self, payload: SalesQueryRequest, actor_role: str = "store_owner") -> SalesQueryResponse:
         # 1. PII 마스킹 (전화번호 등)
         safe_prompt, pii_masked_fields = _mask_pii(payload.prompt)
+        request_context = self._build_request_context(payload, safe_prompt)
 
         query_type = self._classify_query(safe_prompt)
         if query_type == "sensitive_request" and actor_role not in _HQ_ROLES:
+            blocked_text = "요청하신 내용에는 민감정보가 포함되어 있어 현재 권한으로는 조회할 수 없습니다."
+            blocked_evidence = [
+                "민감정보 정책이 적용되었습니다.",
+                "점포 손익·원가·이익률 정보는 본사 권한에서만 조회할 수 있습니다.",
+            ]
+            blocked_actions = [
+                "민감정보를 제외한 운영 지표로 다시 질문해 주세요.",
+                "본사 운영/기획 권한으로 재시도해 주세요.",
+            ]
             response = SalesQueryResponse(
-                text="요청하신 내용에는 민감정보가 포함되어 있어 현재 권한으로는 조회할 수 없습니다.",
-                evidence=["민감정보 정책이 적용되었습니다.", "점포 손익·원가·이익률 정보는 본사 권한에서만 조회할 수 있습니다."],
-                actions=["민감정보를 제외한 운영 지표로 다시 질문해 주세요.", "본사 운영/기획 권한으로 재시도해 주세요."],
+                text=blocked_text,
+                evidence=blocked_evidence,
+                actions=blocked_actions,
+                answer=SalesAnswer(
+                    text=blocked_text,
+                    evidence=blocked_evidence,
+                    actions=blocked_actions,
+                ),
+                request_context=request_context,
+                agent_trace=SalesQueryAgentTrace(intent="sensitive", row_count=0),
                 query_type=query_type,
                 processing_route="policy_block",
                 blocked=True,
@@ -139,6 +172,7 @@ class SalesService:
                 store_id=payload.store_id,
                 domain=payload.domain,
                 business_date=payload.business_date,
+                business_time=payload.business_time,
             )
 
         if ai_result is not None:
@@ -146,6 +180,31 @@ class SalesService:
             processing_route = "ai_proxy"
         else:
             response = await self.repository.get_query_response(safe_prompt)
+
+        if isinstance(response, dict):
+            answer_payload = response.get("answer") if isinstance(response.get("answer"), dict) else None
+            if answer_payload is None:
+                answer_payload = {
+                    "text": response.get("text", ""),
+                    "evidence": response.get("evidence", []),
+                    "actions": response.get("actions", []),
+                }
+            response["answer"] = answer_payload
+            response.setdefault("text", answer_payload.get("text", ""))
+            response.setdefault("evidence", answer_payload.get("evidence", []))
+            response.setdefault("actions", answer_payload.get("actions", []))
+            response.setdefault("request_context", request_context.model_dump())
+            response.setdefault(
+                "agent_trace",
+                {
+                    "keywords": [],
+                    "intent": None,
+                    "relevant_tables": [],
+                    "sql": None,
+                    "queried_period": None,
+                    "row_count": 0,
+                },
+            )
 
         # 3. PII 마스킹 필드 병합
         existing_masked = response.pop("masked_fields", []) if isinstance(response, dict) else []
@@ -167,6 +226,12 @@ class SalesService:
         )
         result.actions = ensured_actions
         result.evidence = ensured_evidence
+        if result.request_context is None:
+            result.request_context = request_context
+        if result.answer is None:
+            result.answer = SalesAnswer(text=result.text, evidence=result.evidence, actions=result.actions)
+        if result.agent_trace is None:
+            result.agent_trace = SalesQueryAgentTrace(row_count=0)
         if self.audit_service:
             await self.audit_service.record(
                 domain="sales",

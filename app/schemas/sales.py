@@ -23,17 +23,44 @@ class SalesComparison(BaseModel):
     metrics: list[SalesComparisonMetric]
 
 
+class SalesAnswer(BaseModel):
+    text: str
+    evidence: list[str] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+
+
+class SalesQueryRequestContext(BaseModel):
+    store_id: str
+    business_date: str
+    business_time: Optional[str] = None
+    prompt: str
+    domain: str = "sales"
+
+
+class SalesQueryAgentTrace(BaseModel):
+    keywords: list[str] = Field(default_factory=list)
+    intent: Optional[str] = None
+    relevant_tables: list[str] = Field(default_factory=list)
+    sql: Optional[str] = None
+    queried_period: Optional[dict[str, Any]] = None
+    row_count: int = 0
+
+
 class SalesQueryRequest(BaseModel):
     prompt: str
     store_id: str = Field(..., min_length=1)
     domain: str = Field(default="sales")
     business_date: str = Field(default="2026-03-05")
+    business_time: Optional[str] = None
 
 
 class SalesQueryResponse(BaseModel):
     text: str
     evidence: list[str]
     actions: list[str]
+    answer: Optional[SalesAnswer] = None
+    request_context: Optional[SalesQueryRequestContext] = None
+    agent_trace: Optional[SalesQueryAgentTrace] = None
     store_context: Optional[str] = ""
     data_source: Optional[str] = ""
     comparison_basis: Optional[str] = ""

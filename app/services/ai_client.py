@@ -70,6 +70,7 @@ class AIServiceClient:
         store_id: str,
         domain: str | None = None,
         business_date: str | None = None,
+        business_time: str | None = None,
         system_instruction: str | None = None,
     ) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
@@ -82,34 +83,70 @@ class AIServiceClient:
             body["domain"] = domain
         if business_date:
             body["business_date"] = business_date
+        if business_time:
+            body["business_time"] = business_time
         if system_instruction:
             body["system_instruction"] = system_instruction
         result = await self._post("/sales/query", body, timeout=90.0)
         if result is None:
             return None
+        answer = result.get("answer") if isinstance(result.get("answer"), dict) else {}
+        if not answer:
+            answer = {
+                "text": result.get("text", ""),
+                "evidence": result.get("evidence", []),
+                "actions": result.get("actions", []),
+            }
 
-        if "text" in result and "actions" in result:
-            return result
+        grounding = result.get("grounding") if isinstance(result.get("grounding"), dict) else {}
+        if not grounding:
+            grounding = {
+                "keywords": result.get("keywords", []),
+                "intent": result.get("intent"),
+                "relevant_tables": result.get("relevant_tables", []),
+                "sql": result.get("sql"),
+                "row_count": result.get("row_count", 0),
+            }
 
-        answer = result.get("answer") or {}
+        request_context = result.get("request_context")
+        if not isinstance(request_context, dict):
+            request_context = {
+                "store_id": normalized_store_id,
+                "business_date": business_date or "2026-03-05",
+                "business_time": business_time,
+                "prompt": prompt,
+                "domain": domain or "sales",
+            }
+
         return {
             "text": answer.get("text", ""),
             "evidence": answer.get("evidence", []),
             "actions": answer.get("actions", []),
+            "answer": answer,
+            "request_context": request_context,
+            "agent_trace": {
+                "keywords": grounding.get("keywords", []),
+                "intent": grounding.get("intent"),
+                "relevant_tables": grounding.get("relevant_tables", []),
+                "sql": grounding.get("sql"),
+                "queried_period": result.get("queried_period"),
+                "row_count": grounding.get("row_count", 0),
+            },
             "store_context": "",
             "data_source": "ai",
             "comparison_basis": result.get("source_data_period", ""),
             "calculation_date": "",
             "comparison": None,
             "blocked": False,
-            "masked_fields": [],
-            "confidence_score": 1.0,
+            "masked_fields": result.get("masked_fields", []),
+            "confidence_score": result.get("confidence_score", 1.0),
             "semantic_logic": None,
             "sources": [],
             "visual_data": {
                 "channel_analysis": result.get("channel_analysis"),
                 "profit_simulation": result.get("profit_simulation"),
             },
+            "data_lineage": result.get("data_lineage", []),
         }
 
     async def suggest_sales_prompts(
