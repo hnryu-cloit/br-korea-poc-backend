@@ -42,12 +42,12 @@ services:
 
   ai:
     build:
-      context: ../br-korea-poc-ai
+      context: ./br-korea-poc-ai
     container_name: br-korea-ai
     ports:
       - "6001:6001"
     env_file:
-      - ../br-korea-poc-ai/.env
+      - ./br-korea-poc-ai/.env
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/br_korea_poc
       - APP_PORT=6001
@@ -66,14 +66,14 @@ services:
       - AI_SERVICE_URL=http://ai:6001
       - CORS_ORIGINS=http://localhost:5173,http://localhost:6003
     depends_on:
-      # load:
-      #   condition: service_completed_successfully
+      load:
+        condition: service_completed_successfully
       ai:
         condition: service_started
 
   front:
     build:
-      context: ../br-korea-poc-front
+      context: ./br-korea-poc-front
     container_name: br-korea-front
     ports:
       - "6003:6003"
