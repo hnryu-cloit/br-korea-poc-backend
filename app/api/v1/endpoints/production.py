@@ -144,10 +144,18 @@ async def run_production_simulation(
 @router.get("/waste-summary", response_model=WasteSummaryResponse)
 async def get_waste_summary(
     store_id: str = Query(..., min_length=1),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> WasteSummaryResponse:
     try:
-        return await service.get_waste_summary(store_id=store_id)
+        return await service.get_waste_summary(
+            store_id=store_id,
+            page=page,
+            page_size=page_size,
+            reference_date=resolve_reference_date(x_reference_datetime),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LookupError as exc:

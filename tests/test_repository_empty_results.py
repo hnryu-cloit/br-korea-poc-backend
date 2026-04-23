@@ -184,3 +184,81 @@ async def test_production_service_inventory_status_handles_string_summary_metric
     assert response.summary["shortage_count"] == 1
     assert response.summary["excess_count"] == 0
     assert response.summary["normal_count"] == 0
+
+
+class _MonthlyWasteRepository:
+    def get_stock_rate_recent_rows(self, store_id: str):
+        return [
+            {
+                "item_cd": "SKU-010",
+                "item_nm": "최신 글레이즈드",
+                "ord_avg": 12,
+                "sal_avg": 8,
+                "stk_avg": 0,
+                "stk_rt": 0,
+                "dr": 1,
+            },
+            {
+                "item_cd": "SKU-020",
+                "item_nm": "최신 카카오",
+                "ord_avg": 6,
+                "sal_avg": 5,
+                "stk_avg": 0,
+                "stk_rt": 0,
+                "dr": 1,
+            },
+        ]
+
+    def get_disuse_and_cost_latest_rows(self, store_id: str):
+        return [
+            {
+                "item_cd": "SKU-010",
+                "item_nm": "최신 글레이즈드",
+                "total_disuse_qty": 3,
+                "avg_cost": 2000,
+            },
+            {
+                "item_cd": "SKU-020",
+                "item_nm": "최신 카카오",
+                "total_disuse_qty": 1,
+                "avg_cost": 3000,
+            },
+        ]
+
+    def get_monthly_disuse_rows(self, store_id: str, date_from: str, date_to: str):
+        return [
+            {
+                "item_cd": "SKU-001",
+                "item_nm": "월간 글레이즈드",
+                "total_disuse_qty": 7,
+                "total_disuse_amount": 21000,
+                "avg_cost": 3000,
+            },
+            {
+                "item_cd": "SKU-002",
+                "item_nm": "월간 카카오",
+                "total_disuse_qty": 4,
+                "total_disuse_amount": 12000,
+                "avg_cost": 3000,
+            },
+        ]
+
+
+@pytest.mark.asyncio
+async def test_production_service_waste_summary_supports_pagination(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.production_service.get_now", lambda: datetime(2026, 4, 23, 9, 0, 0))
+    service = ProductionService(repository=_MonthlyWasteRepository())
+
+    response = await service.get_waste_summary(store_id="POC_001", page=1, page_size=1)
+
+    assert response.pagination.total_items == 2
+    assert response.pagination.total_pages == 2
+    assert response.pagination.page == 1
+    assert response.pagination.page_size == 1
+    assert len(response.items) == 1
+    assert response.items[0].item_nm == "최신 글레이즈드"
+    assert response.total_disuse_amount == 9000
+    assert response.summary["target_month"] == "2026-04"
+    assert response.summary["monthly_total_disuse_amount"] == 33000
+    assert response.monthly_top_items[0].item_nm == "월간 글레이즈드"
+    assert response.monthly_top_items[0].confirmed_disuse_qty == 7

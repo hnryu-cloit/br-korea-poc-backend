@@ -1496,6 +1496,52 @@ class ProductionRepository(BaseRepository):
             )
             return []
 
+    def get_monthly_disuse_rows(
+        self,
+        store_id: str,
+        date_from: str,
+        date_to: str,
+    ) -> list[dict]:
+        if not self.engine:
+            return []
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT
+                                COALESCE(item_cd, item_nm) AS item_cd,
+                                item_nm,
+                                SUM(COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)) AS total_disuse_qty,
+                                SUM(
+                                    COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)
+                                    * COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)
+                                ) AS total_disuse_amount,
+                                AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS avg_cost
+                            FROM raw_inventory_extract
+                            WHERE masked_stor_cd = :store_id
+                              AND stock_dt >= :date_from
+                              AND stock_dt <= :date_to
+                            GROUP BY COALESCE(item_cd, item_nm), item_nm
+                            """
+                        ),
+                        {"store_id": store_id, "date_from": date_from, "date_to": date_to},
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(r) for r in rows]
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "get_monthly_disuse_rows 쿼리 실패: store_id=%s date_from=%s date_to=%s error=%s",
+                store_id,
+                date_from,
+                date_to,
+                exc,
+            )
+            return []
+
     def get_inventory_status(
         self, store_id: str | None = None, page: int = 1, page_size: int = 10
     ) -> tuple[list[dict], int, dict]:
