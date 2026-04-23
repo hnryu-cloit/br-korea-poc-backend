@@ -1,0 +1,47 @@
+에이전트,질문,평가항목,가용여부,가용 데이터,테이블/컬럼,가정/갭
+매출 관리,26년 2월 vs 25년 2월 매출 비교,월별 총 매출 누적 비교,✅,직접 조회 가능,"core_daily_item_sales.sale_amt, sale_dt",—
+매출 관리,26년 2월 vs 25년 2월 매출 비교,영업일수 계산,⚠️,DISTINCT sale_dt COUNT로 간접 추정,core_daily_item_sales.sale_dt,"휴무일·공휴일 캘린더 없음. 데이터 존재일 = 영업일 가정"
+매출 관리,26년 2월 vs 25년 2월 매출 비교,일평균 매출,⚠️,"SUM(sale_amt) / COUNT(DISTINCT sale_dt) 계산",core_daily_item_sales,"영업일수 가정에 종속"
+매출 관리,26년 2월 vs 25년 2월 매출 비교,요일 구성 차이 보정,⚠️,sale_dt에서 weekday() 추출 가능,core_daily_item_sales.sale_dt,"보정 공식(업무 규칙) 정의 없음. 요일별 가중치 기준 필요"
+매출 관리,전 주 대비 배달 건수 비교,온라인(배달) 총 주문 건수,✅,ho_chnl_div LIKE '온라인%' 필터,"core_channel_sales.ord_cnt, ho_chnl_div",—
+매출 관리,전 주 대비 배달 건수 비교,전 주 대비 비교,✅,최근 14일 → 7일씩 분리 비교 구현됨,core_channel_sales.sale_dt,—
+매출 관리,전 월 대비 배달 건수 비교,전 월 대비 비교,⚠️,sale_dt YYYYMM 추출로 계산 가능하나 미구현,core_channel_sales.sale_dt,"월 단위 집계 로직 추가 개발 필요"
+매출 관리,전 주/전 월 대비 배달 건수 비교,채널별 배달 건수 분리 (배민/쿠팡이츠 등),⚠️,ho_chnl_nm 컬럼 존재,"core_channel_sales.ho_chnl_nm, ho_chnl_cd","실데이터 확인 필요. 현재 코드는 ho_chnl_div(온/오프 이분법)만 사용 중"
+매출 관리,전 주/전 월 대비 배달 건수 비교,전체 매출 중 배달 비중,✅,온라인 sale_amt / 전체 sale_amt 계산 가능,"core_channel_sales.sale_amt, core_daily_item_sales.sale_amt",—
+매출 관리,티데이 프로모션 분석,캠페인 기간/명칭 식별,✅,cpi_nm LIKE 검색으로 특정 캠페인 조회,"raw_campaign_master.cpi_nm, start_dt, fnsh_dt",—
+매출 관리,티데이 프로모션 분석,참여 건수(객수),⚠️,bill_cnt(영수 건수)로 대체,"raw_daily_store_cpi_tmzon.bill_cnt","CPI_CUSTCNT(고객수) 미적재. 1영수 ≠ 1고객"
+매출 관리,티데이 프로모션 분석,행사 매출 비중,⚠️,act_amt_00~23 합산 vs 전체 매출,"raw_daily_store_cpi_tmzon.act_amt_00~23, core_daily_item_sales.sale_amt","SALE_DT 미적재. 날짜 필터 불가 — 전 기간 합계만 가능"
+매출 관리,티데이 프로모션 분석,제품군별 판매 믹스,⚠️,qty_00~23 합산 + campaign_item 조인,"raw_daily_store_cpi_tmzon.qty_00~23, raw_campaign_item","SALE_DT 부재로 일자별 분석 불가"
+매출 관리,티데이 프로모션 분석,이전 프로모션과 실적 대조,⚠️,캠페인 목록은 조회 가능,"raw_campaign_master.start_dt, fnsh_dt","SALE_DT 미적재로 기간별 캠페인 비교 어려움. 날짜 기준 분리 불가"
+매출 관리,글레이즈드 전월 대비 매출 비교,상품별 월간 판매수량/매출,✅,item_nm 필터 + YYYYMM 집계,"core_daily_item_sales.item_nm, sale_qty, sale_amt, sale_dt",—
+매출 관리,글레이즈드 전월 대비 매출 비교,총 매출 내 비중 및 순위 변화,✅,동 테이블 집계,core_daily_item_sales,—
+매출 관리,글레이즈드 전월 대비 매출 비교,인근 상권(유사 그룹) 판매량 대조,⚠️,sido + store_type 기준 유사 점포 그룹,"raw_store_master.sido, store_type, core_daily_item_sales","거리 기반 클러스터링 아님. '인근 상권' 정의 없음 — sido+store_type 매칭으로 근사"
+매출 관리,이번 2월 배달 채널별 매출,배달 총 매출,✅,ho_chnl_div LIKE '온라인%' 필터,"core_channel_sales.sale_amt, ho_chnl_div",—
+매출 관리,이번 2월 배달 채널별 매출,채널별 총 매출,⚠️,ho_chnl_nm 컬럼 존재,"core_channel_sales.ho_chnl_nm, sale_amt","실데이터가 플랫폼명으로 채워져 있는지 확인 필요"
+매출 관리,이번 2월 배달 채널별 매출,채널 매출 기여도 분석,⚠️,채널별 sale_amt / 전체 sale_amt,core_channel_sales.sale_amt,"ho_chnl_nm 데이터 품질 전제"
+매출 관리,이번 달 일평균 매출 타 점포 비교,자점포 일평균 매출,✅,sale_dt 기준 집계,"core_daily_item_sales.sale_amt, sale_dt",—
+매출 관리,이번 달 일평균 매출 타 점포 비교,클러스터링 기준,⚠️,sido + store_type 2개 기준 사용 중,"raw_store_master.sido, store_type, store_area_pyeong, business_type","store_area_pyeong·business_type 미활용. 정교한 클러스터 정의 필요"
+매출 관리,이번 달 일평균 매출 타 점포 비교,타 점포 그룹 평균 매출,✅,동일 그룹 점포 집계 가능,"core_daily_item_sales, raw_store_master.actual_sales_amt","actual_sales_amt는 마스터 고정값 — 실시간 집계와 다름"
+매출 관리,이번 달 일평균 매출 타 점포 비교,강점/약점 진단,⚠️,채널믹스·상품믹스 대조 가능,"core_channel_sales, core_daily_item_sales","그룹 평균과의 구성 차이 진단 로직 추가 개발 필요"
+생산 관리,재고 현황 및 부족 예상 알림,현재 재고량 표기,⚠️,최신 stock_dt 기준 스냅샷,"raw_inventory_extract.stock_qty, stock_dt","실시간 아님. 일 1회 배치 적재 기준. 당일 생산/판매 후 변동 미반영"
+생산 관리,재고 현황 및 부족 예상 알림,1시간 뒤 예상 재고량,⚠️,stock_qty - avg_hourly_sale_qty 추정,"raw_inventory_extract.stock_qty, core_hourly_item_sales.sale_qty","판매 속도 = 최근 n일 동 시간대 평균 가정. ±10% 오차 기준 로직 미확인"
+생산 관리,재고 현황 및 부족 예상 알림,4주 평균 1차 생산 등록 시간,⚠️,reg_date 시각 추출 후 4주 평균 계산 가능,"raw_production_extract.reg_date",—
+생산 관리,재고 현황 및 부족 예상 알림,4주 평균 2차 생산 등록 시간,⚠️,upd_date로 간접 추정,"raw_production_extract.upd_date","3차 생산 존재 시 upd_date가 3차 시점으로 덮임 — 2차 시간 신뢰도 낮음"
+생산 관리,재고 현황 및 부족 예상 알림,생산 리드타임(1시간) 반영,✅,구현됨,production_repository._resolve_business_hours(),—
+생산 관리,재고 현황 및 부족 예상 알림,영업 종료 후 알림 차단(Mute),✅,구현됨,production_repository._BUSINESS_HOURS,—
+주문 관리,주문 마감 전 알림,전주 동요일 주문 데이터,⚠️,최근 날짜 목록 제공 (요일 매칭 없음),"raw_order_extract.dlv_dt, ord_qty","동요일 매칭 로직 없음. 날짜 순서 기준 3개 선택 — 요일 불일치 가능"
+주문 관리,주문 마감 전 알림,3가지 옵션 자동 추천,✅,opt-a/b/c 3안 생성 구현됨,"raw_order_extract, ordering_repository._build_options_from_relation()",—
+주문 관리,주문 마감 전 알림,각 옵션 총량 및 제품별 수량,✅,items 배열로 반환됨,ordering_repository 응답 구조,—
+주문 관리,주문 마감 전 알림,추천 수량 데이터 근거 설명,✅,reasoning_metrics 포함 반환,"raw_order_extract.ord_rec_qty, reasoning_metrics",—
+주문 관리,주문 마감 전 알림,캠페인/이벤트 감지 및 보정,⚠️,캠페인 기간 감지 가능,"raw_campaign_master.start_dt, fnsh_dt","SALE_DT 미적재로 캠페인별 실 영향도 수치화 어려움"
+주문 관리,주문 마감 전 알림,대형 예약/단체 주문 분리,❌,해당 구분 데이터 없음,—,"ord_type 코드값으로 가능성 있으나 매핑 정의 필요. 현재 구분 불가"
+주문 관리,주문 마감 전 알림,점주 최종 선택 저장,✅,구현됨,ordering_selections,—
+주문 관리,오늘 입고 예정 발주 수량,납품예정일 기준 확정 수량,✅,dlv_dt = TODAY 기준 confrm_qty 합산,"raw_order_extract.dlv_dt, confrm_qty","confrm_qty = 센터 확정 출하량. ord_qty - confrm_qty = 미출 수량"
+주문 관리,오늘 입고 예정 발주 금액,납품예정일 기준 확정 금액,✅,dlv_dt = TODAY 기준 confrm_amt 합산,"raw_order_extract.dlv_dt, confrm_amt",—
+주문 관리,오늘 발주한 수량,ERP 전송일 기준 주문 수량,⚠️,erp_send_dt = TODAY 기준 ord_qty 합산,"raw_order_extract.erp_send_dt, ord_qty","REG_DATE 미적재. erp_send_dt가 발주 등록일과 동일한지 업무 담당자 확인 필요"
+주문 관리,정책 보완,질의어 '오늘 발주' 해석 기준,⚠️,기본은 발주일 기준 해석 원칙,raw_order_extract,"발주일 원천 컬럼 부재 시 모호성 안내 후 대체기준 고지 필요"
+주문 관리,정책 보완,'오늘 발주' 대체 기준(ERP 전송일),⚠️,erp_send_dt = TODAY로 대체 가능,"raw_order_extract.erp_send_dt, ord_qty, ord_amt","대체 시 반드시 'ERP 전송일 기준' 문구 명시"
+매출 관리,비교 분석 보완,유사상권/클러스터 기준 비교,⚠️,단순 전체 평균 또는 sido+store_type 비교만 가능,"raw_store_master.sido, store_type","유사상권 정의(거리/상권등급/점포유형) 별도 룰 필요"
+생산 관리,예측 품질 보완,재고예측 ±10% 정확도 보장,❌,현재 스키마만으로 보장 불가,"raw_inventory_extract, core_hourly_item_sales","백테스트용 정답셋/평가 파이프라인/주기별 리포트 필요"
+생산 관리,실시간성 보완,초단위 실시간 재고,❌,배치성 스냅샷 위주 원천,"raw_inventory_extract.stock_dt, stock_qty","스트리밍 적재 또는 POS 실시간 연동 필요"
+주문 관리,데이터 분리 보완,대형예약/단체주문 분리 집계,❌,명시 플래그 부재,raw_order_extract,"예약/단체 식별 컬럼 또는 매핑 테이블 추가 필요"
