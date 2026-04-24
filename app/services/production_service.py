@@ -624,61 +624,37 @@ class ProductionService:
         if cached_payload:
             return WasteSummaryResponse.model_validate(cached_payload)
 
-        rows = self.repository.get_stock_rate_recent_rows(store_id=store_id)
-        if not rows:
-            raise LookupError("해당 점포의 재고율 데이터가 없습니다.")
+        # 생산량 - 판매량 기반 폐기 추정 (당월 기준)
+        date_from_yyyymmdd = date_from.replace("-", "")
+        date_to_yyyymmdd = date_to.replace("-", "")
+        waste_rows = self.repository.get_production_waste_rows(
+            store_id=store_id,
+            date_from=date_from_yyyymmdd,
+            date_to=date_to_yyyymmdd,
+        )
+        if not waste_rows:
+            raise LookupError("해당 점포의 생산·판매 데이터가 없습니다.")
 
+        # 발주/판매 평균 기반 adjusted_loss_qty 보조 지표 (stock_rate 데이터 있을 때만)
+        adjusted_loss_map: dict[str, float] = {}
+        stock_rate_rows = self.repository.get_stock_rate_recent_rows(store_id=store_id)
         by_item: dict[str, dict[int, dict[str, Any]]] = {}
-        for row in rows:
-            item_key = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+        for row in stock_rate_rows:
+            item_key = str(row.get("item_nm") or "").strip()
             if not item_key:
                 continue
             by_item.setdefault(item_key, {})[int(row.get("dr") or 1)] = row
-
-        latest_rows = self.repository.get_disuse_and_cost_latest_rows(store_id=store_id)
-        latest_disuse_map = {
-            str(row.get("item_cd") or row.get("item_nm") or "").strip(): row for row in latest_rows
-        }
-        monthly_rows = self.repository.get_monthly_disuse_rows(
-            store_id=store_id,
-            date_from=date_from,
-            date_to=date_to,
-        )
-
-        items: list[WasteItem] = []
-        total_adjusted_loss_amount = 0.0
-        total_disuse_amount = 0.0
-        total_estimated_expiry_loss_qty = 0.0
-        shelf_life_map: dict[str, int] = {}
-        get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
-        if callable(get_shelf_life_days_map):
-            shelf_life_map = get_shelf_life_days_map(
-                item_codes=[
-                    str(window.get(1, {}).get("item_cd") or window.get(2, {}).get("item_cd") or "").strip()
-                    for window in by_item.values()
-                ],
-                item_names=[
-                    str(window.get(1, {}).get("item_nm") or window.get(2, {}).get("item_nm") or "").strip()
-                    for window in by_item.values()
-                ],
-            )
-
-        for _, window in by_item.items():
+        for item_nm_key, window in by_item.items():
             latest = window.get(1)
             previous = window.get(2)
             pivot = previous or latest
             if not pivot:
                 continue
-
-            item_nm = str(pivot.get("item_nm") or "").strip()
-            if not item_nm:
-                continue
-
-            surplus_qty = max(
+            surplus = max(
                 self._safe_float(pivot.get("ord_avg")) - self._safe_float(pivot.get("sal_avg")),
                 0.0,
             )
-            absorb_qty = (
+            absorb = (
                 max(
                     self._safe_float(latest.get("sal_avg")) - self._safe_float(latest.get("ord_avg")),
                     0.0,
@@ -686,28 +662,50 @@ class ProductionService:
                 if latest and previous
                 else 0.0
             )
-            adjusted_loss_qty = max(surplus_qty - absorb_qty, 0.0)
+            adjusted_loss_map[item_nm_key] = max(surplus - absorb, 0.0)
 
-            disuse_row = latest_disuse_map.get(str(pivot.get("item_cd") or item_nm).strip()) or {}
-            confirmed_disuse_qty = round(self._safe_float(disuse_row.get("total_disuse_qty")), 2)
-            avg_cost = self._safe_float(disuse_row.get("avg_cost"))
+        # 유통기한 맵
+        shelf_life_map: dict[str, int] = {}
+        get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
+        if callable(get_shelf_life_days_map):
+            shelf_life_map = get_shelf_life_days_map(
+                item_codes=[str(r.get("item_cd") or "").strip() for r in waste_rows],
+                item_names=[str(r.get("item_nm") or "").strip() for r in waste_rows],
+            )
+
+        items: list[WasteItem] = []
+        total_adjusted_loss_amount = 0.0
+        total_disuse_amount = 0.0
+        total_estimated_expiry_loss_qty = 0.0
+
+        for row in waste_rows:
+            item_nm = str(row.get("item_nm") or "").strip()
+            if not item_nm:
+                continue
+
+            confirmed_disuse_qty = round(self._safe_float(row.get("total_waste_qty")), 2)
+            avg_cost = self._safe_float(row.get("avg_cost"))
+            disuse_amount = round(self._safe_float(row.get("total_waste_amount")), 2)
+
+            # 보조 지표: 발주/판매 평균 기반 — 없으면 생산-판매 폐기량 사용
+            adjusted_loss_qty = round(adjusted_loss_map.get(item_nm, confirmed_disuse_qty), 2)
             adjusted_loss_amount = round(adjusted_loss_qty * avg_cost, 2)
-            disuse_amount = round(confirmed_disuse_qty * avg_cost, 2)
+
             shelf_life_days = self._resolve_shelf_life_days(
                 shelf_life_map=shelf_life_map,
-                item_cd=str(pivot.get("item_cd") or "").strip(),
+                item_cd=str(row.get("item_cd") or "").strip(),
                 item_nm=item_nm,
             )
             estimated_expiry_loss_qty = (
-                adjusted_loss_qty
+                confirmed_disuse_qty
                 if shelf_life_days <= 1
-                else round(adjusted_loss_qty * 0.6, 2)
+                else round(confirmed_disuse_qty * 0.6, 2)
             )
             expiry_risk_level = (
                 "높음"
-                if shelf_life_days <= 1 and adjusted_loss_qty > 0
+                if shelf_life_days <= 1 and confirmed_disuse_qty > 0
                 else "중간"
-                if adjusted_loss_qty > 0
+                if confirmed_disuse_qty > 0
                 else "낮음"
             )
 
@@ -718,7 +716,7 @@ class ProductionService:
                 WasteItem(
                     item_nm=item_nm,
                     image_url=self._resolve_image_url(item_nm),
-                    adjusted_loss_qty=round(adjusted_loss_qty, 2),
+                    adjusted_loss_qty=adjusted_loss_qty,
                     confirmed_disuse_qty=confirmed_disuse_qty,
                     estimated_expiry_loss_qty=round(estimated_expiry_loss_qty, 2),
                     adjusted_loss_amount=adjusted_loss_amount,
@@ -728,7 +726,7 @@ class ProductionService:
                 )
             )
 
-        items.sort(key=lambda item: item.adjusted_loss_amount, reverse=True)
+        items.sort(key=lambda item: item.confirmed_disuse_qty, reverse=True)
 
         total_items = len(items)
         total_pages = max(1, math.ceil(total_items / page_size))
@@ -736,53 +734,44 @@ class ProductionService:
         start_index = (current_page - 1) * page_size
         paginated_items = items[start_index : start_index + page_size]
 
-        monthly_top_items: list[dict[str, float | str]] = []
-        monthly_total_disuse_amount = 0.0
-        monthly_total_disuse_qty = 0.0
-        for row in monthly_rows:
-            item_nm = str(row.get("item_nm") or "").strip()
-            if not item_nm:
-                continue
-            confirmed_disuse_qty = round(self._safe_float(row.get("total_disuse_qty")), 2)
-            total_amount = round(self._safe_float(row.get("total_disuse_amount")), 2)
-            if confirmed_disuse_qty <= 0 and total_amount <= 0:
-                continue
-            monthly_total_disuse_qty += confirmed_disuse_qty
-            monthly_total_disuse_amount += total_amount
-            monthly_top_items.append(
+        # 월간 TOP 3 — 동일 waste_rows 재사용
+        monthly_top_items: list[dict[str, float | str]] = sorted(
+            [
                 {
-                    "item_nm": item_nm,
-                    "confirmed_disuse_qty": confirmed_disuse_qty,
-                    "disuse_amount": total_amount,
+                    "item_nm": str(r.get("item_nm") or "").strip(),
+                    "confirmed_disuse_qty": round(self._safe_float(r.get("total_waste_qty")), 2),
+                    "disuse_amount": round(self._safe_float(r.get("total_waste_amount")), 2),
                 }
-            )
-        monthly_top_items.sort(
-            key=lambda item: (-float(item["confirmed_disuse_qty"]), -float(item["disuse_amount"]), str(item["item_nm"]))
-        )
-        monthly_top_items = monthly_top_items[:3]
+                for r in waste_rows
+                if self._safe_float(r.get("total_waste_qty")) > 0
+            ],
+            key=lambda x: (-float(x["confirmed_disuse_qty"]), -float(x["disuse_amount"])),
+        )[:3]
+        monthly_total_disuse_qty = sum(float(x["confirmed_disuse_qty"]) for x in monthly_top_items)
+        monthly_total_disuse_amount = sum(float(x["disuse_amount"]) for x in monthly_top_items)
 
         base_evidence: dict[str, Any] = {
-            "summary_reason": "표는 기존 폐기 손실 계산 기준을 유지하고, 상단 TOP 3만 당월 누적 폐기 데이터 기준입니다.",
+            "summary_reason": "생산량 - 판매량 기반 폐기 추정 (당월 기준)",
             "processing_route": "repository",
             "fallback_used": False,
             "items": [
                 {
-                    "label": "표 기준",
-                    "value": "기존 폐기 손실 계산",
-                    "calculation": "adjusted_loss=max((ord_avg_t-sal_avg_t)-max(sal_avg_t+1-ord_avg_t+1,0),0)",
-                    "source_table": "core_stock_rate or raw_inventory_extract",
+                    "label": "폐기 추정 기준",
+                    "value": "생산량 - 판매량",
+                    "calculation": "GREATEST(prod_qty합계 - sale_qty, 0)",
+                    "source_table": "raw_production_extract JOIN core_daily_item_sales",
                 },
                 {
-                    "label": "월간 TOP 3 기준",
-                    "value": target_month,
-                    "calculation": "SUM(disuse_qty within target month)",
+                    "label": "단가 기준",
+                    "value": "raw_inventory_extract.cost 평균",
+                    "calculation": "AVG(cost) per item_nm",
                     "source_table": "raw_inventory_extract",
                 },
                 {
-                    "label": "실폐기 금액",
-                    "value": f"{round(total_disuse_amount, 2)}원",
-                    "calculation": "confirmed_disuse=SUM(disuse_qty latest_date)",
-                    "source_table": "raw_inventory_extract",
+                    "label": "대상 기간",
+                    "value": f"{date_from_yyyymmdd} ~ {date_to_yyyymmdd}",
+                    "calculation": "당월 생산·판매 데이터",
+                    "source_table": "raw_production_extract",
                 },
             ],
         }

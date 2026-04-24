@@ -1545,51 +1545,13 @@ class ProductionRepository(BaseRepository):
             logger.warning("get_stockout_latest_rows 쿼리 실패: store_id=%s error=%s", store_id, exc)
             return self._get_stockout_latest_rows_fallback(store_id=store_id)
 
-    def get_disuse_and_cost_latest_rows(self, store_id: str) -> list[dict]:
-        if not self.engine:
-            return []
-        try:
-            with self.engine.connect() as conn:
-                rows = (
-                    conn.execute(
-                        text(
-                            """
-                            WITH latest_date AS (
-                                SELECT MAX(stock_dt) AS stock_dt
-                                FROM raw_inventory_extract
-                                WHERE masked_stor_cd = :store_id
-                            )
-                            SELECT
-                                COALESCE(item_cd, item_nm) AS item_cd,
-                                item_nm,
-                                SUM(COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)) AS total_disuse_qty,
-                                AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS avg_cost
-                            FROM raw_inventory_extract r
-                            JOIN latest_date d ON r.stock_dt = d.stock_dt
-                            WHERE r.masked_stor_cd = :store_id
-                            GROUP BY COALESCE(item_cd, item_nm), item_nm
-                            """
-                        ),
-                        {"store_id": store_id},
-                    )
-                    .mappings()
-                    .all()
-                )
-            return [dict(r) for r in rows]
-        except SQLAlchemyError as exc:
-            logger.warning(
-                "get_disuse_and_cost_latest_rows 쿼리 실패: store_id=%s error=%s",
-                store_id,
-                exc,
-            )
-            return []
-
-    def get_monthly_disuse_rows(
+    def get_production_waste_rows(
         self,
         store_id: str,
         date_from: str,
         date_to: str,
     ) -> list[dict]:
+        """생산량 - 판매량 기반 폐기 추정 (date_from/date_to: YYYYMMDD 형식)"""
         if not self.engine:
             return []
         try:
@@ -1599,19 +1561,43 @@ class ProductionRepository(BaseRepository):
                         text(
                             """
                             SELECT
-                                COALESCE(item_cd, item_nm) AS item_cd,
-                                item_nm,
-                                SUM(COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)) AS total_disuse_qty,
-                                SUM(
-                                    COALESCE(NULLIF(TRIM(disuse_qty), '')::numeric, 0)
-                                    * COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)
-                                ) AS total_disuse_amount,
-                                AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS avg_cost
-                            FROM raw_inventory_extract
-                            WHERE masked_stor_cd = :store_id
-                              AND stock_dt >= :date_from
-                              AND stock_dt <= :date_to
-                            GROUP BY COALESCE(item_cd, item_nm), item_nm
+                                COALESCE(p.item_cd, p.item_nm) AS item_cd,
+                                p.item_nm,
+                                SUM(GREATEST(
+                                    COALESCE(NULLIF(TRIM(p.prod_qty),   '')::numeric, 0)
+                                    + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::numeric, 0)
+                                    + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::numeric, 0)
+                                    + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::numeric, 0)
+                                    - COALESCE(s.sale_qty, 0),
+                                    0
+                                )) AS total_waste_qty,
+                                SUM(GREATEST(
+                                    COALESCE(NULLIF(TRIM(p.prod_qty),   '')::numeric, 0)
+                                    + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::numeric, 0)
+                                    + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::numeric, 0)
+                                    + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::numeric, 0)
+                                    - COALESCE(s.sale_qty, 0),
+                                    0
+                                ) * COALESCE(i.cost, 0)) AS total_waste_amount,
+                                COALESCE(MAX(i.cost), 0) AS avg_cost
+                            FROM raw_production_extract p
+                            LEFT JOIN core_daily_item_sales s
+                                ON p.masked_stor_cd = s.masked_stor_cd
+                               AND p.prod_dt        = s.sale_dt
+                               AND p.item_nm        = s.item_nm
+                            LEFT JOIN (
+                                SELECT item_nm,
+                                       AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS cost
+                                FROM raw_inventory_extract
+                                WHERE masked_stor_cd = :store_id
+                                  AND NULLIF(TRIM(cost), '') IS NOT NULL
+                                  AND COALESCE(NULLIF(TRIM(cost), ''), '0') != '0'
+                                GROUP BY item_nm
+                            ) i ON p.item_nm = i.item_nm
+                            WHERE p.masked_stor_cd = :store_id
+                              AND p.prod_dt BETWEEN :date_from AND :date_to
+                            GROUP BY COALESCE(p.item_cd, p.item_nm), p.item_nm
+                            ORDER BY total_waste_qty DESC
                             """
                         ),
                         {"store_id": store_id, "date_from": date_from, "date_to": date_to},
@@ -1622,10 +1608,8 @@ class ProductionRepository(BaseRepository):
             return [dict(r) for r in rows]
         except SQLAlchemyError as exc:
             logger.warning(
-                "get_monthly_disuse_rows 쿼리 실패: store_id=%s date_from=%s date_to=%s error=%s",
+                "get_production_waste_rows 쿼리 실패: store_id=%s error=%s",
                 store_id,
-                date_from,
-                date_to,
                 exc,
             )
             return []
