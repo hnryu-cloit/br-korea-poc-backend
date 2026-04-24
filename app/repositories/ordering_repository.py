@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -440,7 +441,14 @@ class OrderingRepository:
         normalized = str(value or "").strip().lower()
         return normalized in {"1", "y", "yes", "true", "t", "auto", "automatic", "자동"}
 
-    def _build_history_response(self, rows: list[object]) -> dict:
+    def _build_history_response(
+        self,
+        rows: list[object],
+        *,
+        total_count: int | None = None,
+        page: int = 1,
+        page_size: int | None = None,
+    ) -> dict:
         items = [
             {
                 "item_nm": str(row["item_nm"]) if row["item_nm"] is not None else "",
@@ -452,16 +460,20 @@ class OrderingRepository:
             }
             for row in rows
         ]
-        total_count = len(items)
+        response_total_count = total_count if total_count is not None else len(items)
+        page_size_value = page_size if page_size is not None else max(len(items), 1)
         auto_count = sum(1 for item in items if item["is_auto"])
-        manual_count = total_count - auto_count
-        auto_rate = auto_count / total_count if total_count > 0 else 0.0
-        manual_rate = manual_count / total_count if total_count > 0 else 0.0
+        manual_count = len(items) - auto_count
+        auto_rate = auto_count / len(items) if items else 0.0
+        manual_rate = manual_count / len(items) if items else 0.0
         return {
             "items": items,
             "auto_rate": round(auto_rate, 4),
             "manual_rate": round(manual_rate, 4),
-            "total_count": total_count,
+            "total_count": int(response_total_count),
+            "page": int(page),
+            "page_size": int(page_size_value),
+            "total_pages": max(1, math.ceil(int(response_total_count) / max(int(page_size_value), 1))),
         }
 
 
@@ -955,6 +967,7 @@ class OrderingRepository:
         *,
         store_id: str | None = None,
         limit: int = 100,
+        page: int = 1,
         date_from: str | None = None,
         date_to: str | None = None,
         item_nm: str | None = None,
@@ -982,7 +995,10 @@ class OrderingRepository:
         reference_date_norm, include_same_day = self._build_history_visibility_filter(reference_datetime)
 
         where_clauses: list[str] = []
-        params: dict[str, object] = {"limit": limit}
+        page_value = max(int(page), 1)
+        limit_value = max(int(limit), 1)
+        offset_value = (page_value - 1) * limit_value
+        params: dict[str, object] = {"limit": limit_value, "offset": offset_value}
         normalized_date_expr = f"REPLACE(CAST({date_column} AS TEXT), '-', '')"
         if store_id and store_column:
             where_clauses.append(f"CAST({store_column} AS TEXT) = :store_id")
@@ -1009,6 +1025,24 @@ class OrderingRepository:
 
         try:
             with self.engine.connect() as conn:
+                total_count = int(
+                    conn.execute(
+                        text(
+                            f"""
+                        WITH grouped AS (
+                            SELECT
+                                CAST({date_column} AS TEXT) AS dlv_dt,
+                                CAST({item_name_column} AS TEXT) AS item_nm
+                            FROM {relation}
+                            WHERE {where_sql}
+                            GROUP BY CAST({date_column} AS TEXT), CAST({item_name_column} AS TEXT)
+                        )
+                        SELECT COUNT(*) FROM grouped
+                    """
+                        ),
+                        {key: value for key, value in params.items() if key not in {"limit", "offset"}},
+                    ).scalar_one()
+                )
                 rows = (
                     conn.execute(
                         text(
@@ -1025,6 +1059,7 @@ class OrderingRepository:
                         GROUP BY CAST({date_column} AS TEXT), CAST({item_name_column} AS TEXT)
                         ORDER BY {normalized_date_expr} DESC, CAST({item_name_column} AS TEXT)
                         LIMIT :limit
+                        OFFSET :offset
                     """
                         ),
                         params,
@@ -1034,7 +1069,12 @@ class OrderingRepository:
                 )
         except SQLAlchemyError:
             return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
-        return self._build_history_response(list(rows))
+        return self._build_history_response(
+            list(rows),
+            total_count=total_count,
+            page=page_value,
+            page_size=limit_value,
+        )
 
     def get_deadline_items(
         self,

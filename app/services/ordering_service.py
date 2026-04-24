@@ -499,7 +499,9 @@ class OrderingService:
         self,
         *,
         store_id: str | None = None,
-        limit: int = 30,
+        limit: int | None = None,
+        page: int = 1,
+        page_size: int = 10,
         date_from: str | None = None,
         date_to: str | None = None,
         item_nm: str | None = None,
@@ -508,9 +510,11 @@ class OrderingService:
     ):
         normalized_store_id = self._require_history_store_id(store_id)
         resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
+        resolved_page_size = limit if limit is not None else page_size
         data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
-            limit=limit,
+            limit=resolved_page_size,
+            page=page,
             date_from=date_from,
             date_to=date_to,
             item_nm=item_nm,
@@ -522,6 +526,9 @@ class OrderingService:
             auto_rate=data["auto_rate"],
             manual_rate=data["manual_rate"],
             total_count=data["total_count"],
+            page=int(data.get("page", page)),
+            page_size=int(data.get("page_size", resolved_page_size)),
+            total_pages=int(data.get("total_pages", 1)),
             explainability=create_ready_payload(
                 trace_id=f"ordering-history-{normalized_store_id}",
                 actions=["자동/수동 발주 비중을 점검하고 다음 주문 기준을 조정하세요."],
@@ -668,6 +675,99 @@ class OrderingService:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _build_deterministic_history_insights(
+        *,
+        store_id: str,
+        summary_stats: dict[str, object],
+    ) -> OrderingHistoryInsightsResponse:
+        auto_rate = float(summary_stats.get("auto_rate") or 0.0)
+        manual_rate = float(summary_stats.get("manual_rate") or 0.0)
+        avg_order_qty = float(summary_stats.get("avg_order_qty") or 0.0)
+        confirm_gap_count = int(summary_stats.get("confirm_gap_count") or 0)
+        changed_items_preview = summary_stats.get("top_changed_items_preview") or []
+
+        kpis = [
+            OrderingHistoryInsightKpi(
+                key="auto_rate",
+                label="자동 발주 비율",
+                value=f"{auto_rate * 100:.1f}%",
+                tone="primary",
+            ),
+            OrderingHistoryInsightKpi(
+                key="manual_rate",
+                label="수동 발주 비율",
+                value=f"{manual_rate * 100:.1f}%",
+                tone="warning",
+            ),
+            OrderingHistoryInsightKpi(
+                key="avg_order_qty",
+                label="평균 발주 수량",
+                value=f"{avg_order_qty:.1f}개",
+                tone="default",
+            ),
+        ]
+
+        anomalies: list[OrderingHistoryAnomalyItem] = []
+        if changed_items_preview:
+            top_item = changed_items_preview[0]
+            change_ratio = float(top_item.get("change_ratio") or 0.0)
+            latest_qty = int(top_item.get("latest_ord_qty") or 0)
+            baseline_qty = float(top_item.get("avg_ord_qty") or 0.0)
+            direction = "증가" if change_ratio > 0 else "감소"
+            severity = "high" if abs(change_ratio) >= 0.5 else "medium"
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id="top-changed-item",
+                    severity=severity,
+                    kind="ordering_change",
+                    message=(
+                        f"{top_item.get('item_nm')} 발주량이 평균 {baseline_qty:.1f}개에서 "
+                        f"최근 {latest_qty}개로 {abs(change_ratio) * 100:.1f}% {direction}했습니다."
+                    ),
+                    recommended_action="해당 품목의 최근 판매 추이와 발주 기준을 함께 점검하세요.",
+                    related_items=[str(top_item.get("item_nm"))],
+                )
+            )
+        if confirm_gap_count > 0:
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id="confirm-gap",
+                    severity="medium",
+                    kind="confirm_gap",
+                    message=f"주문수량과 확정수량 차이가 큰 발주건이 {confirm_gap_count}건 있습니다.",
+                    recommended_action="확정수량 차이가 반복되는 품목은 발주 기준을 조정하세요.",
+                    related_items=[],
+                )
+            )
+
+        return OrderingHistoryInsightsResponse(
+            kpis=kpis,
+            anomalies=[
+                OrderingHistoryAnomalyItem(**anomaly)
+                for anomaly in OrderingService._sort_history_anomalies(
+                    [anomaly.model_dump() for anomaly in anomalies]
+                )
+            ][:8],
+            top_changed_items=[
+                OrderingHistoryChangedItem(**item)
+                for item in changed_items_preview
+                if isinstance(item, dict)
+            ][:5],
+            sources=["ordering_history_summary_stats"],
+            retrieved_contexts=["POC_010 전용 주문 조인 테이블 기반 결정식 인사이트"],
+            confidence=0.95,
+            explainability=create_ready_payload(
+                trace_id=f"ordering-history-insights-{store_id}",
+                actions=["변화율 상위 품목과 주문-확정 차이 건수를 기준으로 발주 이상징후를 요약했습니다."],
+                evidence=[
+                    f"평균 발주 수량: {avg_order_qty:.2f}",
+                    f"주문-확정 차이 건수: {confirm_gap_count}",
+                    f"변화율 상위 품목 수: {len(changed_items_preview)}",
+                ],
+            ),
+        )
+
     async def get_history_insights(
         self,
         *,
@@ -680,8 +780,6 @@ class OrderingService:
         reference_datetime: datetime | None = None,
     ) -> OrderingHistoryInsightsResponse:
         normalized_store_id = self._require_history_store_id(store_id)
-        if not self.ai_client:
-            raise RuntimeError("AI service is unavailable")
         resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
 
         data = self.repository.get_history_filtered(
@@ -718,6 +816,15 @@ class OrderingService:
             recent_date_from=date_from,
             recent_date_to=date_to,
         )
+        if self.repository.uses_ordering_join_table(normalized_store_id):
+            return self._build_deterministic_history_insights(
+                store_id=normalized_store_id,
+                summary_stats=summary_stats,
+            )
+
+        if not self.ai_client:
+            raise RuntimeError("AI service is unavailable")
+
         filters = {
             "date_from": date_from,
             "date_to": date_to,
