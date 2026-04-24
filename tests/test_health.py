@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.deps import get_production_service
+from app.core.deps import get_ordering_service, get_production_service
 from app.main import app
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.repositories.bootstrap_repository import BootstrapRepository
@@ -60,6 +60,83 @@ def test_ordering_options() -> None:
         assert "region" in payload["weather"]
         assert "forecast_date" in payload["weather"]
         assert "weather_type" in payload["weather"]
+
+
+def test_ordering_options_uses_reference_date_weather() -> None:
+    class _FakeOrderingService:
+        async def list_options(
+            self,
+            notification_entry: bool = False,
+            store_id: str | None = None,
+            reference_datetime=None,
+        ):
+            assert reference_datetime is not None
+            return {
+                "deadline_minutes": 20,
+                "deadline_at": "14:00",
+                "notification_entry": notification_entry,
+                "purpose_text": "",
+                "caution_text": "",
+                "trend_summary": None,
+                "business_date": "2026-03-05",
+                "weather": {
+                    "region": "서울",
+                    "forecast_date": "2026-03-05",
+                    "weather_type": "맑음",
+                    "max_temperature_c": 12,
+                    "min_temperature_c": 12,
+                    "precipitation_probability": 0,
+                },
+                "options": [],
+                "explainability": None,
+            }
+
+    app.dependency_overrides[get_ordering_service] = lambda: _FakeOrderingService()
+    try:
+        response = client.get(
+            "/api/ordering/options?notification_entry=true",
+            headers={"X-Reference-Datetime": "2026-03-05T09:00:00+09:00"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_ordering_service, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["business_date"] == "2026-03-05"
+    assert payload["weather"]["forecast_date"] == "2026-03-05"
+
+
+def test_ordering_options_defaults_reference_datetime_when_header_missing() -> None:
+    class _FakeOrderingService:
+        async def list_options(
+            self,
+            notification_entry: bool = False,
+            store_id: str | None = None,
+            reference_datetime=None,
+        ):
+            assert reference_datetime is not None
+            assert reference_datetime.strftime("%Y-%m-%d %H:%M:%S") == "2026-03-05 09:00:00"
+            return {
+                "deadline_minutes": 20,
+                "deadline_at": "14:00",
+                "notification_entry": notification_entry,
+                "purpose_text": "",
+                "caution_text": "",
+                "trend_summary": None,
+                "business_date": "2026-03-05",
+                "weather": None,
+                "options": [],
+                "explainability": None,
+            }
+
+    app.dependency_overrides[get_ordering_service] = lambda: _FakeOrderingService()
+    try:
+        response = client.get("/api/ordering/options?notification_entry=true")
+    finally:
+        app.dependency_overrides.pop(get_ordering_service, None)
+
+    assert response.status_code == 200
+    assert response.json()["business_date"] == "2026-03-05"
 
 
 def test_ordering_context() -> None:
@@ -880,6 +957,38 @@ def test_production_overview_has_store_id_param() -> None:
 
 
 # ── 공통 예외 처리 테스트 ─────────────────────────────────────────────────
+
+
+def test_production_items_defaults_business_date_when_missing() -> None:
+    class _FakeProductionService:
+        async def get_sku_list(
+            self,
+            page: int = 1,
+            page_size: int = 100,
+            store_id: str | None = None,
+            business_date: str | None = None,
+        ):
+            assert page == 1
+            assert page_size == 20
+            assert store_id == "POC_001"
+            assert business_date == "2026-03-05"
+            return {
+                "items": [],
+                "pagination": {
+                    "page": 1,
+                    "page_size": 20,
+                    "total_items": 0,
+                    "total_pages": 0,
+                },
+            }
+
+    app.dependency_overrides[get_production_service] = lambda: _FakeProductionService()
+    try:
+        response = client.get("/api/production/items?page=1&page_size=20&store_id=POC_001")
+    finally:
+        app.dependency_overrides.pop(get_production_service, None)
+
+    assert response.status_code == 200
 
 
 def test_unknown_route_returns_404() -> None:

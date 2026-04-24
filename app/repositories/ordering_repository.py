@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import httpx
 from sqlalchemy import inspect, text
@@ -78,12 +80,25 @@ _WEATHER_CODE_LABELS: dict[int, str] = {
 
 
 class OrderingRepository:
+    _DEFAULT_HISTORY_ORDER_HOUR = 12
+
+    def __init__(self, engine: Engine | None = None) -> None:
+        self.engine = engine
+        self.prefer_store_cache = True
+        self.store_cache_root = Path(__file__).resolve().parents[2] / "data" / "store_cache"
+
     @staticmethod
     def _normalize_yyyymmdd(value: str | None) -> str | None:
         if value in (None, ""):
             return None
         text_value = str(value).strip().replace("-", "")
         return text_value if len(text_value) == 8 and text_value.isdigit() else None
+
+    def _resolve_store_cache_db_path(self, store_id: str | None) -> Path | None:
+        if not self.prefer_store_cache or not store_id:
+            return None
+        candidate = self.store_cache_root / f"{store_id.lower()}_lite.db"
+        return candidate if candidate.exists() else None
 
     @staticmethod
     def _build_history_filters(store_id: str | None = None, date_from: str | None = None, date_to: str | None = None) -> tuple[str, dict]:
@@ -110,8 +125,16 @@ class OrderingRepository:
             return False
         return True
 
-    def __init__(self, engine: Engine | None = None) -> None:
-        self.engine = engine
+    @classmethod
+    def _build_history_visibility_filter(
+        cls,
+        reference_datetime: datetime | None,
+    ) -> tuple[str | None, bool]:
+        if reference_datetime is None:
+            return None, True
+        reference_date = reference_datetime.strftime("%Y%m%d")
+        include_same_day = reference_datetime.hour >= cls._DEFAULT_HISTORY_ORDER_HOUR
+        return reference_date, include_same_day
 
     def is_known_store(self, store_id: str) -> bool:
         if not self.engine or not store_id:
@@ -148,6 +171,70 @@ class OrderingRepository:
         except SQLAlchemyError:
             return False
 
+    def _get_history_filtered_from_store_cache(
+        self,
+        *,
+        cache_path: Path,
+        store_id: str | None = None,
+        limit: int = 100,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        item_nm: str | None = None,
+        is_auto: bool | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> dict:
+        date_from_norm = self._normalize_yyyymmdd(date_from)
+        date_to_norm = self._normalize_yyyymmdd(date_to)
+        reference_date_norm, include_same_day = self._build_history_visibility_filter(reference_datetime)
+
+        where_clauses = ["1=1"]
+        params: list[object] = []
+        if store_id:
+            where_clauses.append("store_id = ?")
+            params.append(store_id)
+        if date_from_norm:
+            where_clauses.append("REPLACE(CAST(dlv_dt AS TEXT), '-', '') >= ?")
+            params.append(date_from_norm)
+        if date_to_norm:
+            where_clauses.append("REPLACE(CAST(dlv_dt AS TEXT), '-', '') <= ?")
+            params.append(date_to_norm)
+        if reference_date_norm:
+            where_clauses.append(
+                f"REPLACE(CAST(dlv_dt AS TEXT), '-', '') {'<=' if include_same_day else '<'} ?"
+            )
+            params.append(reference_date_norm)
+        if item_nm:
+            where_clauses.append("CAST(item_nm AS TEXT) LIKE ?")
+            params.append(f"%{item_nm.strip()}%")
+        if is_auto is not None:
+            where_clauses.append("CAST(auto_ord_yn AS TEXT) = ?")
+            params.append("1" if is_auto else "0")
+
+        where_sql = " AND ".join(where_clauses)
+        try:
+            with sqlite3.connect(cache_path) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    f"""
+                    SELECT
+                        CAST(item_nm AS TEXT) AS item_nm,
+                        CAST(dlv_dt AS TEXT) AS dlv_dt,
+                        ROUND(SUM(COALESCE(ord_qty, 0))) AS ord_qty,
+                        ROUND(SUM(COALESCE(confrm_qty, 0))) AS confrm_qty,
+                        MAX(CAST(auto_ord_yn AS TEXT)) AS auto_ord_yn,
+                        MAX(CAST(ord_grp_nm AS TEXT)) AS ord_grp_nm
+                    FROM order_history
+                    WHERE {where_sql}
+                    GROUP BY CAST(dlv_dt AS TEXT), CAST(item_nm AS TEXT)
+                    ORDER BY REPLACE(CAST(dlv_dt AS TEXT), '-', '') DESC, CAST(item_nm AS TEXT)
+                    LIMIT ?
+                    """,
+                    [*params, limit],
+                ).fetchall()
+        except sqlite3.Error:
+            return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
+        return self._build_history_response(list(rows))
+
     def _resolve_store_sido(self, store_id: str | None) -> str:
         if not self.engine or not store_id or not has_table(self.engine, "raw_store_master"):
             return "서울"
@@ -170,7 +257,77 @@ class OrderingRepository:
             return "서울"
         return "서울"
 
-    async def get_weather_forecast(self, store_id: str | None = None) -> dict[str, object] | None:
+    @staticmethod
+    def _classify_weather_type(avg_temp_c: float | int | None, precipitation_mm: float | int | None) -> str:
+        temp = float(avg_temp_c or 0.0)
+        precipitation = float(precipitation_mm or 0.0)
+        if precipitation >= 5:
+            return "눈" if temp <= 0 else "비"
+        if precipitation > 0:
+            return "진눈깨비" if temp <= 1 else "흐리고 비"
+        if temp <= 0:
+            return "흐림"
+        return "맑음"
+
+    def _get_weather_for_reference_date(
+        self,
+        *,
+        store_id: str | None,
+        reference_date: str | None,
+    ) -> dict[str, object] | None:
+        normalized_date = self._normalize_yyyymmdd(reference_date)
+        sido = self._resolve_store_sido(store_id=store_id)
+        if (
+            not self.engine
+            or not normalized_date
+            or not has_table(self.engine, "raw_weather_daily")
+        ):
+            return None
+        try:
+            with self.engine.connect() as connection:
+                row = (
+                    connection.execute(
+                        text(
+                            """
+                            SELECT weather_dt, sido, avg_temp_c, precipitation_mm
+                            FROM raw_weather_daily
+                            WHERE weather_dt = :reference_date
+                              AND sido = :sido
+                            LIMIT 1
+                            """
+                        ),
+                        {"reference_date": normalized_date, "sido": sido},
+                    )
+                    .mappings()
+                    .first()
+                )
+        except SQLAlchemyError:
+            return None
+        if not row:
+            return None
+        avg_temp_c = float(row["avg_temp_c"] or 0.0)
+        precipitation_mm = float(row["precipitation_mm"] or 0.0)
+        return {
+            "region": str(row["sido"] or sido),
+            "forecast_date": f"{normalized_date[:4]}-{normalized_date[4:6]}-{normalized_date[6:8]}",
+            "weather_type": self._classify_weather_type(avg_temp_c, precipitation_mm),
+            "max_temperature_c": int(round(avg_temp_c)),
+            "min_temperature_c": int(round(avg_temp_c)),
+            "precipitation_probability": int(round(precipitation_mm)),
+        }
+
+    async def get_weather_forecast(
+        self,
+        store_id: str | None = None,
+        reference_date: str | None = None,
+    ) -> dict[str, object] | None:
+        weather_for_reference = self._get_weather_for_reference_date(
+            store_id=store_id,
+            reference_date=reference_date,
+        )
+        if weather_for_reference is not None:
+            return weather_for_reference
+
         sido = self._resolve_store_sido(store_id=store_id)
         latitude, longitude = _SIDO_COORDINATES.get(sido, _DEFAULT_WEATHER_COORD)
         try:
@@ -234,6 +391,35 @@ class OrderingRepository:
             return 0
 
     @staticmethod
+    def _is_auto_order_flag(value: object | None) -> bool:
+        normalized = str(value or "").strip().lower()
+        return normalized in {"1", "y", "yes", "true", "t", "auto", "automatic", "자동"}
+
+    def _build_history_response(self, rows: list[object]) -> dict:
+        items = [
+            {
+                "item_nm": str(row["item_nm"]) if row["item_nm"] is not None else "",
+                "dlv_dt": str(row["dlv_dt"]) if row["dlv_dt"] is not None else None,
+                "ord_qty": int(row["ord_qty"]) if row["ord_qty"] is not None else None,
+                "confrm_qty": int(row["confrm_qty"]) if row["confrm_qty"] is not None else None,
+                "is_auto": self._is_auto_order_flag(row["auto_ord_yn"]),
+                "ord_grp_nm": str(row["ord_grp_nm"]) if row["ord_grp_nm"] is not None else None,
+            }
+            for row in rows
+        ]
+        total_count = len(items)
+        auto_count = sum(1 for item in items if item["is_auto"])
+        manual_count = total_count - auto_count
+        auto_rate = auto_count / total_count if total_count > 0 else 0.0
+        manual_rate = manual_count / total_count if total_count > 0 else 0.0
+        return {
+            "items": items,
+            "auto_rate": round(auto_rate, 4),
+            "manual_rate": round(manual_rate, 4),
+            "total_count": total_count,
+        }
+
+    @staticmethod
     def _format_basis_date(value: object) -> str:
         basis = str(value).strip()
         if len(basis) == 8 and basis.isdigit():
@@ -268,12 +454,23 @@ class OrderingRepository:
             if item_code_column
             else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
         )
+        normalized_date_expr = f"REPLACE(CAST({date_column} AS TEXT), '-', '')"
+        date_as_date_expr = f"TO_DATE({normalized_date_expr}, 'YYYYMMDD')"
         quantity_expr = f"COALESCE(NULLIF(TRIM(CAST({quantity_column} AS TEXT)), '')::numeric, 0)"
         store_filter_sql = ""
         filter_params: dict[str, object] = {}
         if store_id and store_column:
             store_filter_sql = f" AND CAST({store_column} AS TEXT) = :store_id"
             filter_params["store_id"] = store_id
+        recent_window_filter_sql = f"""
+                          AND {date_as_date_expr} >= (
+                              SELECT MAX(TO_DATE(REPLACE(CAST(window_source.{date_column} AS TEXT), '-', ''), 'YYYYMMDD')) - INTERVAL '27 day'
+                              FROM {relation} window_source
+                              WHERE NULLIF(TRIM(CAST(window_source.{date_column} AS TEXT)), '') IS NOT NULL
+                              {f"AND CAST(window_source.{store_column} AS TEXT) = :store_id" if store_id and store_column else ""}
+                          )
+        """
+        production_exclusion_sql = ""
 
         labels = ["지난주 같은 요일", "2주 전 같은 요일", "지난달 같은 요일"]
         descriptions = [
@@ -296,6 +493,8 @@ class OrderingRepository:
                         FROM {relation}
                         WHERE NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL
                           {store_filter_sql}
+                          {recent_window_filter_sql}
+                          {production_exclusion_sql}
                         ORDER BY date_value DESC
                         LIMIT 6
                         """
@@ -314,6 +513,8 @@ class OrderingRepository:
                             FROM {relation}
                             WHERE CAST({date_column} AS TEXT) = :date_value
                               {store_filter_sql}
+                              {recent_window_filter_sql}
+                              {production_exclusion_sql}
                             """
                         ),
                         {"date_value": str(date_value), **filter_params},
@@ -601,49 +802,9 @@ class OrderingRepository:
                     .mappings()
                     .all()
                 )
-
-                ratio_rows = (
-                    conn.execute(
-                        text(
-                            """
-                        SELECT auto_ord_yn, COUNT(*) AS cnt
-                        FROM raw_order_extract
-                        WHERE masked_stor_cd = :store_id
-                        GROUP BY auto_ord_yn
-                    """
-                        ),
-                        {"store_id": store_id},
-                    )
-                    .mappings()
-                    .all()
-                )
         except SQLAlchemyError:
             return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
-
-        ratio_map: dict[str, int] = {str(r["auto_ord_yn"]): int(r["cnt"]) for r in ratio_rows}
-        auto_count = ratio_map.get("1", 0)
-        manual_count = ratio_map.get("0", 0)
-        total_count = auto_count + manual_count
-        auto_rate = auto_count / total_count if total_count > 0 else 0.0
-        manual_rate = manual_count / total_count if total_count > 0 else 0.0
-
-        items = [
-            {
-                "item_nm": str(r["item_nm"]) if r["item_nm"] is not None else "",
-                "dlv_dt": str(r["dlv_dt"]) if r["dlv_dt"] is not None else None,
-                "ord_qty": int(r["ord_qty"]) if r["ord_qty"] is not None else None,
-                "confrm_qty": int(r["confrm_qty"]) if r["confrm_qty"] is not None else None,
-                "is_auto": str(r["auto_ord_yn"]) == "1",
-                "ord_grp_nm": str(r["ord_grp_nm"]) if r["ord_grp_nm"] is not None else None,
-            }
-            for r in rows
-        ]
-        return {
-            "items": items,
-            "auto_rate": round(auto_rate, 4),
-            "manual_rate": round(manual_rate, 4),
-            "total_count": total_count,
-        }
+        return self._build_history_response(list(rows))
 
     def get_history_filtered(
         self,
@@ -654,12 +815,14 @@ class OrderingRepository:
         date_to: str | None = None,
         item_nm: str | None = None,
         is_auto: bool | None = None,
+        reference_datetime: datetime | None = None,
     ) -> dict:
         if not self.engine:
             return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
 
         date_from_norm = self._normalize_yyyymmdd(date_from)
         date_to_norm = self._normalize_yyyymmdd(date_to)
+        reference_date_norm, include_same_day = self._build_history_visibility_filter(reference_datetime)
 
         where_clauses: list[str] = []
         params: dict[str, object] = {"limit": limit}
@@ -672,6 +835,11 @@ class OrderingRepository:
         if date_to_norm:
             where_clauses.append("REPLACE(CAST(dlv_dt AS TEXT), '-', '') <= :date_to")
             params["date_to"] = date_to_norm
+        if reference_date_norm:
+            where_clauses.append(
+                f"REPLACE(CAST(dlv_dt AS TEXT), '-', '') {'<=' if include_same_day else '<'} :reference_date"
+            )
+            params["reference_date"] = reference_date_norm
         if item_nm:
             where_clauses.append("CAST(item_nm AS TEXT) ILIKE :item_nm")
             params["item_nm"] = f"%{item_nm.strip()}%"
@@ -687,27 +855,18 @@ class OrderingRepository:
                     conn.execute(
                         text(
                             f"""
-                        SELECT item_nm, dlv_dt, ord_qty, confrm_qty, auto_ord_yn, ord_grp_nm
+                        SELECT
+                            CAST(item_nm AS TEXT) AS item_nm,
+                            CAST(dlv_dt AS TEXT) AS dlv_dt,
+                            ROUND(SUM(COALESCE(NULLIF(TRIM(CAST(ord_qty AS TEXT)), '')::numeric, 0))) AS ord_qty,
+                            ROUND(SUM(COALESCE(NULLIF(TRIM(CAST(confrm_qty AS TEXT)), '')::numeric, 0))) AS confrm_qty,
+                            MAX(CAST(auto_ord_yn AS TEXT)) AS auto_ord_yn,
+                            MAX(CAST(ord_grp_nm AS TEXT)) AS ord_grp_nm
                         FROM raw_order_extract
                         WHERE {where_sql}
-                        ORDER BY REPLACE(CAST(dlv_dt AS TEXT), '-', '') DESC, item_nm
+                        GROUP BY CAST(dlv_dt AS TEXT), CAST(item_nm AS TEXT)
+                        ORDER BY REPLACE(CAST(dlv_dt AS TEXT), '-', '') DESC, CAST(item_nm AS TEXT)
                         LIMIT :limit
-                    """
-                        ),
-                        params,
-                    )
-                    .mappings()
-                    .all()
-                )
-
-                ratio_rows = (
-                    conn.execute(
-                        text(
-                            f"""
-                        SELECT auto_ord_yn, COUNT(*) AS cnt
-                        FROM raw_order_extract
-                        WHERE {where_sql}
-                        GROUP BY auto_ord_yn
                     """
                         ),
                         params,
@@ -717,28 +876,4 @@ class OrderingRepository:
                 )
         except SQLAlchemyError:
             return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
-
-        ratio_map: dict[str, int] = {str(r["auto_ord_yn"]): int(r["cnt"]) for r in ratio_rows}
-        auto_count = ratio_map.get("1", 0)
-        manual_count = ratio_map.get("0", 0)
-        total_count = auto_count + manual_count
-        auto_rate = auto_count / total_count if total_count > 0 else 0.0
-        manual_rate = manual_count / total_count if total_count > 0 else 0.0
-
-        items = [
-            {
-                "item_nm": str(r["item_nm"]) if r["item_nm"] is not None else "",
-                "dlv_dt": str(r["dlv_dt"]) if r["dlv_dt"] is not None else None,
-                "ord_qty": int(r["ord_qty"]) if r["ord_qty"] is not None else None,
-                "confrm_qty": int(r["confrm_qty"]) if r["confrm_qty"] is not None else None,
-                "is_auto": str(r["auto_ord_yn"]) == "1",
-                "ord_grp_nm": str(r["ord_grp_nm"]) if r["ord_grp_nm"] is not None else None,
-            }
-            for r in rows
-        ]
-        return {
-            "items": items,
-            "auto_rate": round(auto_rate, 4),
-            "manual_rate": round(manual_rate, 4),
-            "total_count": total_count,
-        }
+        return self._build_history_response(list(rows))

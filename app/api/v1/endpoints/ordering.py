@@ -16,6 +16,15 @@ from app.schemas.ordering import (
 from app.services.ordering_service import OrderingService
 
 router = APIRouter(prefix="/ordering", tags=["ordering"])
+DEFAULT_ORDERING_REFERENCE_DATETIME = "2026-03-05T09:00:00+09:00"
+
+
+def _resolve_ordering_reference_datetime(
+    x_reference_datetime: str | None,
+):
+    return parse_reference_datetime(
+        x_reference_datetime or DEFAULT_ORDERING_REFERENCE_DATETIME
+    )
 
 
 @router.get("/options", response_model=OrderingOptionsResponse)
@@ -28,7 +37,7 @@ async def list_order_options(
     return await service.list_options(
         notification_entry=notification_entry,
         store_id=store_id,
-        reference_datetime=parse_reference_datetime(x_reference_datetime),
+        reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
     )
 
 
@@ -51,7 +60,7 @@ async def list_ordering_alerts(
     return await service.list_deadline_alerts(
         before_minutes=before_minutes,
         store_id=store_id,
-        reference_datetime=parse_reference_datetime(x_reference_datetime),
+        reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
     )
 
 
@@ -84,7 +93,7 @@ async def get_ordering_deadline(
 ) -> dict:
     return await service.get_deadline(
         store_id=store_id,
-        reference_datetime=parse_reference_datetime(x_reference_datetime),
+        reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
     )
 
 
@@ -108,6 +117,7 @@ def get_ordering_history(
     item_nm: str | None = Query(default=None),
     is_auto: bool | None = Query(default=None),
     limit: int = Query(default=30, ge=1, le=200),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingHistoryResponse:
     try:
@@ -118,6 +128,7 @@ def get_ordering_history(
             date_to=date_to,
             item_nm=item_nm,
             is_auto=is_auto,
+            reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -131,6 +142,7 @@ async def get_ordering_history_insights(
     item_nm: str | None = Query(default=None),
     is_auto: bool | None = Query(default=None),
     limit: int = Query(default=200, ge=20, le=500),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingHistoryInsightsResponse:
     try:
@@ -141,6 +153,7 @@ async def get_ordering_history_insights(
             item_nm=item_nm,
             is_auto=is_auto,
             limit=limit,
+            reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app.core.utils import get_now
 from app.repositories.ordering_repository import OrderingRepository
@@ -32,6 +35,8 @@ _KST = timezone(timedelta(hours=9))
 _DEFAULT_DEADLINE_HOUR = 14
 _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
+_DEFAULT_ORDERING_STORE_ID = "POC_010"
+_DEFAULT_ORDERING_HISTORY_REFERENCE = datetime(2026, 3, 5, 9, 0, 0)
 
 
 def _now_kst() -> datetime:
@@ -59,11 +64,37 @@ class OrderingService:
         self.repository = repository
         self.audit_service = audit_service
         self.ai_client = ai_client
+        self.history_insights_cache_path = (
+            Path(__file__).resolve().parents[2] / "data" / "ordering_history_insights_cache.json"
+        )
+
+    @staticmethod
+    def _sort_history_anomalies(anomalies: list[dict]) -> list[dict]:
+        priority = {"high": 0, "medium": 1, "low": 2}
+        return sorted(
+            anomalies,
+            key=lambda anomaly: priority.get(str(anomaly.get("severity", "")).lower(), 99),
+        )
+
+    @staticmethod
+    def _parse_history_date(value: str | None) -> datetime.date | None:
+        if not value:
+            return None
+        for fmt in ("%Y-%m-%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+        return None
 
     @staticmethod
     def _today_kst(reference_datetime: datetime | None = None) -> str:
         base = reference_datetime or _now_kst()
         return base.strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _resolve_history_reference_datetime(reference_datetime: datetime | None) -> datetime:
+        return reference_datetime or _DEFAULT_ORDERING_HISTORY_REFERENCE
 
     @staticmethod
     def _safe_str(value: object | None) -> str | None:
@@ -106,6 +137,12 @@ class OrderingService:
                 payload.get("precipitation_probability") or payload.get("rain_probability")
             ),
         )
+
+    @staticmethod
+    def _matches_business_date(weather: OrderingWeather | None, business_date: str | None) -> bool:
+        if weather is None or not business_date:
+            return False
+        return str(weather.forecast_date).replace("-", "") == str(business_date).replace("-", "")
 
     def _require_history_store_id(self, store_id: str | None) -> str:
         normalized = (store_id or "").strip()
@@ -195,9 +232,14 @@ class OrderingService:
         skip_ai: bool = False,
         reference_datetime: datetime | None = None,
     ) -> OrderingOptionsResponse:
+        normalized_store_id = (store_id or _DEFAULT_ORDERING_STORE_ID).strip() or _DEFAULT_ORDERING_STORE_ID
         business_date = self._today_kst(reference_datetime)
-        options = await self.repository.list_options(store_id=store_id)
-        ai_payload = None if skip_ai else await self._get_ai_ordering_recommendation(store_id=store_id, current_date=business_date)
+        options = await self.repository.list_options(store_id=normalized_store_id)
+        ai_payload = (
+            None
+            if skip_ai
+            else await self._get_ai_ordering_recommendation(store_id=normalized_store_id, current_date=business_date)
+        )
         ai_options = (ai_payload or {}).get("options") or []
         merged_options = [
             self._merge_option_payloads(option, ai_options[index] if index < len(ai_options) else None, index=index)
@@ -221,13 +263,18 @@ class OrderingService:
             )
             weather = self._normalize_weather_payload(ai_payload.get("weather"))
             trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
+            if weather is not None and not self._matches_business_date(weather, business_date):
+                weather = None
 
         if weather is None:
-            weather_payload = await self.repository.get_weather_forecast(store_id=store_id)
+            weather_payload = await self.repository.get_weather_forecast(
+                store_id=normalized_store_id,
+                reference_date=business_date,
+            )
             weather = self._normalize_weather_payload(weather_payload)
 
         if deadline_at is None:
-            deadline = await self.get_deadline(store_id=store_id, reference_datetime=reference_datetime)
+            deadline = await self.get_deadline(store_id=normalized_store_id, reference_datetime=reference_datetime)
             deadline_at = deadline["deadline"]
             deadline_minutes = deadline["minutes_remaining"]
 
@@ -242,7 +289,7 @@ class OrderingService:
             business_date=business_date,
             options=[OrderOption(**o) for o in merged_options],
             explainability=create_ready_payload(
-                trace_id=f"ordering-options-{store_id or 'default'}",
+                trace_id=f"ordering-options-{normalized_store_id}",
                 actions=[
                     "추천안 3개를 비교한 뒤 최종 주문안을 확정하세요.",
                     "마감 전 재고 부족 위험 품목을 우선 점검하세요.",
@@ -441,8 +488,10 @@ class OrderingService:
         date_to: str | None = None,
         item_nm: str | None = None,
         is_auto: bool | None = None,
+        reference_datetime: datetime | None = None,
     ):
         normalized_store_id = self._require_history_store_id(store_id)
+        resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
         data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
             limit=limit,
@@ -450,6 +499,7 @@ class OrderingService:
             date_to=date_to,
             item_nm=item_nm,
             is_auto=is_auto,
+            reference_datetime=resolved_reference_datetime,
         )
         return OrderingHistoryResponse(
             items=[OrderingHistoryItem(**item) for item in data["items"]],
@@ -489,19 +539,36 @@ class OrderingService:
             ]
         )
 
-        grouped: dict[str, list[int]] = {}
+        grouped: dict[str, list[tuple[datetime.date, int]]] = {}
         for item in items:
-            if item.item_nm and item.ord_qty is not None:
-                grouped.setdefault(item.item_nm, []).append(int(item.ord_qty))
+            if not item.item_nm or item.ord_qty is None:
+                continue
+            item_date = OrderingService._parse_history_date(item.dlv_dt)
+            if item_date is None:
+                continue
+            grouped.setdefault(item.item_nm, []).append((item_date, int(item.ord_qty)))
 
         top_changed_items: list[dict[str, object]] = []
-        for item_nm, qty_values in grouped.items():
-            latest = qty_values[0]
-            baseline_values = qty_values[1:] if len(qty_values) > 1 else qty_values
+        for item_nm, dated_qty_values in grouped.items():
+            dated_qty_values.sort(key=lambda row: row[0], reverse=True)
+            if len(dated_qty_values) < 2:
+                continue
+            latest_date, latest = dated_qty_values[0]
+            baseline_start = latest_date - timedelta(days=28)
+            baseline_end = latest_date - timedelta(days=1)
+            baseline_values = [
+                qty
+                for item_date, qty in dated_qty_values[1:]
+                if baseline_start <= item_date <= baseline_end
+            ]
+            if not baseline_values:
+                continue
             baseline = sum(baseline_values) / max(len(baseline_values), 1)
             if baseline <= 0:
                 continue
             change_ratio = round((latest - baseline) / baseline, 4)
+            if abs(change_ratio) <= 0:
+                continue
             top_changed_items.append(
                 {
                     "item_nm": item_nm,
@@ -521,6 +588,53 @@ class OrderingService:
             "top_changed_items_preview": top_changed_items[:10],
         }
 
+    @staticmethod
+    def _build_history_insights_cache_key(
+        *,
+        store_id: str,
+        filters: dict[str, object],
+        history_items: list[dict[str, object]],
+    ) -> str:
+        payload = {
+            "store_id": store_id,
+            "filters": filters,
+            "history_items": history_items,
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _load_cached_history_insights(self, cache_key: str) -> dict | None:
+        cache_path = self.history_insights_cache_path
+        if not cache_path.exists():
+            return None
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        cached = payload.get(cache_key)
+        return cached if isinstance(cached, dict) else None
+
+    def _save_cached_history_insights(self, cache_key: str, ai_payload: dict) -> None:
+        cache_path = self.history_insights_cache_path
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if cache_path.exists():
+                current = json.loads(cache_path.read_text(encoding="utf-8"))
+                if not isinstance(current, dict):
+                    current = {}
+            else:
+                current = {}
+        except (OSError, ValueError, TypeError):
+            current = {}
+
+        current[cache_key] = ai_payload
+        cache_path.write_text(
+            json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
     async def get_history_insights(
         self,
         *,
@@ -530,10 +644,12 @@ class OrderingService:
         item_nm: str | None = None,
         is_auto: bool | None = None,
         limit: int = 200,
+        reference_datetime: datetime | None = None,
     ) -> OrderingHistoryInsightsResponse:
         normalized_store_id = self._require_history_store_id(store_id)
         if not self.ai_client:
             raise RuntimeError("AI service is unavailable")
+        resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
 
         data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
@@ -542,6 +658,7 @@ class OrderingService:
             date_to=date_to,
             item_nm=item_nm,
             is_auto=is_auto,
+            reference_datetime=resolved_reference_datetime,
         )
         items = [OrderingHistoryItem(**item) for item in data["items"]]
         summary_stats = self._build_history_summary_stats(
@@ -550,22 +667,38 @@ class OrderingService:
             auto_rate=data["auto_rate"],
             manual_rate=data["manual_rate"],
         )
-        ai_payload = await self.ai_client.generate_ordering_history_insights(
+        filters = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "item_nm": item_nm,
+            "is_auto": is_auto,
+            "limit": limit,
+        }
+        history_items_payload = [item.model_dump() for item in items]
+        cache_key = self._build_history_insights_cache_key(
             store_id=normalized_store_id,
-            filters={
-                "date_from": date_from,
-                "date_to": date_to,
-                "item_nm": item_nm,
-                "is_auto": is_auto,
-                "limit": limit,
-            },
-            history_items=[item.model_dump() for item in items],
-            summary_stats=summary_stats,
+            filters=filters,
+            history_items=history_items_payload,
         )
+        ai_payload = self._load_cached_history_insights(cache_key)
+        if ai_payload is None:
+            ai_payload = await self.ai_client.generate_ordering_history_insights(
+                store_id=normalized_store_id,
+                filters=filters,
+                history_items=history_items_payload,
+                summary_stats=summary_stats,
+            )
+            if ai_payload is not None:
+                self._save_cached_history_insights(cache_key, ai_payload)
         if ai_payload is None:
             raise RuntimeError("AI service returned no payload")
 
         try:
+            anomaly_payloads = [
+                anomaly
+                for anomaly in (ai_payload.get("anomalies") or [])
+                if isinstance(anomaly, dict)
+            ]
             return OrderingHistoryInsightsResponse(
                 kpis=[
                     OrderingHistoryInsightKpi(**kpi)
@@ -574,12 +707,11 @@ class OrderingService:
                 ],
                 anomalies=[
                     OrderingHistoryAnomalyItem(**anomaly)
-                    for anomaly in (ai_payload.get("anomalies") or [])
-                    if isinstance(anomaly, dict)
+                    for anomaly in self._sort_history_anomalies(anomaly_payloads)
                 ][:8],
                 top_changed_items=[
                     OrderingHistoryChangedItem(**item)
-                    for item in (ai_payload.get("top_changed_items") or [])
+                    for item in (summary_stats.get("top_changed_items_preview") or [])
                     if isinstance(item, dict)
                 ][:5],
                 sources=[str(source) for source in (ai_payload.get("sources") or [])],
