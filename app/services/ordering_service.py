@@ -11,6 +11,7 @@ from app.schemas.ordering import (
     OrderingAlertsResponse,
     OrderingContextResponse,
     OrderingDeadlineAlert,
+    OrderingDeadlineItem,
     OrderingHistoryAnomalyItem,
     OrderingHistoryChangedItem,
     OrderingHistoryItem,
@@ -32,7 +33,7 @@ from app.services.audit_service import AuditService
 from app.services.explainability_service import create_ready_payload
 
 _KST = timezone(timedelta(hours=9))
-_DEFAULT_DEADLINE_HOUR = 14
+_DEFAULT_DEADLINE_HOUR = 12
 _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
 _DEFAULT_ORDERING_STORE_ID = "POC_010"
@@ -198,10 +199,11 @@ class OrderingService:
         ai_reasoning = OrderingService._safe_str(ai_option.get("reasoning_text") if ai_option else None)
         ai_metrics = ai_option.get("reasoning_metrics") if ai_option else None
         ai_special_factors = ai_option.get("special_factors") if ai_option else None
+        option_basis = OrderingService._safe_str(option.get("basis"))
         merged = {
             "option_id": OrderingService._safe_str(ai_option.get("option_id") if ai_option else None) or fallback_id,
             "title": OrderingService._safe_str(ai_option.get("title") if ai_option else None) or option.get("title") or f"추천안 {index + 1}",
-            "basis": OrderingService._safe_str(ai_option.get("basis") if ai_option else None) or option.get("basis") or "-",
+            "basis": option_basis or OrderingService._safe_str(ai_option.get("basis") if ai_option else None) or "-",
             "description": OrderingService._safe_str(ai_option.get("description") if ai_option else None) or option.get("description") or "",
             "recommended": bool((ai_option or {}).get("recommended", option.get("recommended", index == 0))),
             "reasoning_text": ai_reasoning or option.get("reasoning_text") or option.get("description") or "",
@@ -234,10 +236,14 @@ class OrderingService:
     ) -> OrderingOptionsResponse:
         normalized_store_id = (store_id or _DEFAULT_ORDERING_STORE_ID).strip() or _DEFAULT_ORDERING_STORE_ID
         business_date = self._today_kst(reference_datetime)
-        options = await self.repository.list_options(store_id=normalized_store_id)
+        options = await self.repository.list_options(
+            store_id=normalized_store_id,
+            reference_date=business_date,
+        )
+        use_ai_ordering = not skip_ai and not self.repository.uses_ordering_join_table(normalized_store_id)
         ai_payload = (
             None
-            if skip_ai
+            if not use_ai_ordering
             else await self._get_ai_ordering_recommendation(store_id=normalized_store_id, current_date=business_date)
         )
         ai_options = (ai_payload or {}).get("options") or []
@@ -251,7 +257,10 @@ class OrderingService:
         purpose_text = "주문 누락을 방지하고 최적 수량을 선택하세요."
         caution_text = "최종 주문 결정은 점주 권한입니다. 추천 옵션은 보조 자료로만 활용해주세요."
         weather: OrderingWeather | None = None
-        trend_summary: str | None = None
+        trend_summary = self.repository.get_ordering_trend_summary(
+            store_id=normalized_store_id,
+            reference_date=business_date,
+        )
 
         if ai_payload:
             deadline_minutes = int(ai_payload.get("deadline_minutes") or deadline_minutes)
@@ -262,7 +271,6 @@ class OrderingService:
                 or caution_text
             )
             weather = self._normalize_weather_payload(ai_payload.get("weather"))
-            trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
             if weather is not None and not self._matches_business_date(weather, business_date):
                 weather = None
 
@@ -277,6 +285,10 @@ class OrderingService:
             deadline = await self.get_deadline(store_id=normalized_store_id, reference_datetime=reference_datetime)
             deadline_at = deadline["deadline"]
             deadline_minutes = deadline["minutes_remaining"]
+        deadline_items = self.repository.get_deadline_items(
+            store_id=normalized_store_id,
+            reference_datetime=reference_datetime,
+        )
 
         return OrderingOptionsResponse(
             deadline_minutes=deadline_minutes,
@@ -287,6 +299,7 @@ class OrderingService:
             weather=weather,
             trend_summary=trend_summary,
             business_date=business_date,
+            deadline_items=[OrderingDeadlineItem(**item) for item in deadline_items],
             options=[OrderOption(**o) for o in merged_options],
             explainability=create_ready_payload(
                 trace_id=f"ordering-options-{normalized_store_id}",
@@ -321,7 +334,10 @@ class OrderingService:
         store_id: str | None = None,
         reference_datetime: datetime | None = None,
     ) -> OrderingAlertsResponse:
-        options = await self.repository.list_options(store_id=store_id)
+        options = await self.repository.list_options(
+            store_id=store_id,
+            reference_date=self._today_kst(reference_datetime),
+        )
         focus_option_id = self._derive_focus_option_id(options)
         alerts: list[OrderingDeadlineAlert] = []
         ai_deadline = await self._get_ai_deadline_alert(store_id)

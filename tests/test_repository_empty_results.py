@@ -141,15 +141,21 @@ class _FakeOrderingOptionsConnection:
         sql = str(statement)
         self.executed_sql.append(sql)
         self.executed_params.append(params)
-        if "SELECT DISTINCT CAST" in sql:
-            return _FakeMappingsResult(all_rows=["20260305"])
         if "AS item_name" in sql and "AS quantity" in sql:
-            return _FakeMappingsResult(
-                all_rows=[
+            date_value = str((params or {}).get("date_value"))
+            rows_by_date = {
+                "20260226": [
                     {"item_name": "Bagel", "item_code": "SKU_BAGEL", "quantity": 12},
                     {"item_name": "Bagel", "item_code": "SKU_BAGEL", "quantity": 8},
-                ]
-            )
+                ],
+                "20260219": [
+                    {"item_name": "Donut", "item_code": "SKU_DONUT", "quantity": 5},
+                ],
+                "20260205": [
+                    {"item_name": "Coffee", "item_code": "SKU_COFFEE", "quantity": 7},
+                ],
+            }
+            return _FakeMappingsResult(all_rows=rows_by_date.get(date_value, []))
         raise AssertionError(f"Unexpected SQL executed: {sql}")
 
 
@@ -159,6 +165,58 @@ class _FakeOrderingOptionsEngine:
 
     def connect(self):
         return self._connection
+
+
+class _FakeDeadlineItemsConnection:
+    def __init__(self) -> None:
+        self.executed_sql: list[str] = []
+        self.executed_params: list[dict | None] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, statement, params=None):
+        self.executed_sql.append(str(statement))
+        self.executed_params.append(params)
+        return _FakeMappingsResult(
+            all_rows=[
+                {"item_nm": "Zulu", "latest_dlv_dt": "20260304", "total_ord_qty": 5, "ordered_today": 0},
+                {"item_nm": "Alpha", "latest_dlv_dt": "20260305", "total_ord_qty": 12, "ordered_today": 1},
+                {"item_nm": "Bravo", "latest_dlv_dt": "20260304", "total_ord_qty": 9, "ordered_today": 0},
+            ]
+        )
+
+
+class _FakeDeadlineItemsEngine:
+    def __init__(self, connection: _FakeDeadlineItemsConnection) -> None:
+        self._connection = connection
+
+    def connect(self):
+        return self._connection
+
+
+class _FakeOrderingTrendConnection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, statement, params=None):
+        return _FakeMappingsResult(
+            first={
+                "recent_qty": 140,
+                "previous_qty": 100,
+            }
+        )
+
+
+class _FakeOrderingTrendEngine:
+    def connect(self):
+        return _FakeOrderingTrendConnection()
 
 
 def test_ordering_selection_summary_uses_last_7_days_window_when_date_from_missing(monkeypatch) -> None:
@@ -195,18 +253,52 @@ def test_ordering_repository_list_options_filters_recent_4_weeks_and_store(monke
         "dlv_dt": "dlv_dt",
         "item_nm": "item_nm",
         "item_cd": "item_cd",
+        "ord_qty": "ord_qty",
         "ord_rec_qty": "ord_rec_qty",
     }
     monkeypatch.setattr(ordering_repository_module, "has_table", lambda engine, table_name: table_name == "raw_order_extract")
 
-    options = asyncio.run(repository.list_options(store_id="POC_010"))
+    options = asyncio.run(repository.list_options(store_id="POC_010", reference_date="2026-03-05"))
 
-    assert len(options) == 1
+    assert len(options) == 3
     assert options[0]["items"][0]["sku_name"] == "Bagel"
     assert options[0]["items"][0]["quantity"] == 20
+    assert options[0]["basis"] == "2026-02-26"
+    assert options[1]["basis"] == "2026-02-19"
+    assert options[1]["items"][0]["sku_name"] == "Donut"
+    assert options[2]["basis"] == "2026-02-05"
+    assert options[2]["items"][0]["sku_name"] == "Coffee"
     joined_sql = "\n".join(connection.executed_sql)
-    assert "INTERVAL '27 day'" in joined_sql
+    assert "REPLACE(CAST(dlv_dt AS TEXT), '-', '') = :date_value" in joined_sql
     assert any(params and params.get("store_id") == "POC_010" for params in connection.executed_params if isinstance(params, dict))
+
+
+def test_ordering_repository_deadline_items_uses_visible_last_7_days_and_sorts_unordered_first() -> None:
+    connection = _FakeDeadlineItemsConnection()
+    repository = OrderingRepository(engine=_FakeDeadlineItemsEngine(connection))
+
+    items = repository.get_deadline_items(
+        store_id="POC_010",
+        reference_datetime=datetime(2026, 3, 5, 12, 0, 0),
+    )
+
+    assert [item["sku_name"] for item in items] == ["Bravo", "Zulu", "Alpha"]
+    assert [item["is_ordered"] for item in items] == [False, False, True]
+    assert all(item["deadline_at"] == "12:00" for item in items)
+    assert connection.executed_params[0]["window_start"] == "20260227"
+    assert connection.executed_params[0]["visible_reference_date"] == "20260305"
+
+
+def test_ordering_repository_trend_summary_compares_recent_7_days_vs_previous_7_days(monkeypatch) -> None:
+    monkeypatch.setattr(ordering_repository_module, "has_table", lambda engine, table_name: table_name == "raw_order_extract")
+    repository = OrderingRepository(engine=_FakeOrderingTrendEngine())
+
+    summary = repository.get_ordering_trend_summary(
+        store_id="POC_010",
+        reference_date="2026-03-05",
+    )
+
+    assert summary == "최근 7일 주문량은 140개로, 직전 7일 100개 대비 40.0% 증가했습니다."
 
 
 @pytest.mark.asyncio
@@ -214,9 +306,15 @@ async def test_ordering_service_list_options_defaults_store_id_to_poc_010() -> N
     class _Repo:
         def __init__(self) -> None:
             self.store_ids: list[str | None] = []
+            self.reference_dates: list[str | None] = []
 
-        async def list_options(self, store_id: str | None = None) -> list[dict]:
+        async def list_options(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> list[dict]:
             self.store_ids.append(store_id)
+            self.reference_dates.append(reference_date)
             return []
 
         async def get_weather_forecast(
@@ -226,12 +324,91 @@ async def test_ordering_service_list_options_defaults_store_id_to_poc_010() -> N
         ) -> dict | None:
             return None
 
+        def get_ordering_trend_summary(
+            self,
+            *,
+            store_id: str,
+            reference_date: str | None = None,
+        ) -> str | None:
+            return "최근 7일 주문량은 140개로, 직전 7일 100개 대비 40.0% 증가했습니다."
+
+        def uses_ordering_join_table(self, store_id: str | None) -> bool:
+            return False
+
+        def get_deadline_items(
+            self,
+            *,
+            store_id: str,
+            reference_datetime=None,
+        ) -> list[dict]:
+            return [
+                {
+                    "id": "deadline-1",
+                    "sku_name": "Bagel",
+                    "deadline_at": "12:00",
+                    "is_ordered": False,
+                }
+            ]
+
     service = OrderingService(repository=_Repo(), ai_client=None)
 
     response = await service.list_options(store_id=None, skip_ai=True)
 
     assert response.business_date is not None
     assert service.repository.store_ids == ["POC_010"]
+    assert service.repository.reference_dates == [response.business_date]
+    assert response.trend_summary == "최근 7일 주문량은 140개로, 직전 7일 100개 대비 40.0% 증가했습니다."
+    assert len(response.deadline_items) == 1
+    assert response.deadline_items[0].sku_name == "Bagel"
+    assert response.deadline_items[0].deadline_at == "12:00"
+
+
+@pytest.mark.asyncio
+async def test_ordering_service_skips_ai_when_join_table_is_available() -> None:
+    class _Repo:
+        async def list_options(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> list[dict]:
+            return [
+                {
+                    "option_id": "opt-a",
+                    "title": "전주 동요일",
+                    "basis": "2026-02-26",
+                    "description": "",
+                    "recommended": True,
+                    "reasoning_text": "",
+                    "reasoning_metrics": [],
+                    "special_factors": [],
+                    "items": [{"sku_name": "Bagel", "quantity": 20, "note": None}],
+                }
+            ]
+
+        async def get_weather_forecast(self, store_id: str | None = None, reference_date: str | None = None):
+            return None
+
+        def get_ordering_trend_summary(self, *, store_id: str, reference_date: str | None = None) -> str | None:
+            return "최근 7일 주문량은 140개로, 직전 7일 100개 대비 40.0% 증가했습니다."
+
+        def get_deadline_items(self, *, store_id: str, reference_datetime=None) -> list[dict]:
+            return []
+
+        def uses_ordering_join_table(self, store_id: str | None) -> bool:
+            return True
+
+    class _AI:
+        async def recommend_ordering(self, **_: object) -> dict | None:
+            raise AssertionError("AI should not be called when join table is available")
+
+        async def get_ordering_deadline_alert(self, store_id: str) -> dict | None:
+            return None
+
+    service = OrderingService(repository=_Repo(), ai_client=_AI())
+
+    response = await service.list_options(store_id="POC_010", skip_ai=False)
+
+    assert response.options[0].basis == "2026-02-26"
 
 
 def test_ordering_repository_history_prefers_store_cache() -> None:
@@ -573,6 +750,7 @@ async def test_production_repository_clamps_negative_stock_qty_to_zero_for_curre
 @pytest.mark.asyncio
 async def test_production_repository_prefers_completed_prediction_snapshot(monkeypatch) -> None:
     repository = ProductionRepository(engine=object())
+    repository._list_items_from_mart_production_status = lambda store_id, business_date: []  # type: ignore[method-assign]
 
     repository._list_items_from_prediction_snapshot = lambda store_id, business_date: [  # type: ignore[method-assign]
         {
@@ -608,6 +786,7 @@ async def test_production_repository_uses_latest_completed_snapshot_when_busines
         "app.repositories.production_repository.has_table",
         lambda engine, table_name: table_name in {"production_prediction_snapshots", "production_prediction_snapshot_items"},
     )
+    repository._list_items_from_mart_production_status = lambda store_id, business_date: []  # type: ignore[method-assign]
     repository._resolve_store_cache_db_path = lambda store_id: None  # type: ignore[method-assign]
 
     items = await repository.list_items(store_id="POC_010")
@@ -617,6 +796,50 @@ async def test_production_repository_uses_latest_completed_snapshot_when_busines
     assert items[0]["forecast"] == 1
     assert items[0]["chance_loss_reduction_pct"] == 75.0
     assert items[0]["snapshot_business_date"] == "20260310"
+
+
+@pytest.mark.asyncio
+async def test_production_repository_prefers_mart_production_status_before_snapshot() -> None:
+    repository = ProductionRepository(engine=object())
+
+    repository._list_items_from_mart_production_status = lambda store_id, business_date: [  # type: ignore[method-assign]
+        {
+            "sku_id": "SKU_MART",
+            "name": "Mart Item",
+            "current": 12,
+            "forecast": 5,
+            "order_confirm_qty": 3,
+            "hourly_sale_qty": 7,
+            "status": "warning",
+            "depletion_time": "11:00",
+            "recommended": 8,
+            "prod1": "08:00 / 10",
+            "prod2": "14:00 / 4",
+            "chance_loss_reduction_pct": 68.0,
+            "snapshot_business_date": "20260305",
+            "snapshot_target_hour": 12,
+        }
+    ]  # type: ignore[return-value]
+    repository._list_items_from_prediction_snapshot = lambda store_id, business_date: [  # type: ignore[method-assign]
+        {
+            "sku_id": "SKU_SNAPSHOT",
+            "name": "Snapshot Item",
+            "current": 1,
+            "forecast": 0,
+            "order_confirm_qty": 0,
+            "hourly_sale_qty": 0,
+            "status": "danger",
+            "depletion_time": "09:00",
+            "recommended": 3,
+            "prod1": "08:00 / 5",
+            "prod2": "14:00 / 2",
+        }
+    ]  # type: ignore[return-value]
+
+    items = await repository.list_items(store_id="POC_010", business_date="2026-03-05")
+
+    assert len(items) == 1
+    assert items[0]["sku_id"] == "SKU_MART"
 
 
 @pytest.mark.asyncio
