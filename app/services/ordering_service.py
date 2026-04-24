@@ -214,12 +214,14 @@ class OrderingService:
         self,
         store_id: str,
         current_date: str,
+        current_context: dict[str, object] | None = None,
     ) -> dict | None:
         if not self.ai_client:
             return None
         return await self.ai_client.recommend_ordering(
             store_id=store_id,
             current_date=current_date,
+            current_context=current_context,
         )
 
     async def _get_ai_deadline_alert(self, store_id: str) -> dict | None:
@@ -254,18 +256,16 @@ class OrderingService:
     def _merge_option_payloads(self, option: dict, ai_option: dict | None = None, index: int = 0) -> dict:
         fallback_id = option.get("option_id") or f"opt-{chr(97 + index)}"
         ai_reasoning = OrderingService._safe_str(ai_option.get("reasoning_text") if ai_option else None)
-        ai_metrics = ai_option.get("reasoning_metrics") if ai_option else None
-        ai_special_factors = ai_option.get("special_factors") if ai_option else None
         merged = {
-            "option_id": OrderingService._safe_str(ai_option.get("option_id") if ai_option else None) or fallback_id,
-            "title": OrderingService._safe_str(ai_option.get("title") if ai_option else None) or option.get("title") or f"추천안 {index + 1}",
-            "basis": OrderingService._safe_str(ai_option.get("basis") if ai_option else None) or option.get("basis") or "-",
-            "description": OrderingService._safe_str(ai_option.get("description") if ai_option else None) or option.get("description") or "",
-            "recommended": bool((ai_option or {}).get("recommended", option.get("recommended", index == 0))),
+            "option_id": option.get("option_id") or fallback_id,
+            "title": option.get("title") or f"추천안 {index + 1}",
+            "basis": option.get("basis") or "-",
+            "description": option.get("description") or "",
+            "recommended": bool(option.get("recommended", index == 0)),
             "reasoning_text": ai_reasoning or option.get("reasoning_text") or option.get("description") or "",
-            "reasoning_metrics": ai_metrics or option.get("reasoning_metrics") or [],
-            "special_factors": ai_special_factors or option.get("special_factors") or [],
-            "items": option.get("items") or (ai_option or {}).get("items") or [],
+            "reasoning_metrics": option.get("reasoning_metrics") or [],
+            "special_factors": option.get("special_factors") or [],
+            "items": option.get("items") or [],
         }
         if not merged["reasoning_metrics"]:
             total_qty = sum(item.get("quantity", 0) for item in merged["items"])
@@ -283,6 +283,27 @@ class OrderingService:
         focus = next((option for option in options if option.get("recommended")), options[0])
         return OrderingService._safe_str(focus.get("option_id"))
 
+    @staticmethod
+    def _build_ai_option_summaries(options: list[dict]) -> list[dict[str, object]]:
+        summaries: list[dict[str, object]] = []
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            items = [item for item in (option.get("items") or []) if isinstance(item, dict)]
+            total_qty = sum(int(item.get("quantity") or 0) for item in items)
+            summaries.append(
+                {
+                    "option_id": str(option.get("option_id") or ""),
+                    "title": str(option.get("title") or ""),
+                    "basis": str(option.get("basis") or ""),
+                    "total_qty": total_qty,
+                    "line_count": len(items),
+                    "reasoning_metrics": option.get("reasoning_metrics") or [],
+                    "special_factors": option.get("special_factors") or [],
+                }
+            )
+        return summaries
+
     async def list_options(
         self,
         notification_entry: bool = False,
@@ -293,10 +314,26 @@ class OrderingService:
         normalized_store_id = (store_id or _DEFAULT_ORDERING_STORE_ID).strip() or _DEFAULT_ORDERING_STORE_ID
         business_date = self._today_kst(reference_datetime)
         options = await self.repository.list_options(store_id=normalized_store_id)
+        arrival_schedule = None
+        get_order_arrival_schedule = getattr(self.repository, "get_order_arrival_schedule", None)
+        if callable(get_order_arrival_schedule):
+            arrival_schedule = get_order_arrival_schedule(store_id=normalized_store_id)
+        ai_current_context = {
+            "trend_summary": (
+                f"납품 기준: 주문 마감 {self._safe_str((arrival_schedule or {}).get('order_deadline_at')) or '-'}, "
+                f"도착 {self._safe_str((arrival_schedule or {}).get('arrival_day_offset')) or '-'} "
+                f"{self._safe_str((arrival_schedule or {}).get('arrival_expected_at')) or '-'}"
+            ).strip(),
+            "option_summaries": self._build_ai_option_summaries(options),
+        }
         ai_payload = (
             None
             if skip_ai
-            else await self._get_ai_ordering_recommendation(store_id=normalized_store_id, current_date=business_date)
+            else await self._get_ai_ordering_recommendation(
+                store_id=normalized_store_id,
+                current_date=business_date,
+                current_context=ai_current_context,
+            )
         )
         ai_options = (ai_payload or {}).get("options") or []
         merged_options = [
@@ -399,16 +436,13 @@ class OrderingService:
                 weather = None
 
         if trend_summary is None:
-            get_order_arrival_schedule = getattr(self.repository, "get_order_arrival_schedule", None)
-            if callable(get_order_arrival_schedule):
-                arrival_schedule = get_order_arrival_schedule(store_id=normalized_store_id)
-                if arrival_schedule:
-                    deadline_label = self._safe_str(arrival_schedule.get("order_deadline_at")) or "-"
-                    day_offset_label = self._safe_str(arrival_schedule.get("arrival_day_offset")) or "-"
-                    arrival_time_label = self._safe_str(arrival_schedule.get("arrival_expected_at")) or "-"
-                    trend_summary = (
-                        f"납품 기준: 주문 마감 {deadline_label}, 도착 {day_offset_label} {arrival_time_label}".strip()
-                    )
+            if arrival_schedule:
+                deadline_label = self._safe_str(arrival_schedule.get("order_deadline_at")) or "-"
+                day_offset_label = self._safe_str(arrival_schedule.get("arrival_day_offset")) or "-"
+                arrival_time_label = self._safe_str(arrival_schedule.get("arrival_expected_at")) or "-"
+                trend_summary = (
+                    f"납품 기준: 주문 마감 {deadline_label}, 도착 {day_offset_label} {arrival_time_label}".strip()
+                )
 
         if weather is None:
             weather_payload = await self.repository.get_weather_forecast(
