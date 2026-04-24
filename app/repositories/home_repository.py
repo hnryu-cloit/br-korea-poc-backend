@@ -13,7 +13,11 @@ class HomeRepository:
         self.engine = engine
 
     async def list_schedule_events(
-        self, store_id: str | None = None, today: date | None = None, window_days: int = 90
+        self,
+        store_id: str | None = None,
+        today: date | None = None,
+        window_days: int = 90,
+        limit: int | None = 20,
     ) -> list[dict[str, str]]:
         if not self.engine:
             return []
@@ -36,7 +40,10 @@ class HomeRepository:
                         conn=conn, store_id=store_id, start=today_str, end=window_end_str
                     )
                 )
-        return sorted(events, key=lambda event: event["date"])
+        sorted_events = sorted(events, key=lambda event: (event["date"], event["category"], event["title"]))
+        if limit is None or limit <= 0:
+            return sorted_events
+        return sorted_events[:limit]
 
     @staticmethod
     def _to_iso_date(value: str) -> str:
@@ -82,8 +89,7 @@ class HomeRepository:
                   AND use_yn = '1'
                   AND fnsh_dt < '99991221'
                   {campaign_store_filter}
-                ORDER BY fnsh_dt
-                LIMIT 20
+                ORDER BY fnsh_dt, cpi_nm
             """
                 ),
                 campaign_params,
@@ -141,14 +147,25 @@ class HomeRepository:
             conn.execute(
                 text(
                     f"""
+                WITH ranked AS (
+                    SELECT
+                        pay_dc_nm,
+                        start_dt,
+                        fnsh_dt,
+                        pay_dc_grp_type_nm,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY pay_dc_nm
+                            ORDER BY fnsh_dt ASC, start_dt DESC
+                        ) AS rn
+                    FROM raw_telecom_discount_policy
+                    WHERE start_dt <= :end AND fnsh_dt >= :start
+                      AND fnsh_dt < '99991221'
+                      {telecom_store_filter}
+                )
                 SELECT pay_dc_nm, start_dt, fnsh_dt, pay_dc_grp_type_nm
-                FROM raw_telecom_discount_policy
-                WHERE start_dt <= :end AND fnsh_dt >= :start
-                  AND use_yn = '1'
-                  AND fnsh_dt < '99991221'
-                  {telecom_store_filter}
-                ORDER BY fnsh_dt
-                LIMIT 10
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY fnsh_dt, pay_dc_nm
             """
                 ),
                 telecom_params,
