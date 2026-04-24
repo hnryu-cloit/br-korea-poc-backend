@@ -70,10 +70,22 @@ def get_customer_profile(
 @router.get("/sales-trend", response_model=SalesTrendResponse)
 def get_sales_trend(
     store_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    compare_mode: Literal["prev_week", "prev_month"] = Query(default="prev_month"),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> SalesTrendResponse:
     try:
-        return service.get_sales_trend(store_id=store_id)
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
+        return service.get_sales_trend(
+            store_id=store_id,
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+            compare_mode=compare_mode,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
