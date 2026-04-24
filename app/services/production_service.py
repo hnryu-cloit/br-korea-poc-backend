@@ -39,6 +39,8 @@ from app.schemas.production import (
     InventoryStatusResponse,
     WasteItem,
     WasteSummaryResponse,
+    FifoLotItem,
+    FifoLotSummaryResponse,
 )
 import logging
 
@@ -757,15 +759,15 @@ class ProductionService:
             "items": [
                 {
                     "label": "폐기 추정 기준",
-                    "value": "생산량 - 판매량",
-                    "calculation": "GREATEST(prod_qty합계 - sale_qty, 0)",
+                    "value": "일별 생산량 - 판매량 합산",
+                    "calculation": "SUM(GREATEST(일별 prod_qty합계 - sale_qty, 0))",
                     "source_table": "raw_production_extract JOIN core_daily_item_sales",
                 },
                 {
                     "label": "단가 기준",
-                    "value": "raw_inventory_extract.cost 평균",
-                    "calculation": "AVG(cost) per item_nm",
-                    "source_table": "raw_inventory_extract",
+                    "value": "완제품 판매단가 (actual_sale_amt / sale_qty)",
+                    "calculation": "AVG(actual_sale_amt / sale_qty) per item_nm",
+                    "source_table": "core_daily_item_sales",
                 },
                 {
                     "label": "대상 기간",
@@ -1204,4 +1206,57 @@ class ProductionService:
             filtered_store_id=summary.get("filtered_store_id"),
             filtered_date_from=summary.get("filtered_date_from"),
             filtered_date_to=summary.get("filtered_date_to"),
+        )
+
+    async def get_fifo_lot_summary(
+        self,
+        store_id: str,
+        lot_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> FifoLotSummaryResponse:
+        """점포별 FIFO Lot 품목 요약 조회"""
+        rows, total = self.repository.get_fifo_lot_summary(
+            store_id=store_id,
+            lot_type=lot_type,
+            page=page,
+            page_size=page_size,
+        )
+
+        items = [
+            FifoLotItem(
+                item_nm=r["item_nm"],
+                lot_type=r["lot_type"],
+                shelf_life_days=r.get("shelf_life_days"),
+                last_lot_date=str(r["last_lot_date"]) if r.get("last_lot_date") else None,
+                total_initial_qty=float(r.get("total_initial_qty") or 0),
+                total_consumed_qty=float(r.get("total_consumed_qty") or 0),
+                total_wasted_qty=float(r.get("total_wasted_qty") or 0),
+                active_remaining_qty=float(r.get("active_remaining_qty") or 0),
+                active_lot_count=int(r.get("active_lot_count") or 0),
+                sold_out_lot_count=int(r.get("sold_out_lot_count") or 0),
+                expired_lot_count=int(r.get("expired_lot_count") or 0),
+            )
+            for r in rows
+        ]
+
+        total_wasted = sum(i.total_wasted_qty for i in items)
+        total_active = sum(i.active_remaining_qty for i in items)
+        items_with_waste = sum(1 for i in items if i.total_wasted_qty > 0)
+
+        total_pages = max(1, math.ceil(total / page_size))
+        return FifoLotSummaryResponse(
+            items=items,
+            summary={
+                "total_items": total,
+                "items_with_waste": items_with_waste,
+                "total_wasted_qty": total_wasted,
+                "total_active_qty": total_active,
+            },
+            pagination=Pagination(
+                page=page,
+                page_size=page_size,
+                total_items=total,
+                total_pages=total_pages,
+            ),
         )

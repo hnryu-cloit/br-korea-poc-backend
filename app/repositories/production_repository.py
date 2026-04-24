@@ -1551,7 +1551,14 @@ class ProductionRepository(BaseRepository):
         date_from: str,
         date_to: str,
     ) -> list[dict]:
-        """생산량 - 판매량 기반 폐기 추정 (date_from/date_to: YYYYMMDD 형식)"""
+        """일별 (생산량 - 판매량) 합산 폐기 추정.
+
+        날짜별로 GREATEST(생산-판매, 0)을 계산한 뒤 합산한다.
+        전체 기간을 한 번에 합산하면 어느 날의 잉여가 다른 날의 과판매로
+        상쇄되어 폐기가 과소 추정되는 문제를 방지한다.
+        단가는 완제품 판매 단가(actual_sale_amt / sale_qty)를 사용한다.
+        date_from / date_to: YYYYMMDD 형식
+        """
         if not self.engine:
             return []
         try:
@@ -1560,43 +1567,45 @@ class ProductionRepository(BaseRepository):
                     conn.execute(
                         text(
                             """
-                            SELECT
-                                COALESCE(p.item_cd, p.item_nm) AS item_cd,
-                                p.item_nm,
-                                SUM(GREATEST(
-                                    COALESCE(NULLIF(TRIM(p.prod_qty),   '')::numeric, 0)
-                                    + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::numeric, 0)
-                                    + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::numeric, 0)
-                                    + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::numeric, 0)
-                                    - COALESCE(s.sale_qty, 0),
-                                    0
-                                )) AS total_waste_qty,
-                                SUM(GREATEST(
-                                    COALESCE(NULLIF(TRIM(p.prod_qty),   '')::numeric, 0)
-                                    + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::numeric, 0)
-                                    + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::numeric, 0)
-                                    + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::numeric, 0)
-                                    - COALESCE(s.sale_qty, 0),
-                                    0
-                                ) * COALESCE(i.cost, 0)) AS total_waste_amount,
-                                COALESCE(MAX(i.cost), 0) AS avg_cost
-                            FROM raw_production_extract p
-                            LEFT JOIN core_daily_item_sales s
-                                ON p.masked_stor_cd = s.masked_stor_cd
-                               AND p.prod_dt        = s.sale_dt
-                               AND p.item_nm        = s.item_nm
-                            LEFT JOIN (
+                            WITH daily_waste AS (
+                                SELECT
+                                    COALESCE(p.item_cd, p.item_nm) AS item_cd,
+                                    p.item_nm,
+                                    GREATEST(
+                                        COALESCE(NULLIF(TRIM(p.prod_qty),   '')::numeric, 0)
+                                        + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::numeric, 0)
+                                        + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::numeric, 0)
+                                        + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::numeric, 0)
+                                        - COALESCE(s.sale_qty, 0),
+                                        0
+                                    ) AS waste_qty
+                                FROM raw_production_extract p
+                                LEFT JOIN core_daily_item_sales s
+                                    ON p.masked_stor_cd = s.masked_stor_cd
+                                   AND p.prod_dt        = s.sale_dt
+                                   AND p.item_nm        = s.item_nm
+                                WHERE p.masked_stor_cd = :store_id
+                                  AND p.prod_dt BETWEEN :date_from AND :date_to
+                            ),
+                            unit_price AS (
                                 SELECT item_nm,
-                                       AVG(COALESCE(NULLIF(TRIM(cost), '')::numeric, 0)) AS cost
-                                FROM raw_inventory_extract
+                                       AVG(actual_sale_amt / NULLIF(sale_qty, 0)) AS avg_unit_price
+                                FROM core_daily_item_sales
                                 WHERE masked_stor_cd = :store_id
-                                  AND NULLIF(TRIM(cost), '') IS NOT NULL
-                                  AND COALESCE(NULLIF(TRIM(cost), ''), '0') != '0'
+                                  AND sale_qty > 0
+                                  AND sale_dt BETWEEN :date_from AND :date_to
                                 GROUP BY item_nm
-                            ) i ON p.item_nm = i.item_nm
-                            WHERE p.masked_stor_cd = :store_id
-                              AND p.prod_dt BETWEEN :date_from AND :date_to
-                            GROUP BY COALESCE(p.item_cd, p.item_nm), p.item_nm
+                            )
+                            SELECT
+                                dw.item_cd,
+                                dw.item_nm,
+                                SUM(dw.waste_qty)                                        AS total_waste_qty,
+                                SUM(dw.waste_qty * COALESCE(u.avg_unit_price, 0))        AS total_waste_amount,
+                                COALESCE(MAX(u.avg_unit_price), 0)                       AS avg_cost
+                            FROM daily_waste dw
+                            LEFT JOIN unit_price u ON dw.item_nm = u.item_nm
+                            GROUP BY dw.item_cd, dw.item_nm
+                            HAVING SUM(dw.waste_qty) > 0
                             ORDER BY total_waste_qty DESC
                             """
                         ),
@@ -1833,3 +1842,75 @@ class ProductionRepository(BaseRepository):
             "filtered_date_from": date_from,
             "filtered_date_to": date_to,
         }
+
+    def get_fifo_lot_summary(
+        self,
+        store_id: str,
+        lot_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict], int]:
+        """점포별 FIFO Lot 품목 요약 조회.
+
+        품목·Lot 유형별로 생산/소진/폐기/잔여 수량을 집계한다.
+        """
+        if not self.engine or not has_table(self.engine, "inventory_fifo_lots"):
+            return [], 0
+        try:
+            offset = max(0, (page - 1) * page_size)
+            params: dict = {"store_id": store_id, "limit": page_size, "offset": offset}
+            type_clause = ""
+            if lot_type:
+                type_clause = "AND lot_type = :lot_type"
+                params["lot_type"] = lot_type
+
+            with self.engine.connect() as conn:
+                total = int(
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT COUNT(DISTINCT item_nm)
+                            FROM inventory_fifo_lots
+                            WHERE masked_stor_cd = :store_id {type_clause}
+                            """
+                        ),
+                        params,
+                    ).scalar_one()
+                )
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT
+                                item_nm,
+                                lot_type,
+                                MAX(shelf_life_days)                                          AS shelf_life_days,
+                                MAX(lot_date)                                                 AS last_lot_date,
+                                SUM(initial_qty)                                              AS total_initial_qty,
+                                SUM(consumed_qty)                                             AS total_consumed_qty,
+                                SUM(wasted_qty)                                               AS total_wasted_qty,
+                                SUM(CASE WHEN status = 'active'
+                                    THEN initial_qty - consumed_qty ELSE 0 END)               AS active_remaining_qty,
+                                COUNT(*) FILTER (WHERE status = 'active')                     AS active_lot_count,
+                                COUNT(*) FILTER (WHERE status = 'sold_out')                   AS sold_out_lot_count,
+                                COUNT(*) FILTER (WHERE status = 'expired')                    AS expired_lot_count
+                            FROM inventory_fifo_lots
+                            WHERE masked_stor_cd = :store_id {type_clause}
+                            GROUP BY item_nm, lot_type
+                            ORDER BY total_wasted_qty DESC, item_nm
+                            LIMIT :limit OFFSET :offset
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+            return [dict(r) for r in rows], total
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "get_fifo_lot_summary 쿼리 실패: store_id=%s error=%s",
+                store_id,
+                exc,
+            )
+            return [], 0

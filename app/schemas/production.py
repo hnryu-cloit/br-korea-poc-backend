@@ -294,3 +294,23 @@ class InventoryStatusResponse(BaseModel):
     items: list[InventoryStatusItem]
     pagination: Pagination
     explainability: ExplainabilityPayload | None = None
+
+
+class FifoLotItem(BaseModel):
+    item_nm: str
+    lot_type: str
+    shelf_life_days: int | None = None
+    last_lot_date: str | None = None
+    total_initial_qty: float
+    total_consumed_qty: float
+    total_wasted_qty: float
+    active_remaining_qty: float
+    active_lot_count: int
+    sold_out_lot_count: int
+    expired_lot_count: int
+
+
+class FifoLotSummaryResponse(BaseModel):
+    items: list[FifoLotItem]
+    summary: dict[str, float | int]
+    pagination: Pagination
