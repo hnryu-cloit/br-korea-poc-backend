@@ -88,6 +88,52 @@ class _DummyOrderingRepository:
         }
 
 
+class _DateFilteringOrderingRepository(_DummyOrderingRepository):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def get_history_filtered(
+        self,
+        *,
+        store_id: str,
+        limit: int,
+        date_from: str | None,
+        date_to: str | None,
+        item_nm: str | None,
+        is_auto: bool | None,
+        reference_datetime=None,
+    ) -> dict:
+        self.calls.append(
+            {
+                "store_id": store_id,
+                "limit": limit,
+                "date_from": date_from,
+                "date_to": date_to,
+                "item_nm": item_nm,
+                "is_auto": is_auto,
+            }
+        )
+        payload = super().get_history_filtered(
+            store_id=store_id,
+            limit=limit,
+            date_from=date_from,
+            date_to=date_to,
+            item_nm=item_nm,
+            is_auto=is_auto,
+            reference_datetime=reference_datetime,
+        )
+        filtered_items = payload["items"]
+        if date_from:
+            filtered_items = [item for item in filtered_items if str(item["dlv_dt"]) >= date_from]
+        if date_to:
+            filtered_items = [item for item in filtered_items if str(item["dlv_dt"]) <= date_to]
+        return {
+            **payload,
+            "items": filtered_items[:limit],
+            "total_count": len(filtered_items[:limit]),
+        }
+
+
 class _DummyAIClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -176,6 +222,31 @@ def test_ordering_history_insights_uses_prior_4_weeks_average_only() -> None:
     assert changed_items[0]["item_nm"] == "ChocoMuffin"
     assert changed_items[0]["avg_ord_qty"] == pytest.approx(16.0)
     assert changed_items[0]["latest_ord_qty"] == 28
+
+
+def test_ordering_history_insights_uses_previous_4_weeks_even_for_short_date_range() -> None:
+    repository = _DateFilteringOrderingRepository()
+    service = OrderingService(
+        repository=repository,
+        ai_client=_DummyAIClient(),
+    )
+
+    response = asyncio.run(
+        service.get_history_insights(
+            store_id="POC_002",
+            date_from="2026-04-22",
+            date_to="2026-04-22",
+        )
+    )
+
+    assert len(repository.calls) == 2
+    assert repository.calls[0]["date_from"] == "2026-04-22"
+    assert repository.calls[1]["date_from"] == "2026-03-25"
+    assert repository.calls[1]["date_to"] == "2026-04-22"
+    assert len(response.top_changed_items) == 1
+    assert response.top_changed_items[0].item_nm == "ChocoMuffin"
+    assert response.top_changed_items[0].avg_ord_qty == pytest.approx(16.0)
+    assert response.top_changed_items[0].latest_ord_qty == 28
 
 
 def test_ordering_history_insights_unknown_store() -> None:

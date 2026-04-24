@@ -523,6 +523,9 @@ class OrderingService:
         total_count: int,
         auto_rate: float,
         manual_rate: float,
+        comparison_items: list[OrderingHistoryItem] | None = None,
+        recent_date_from: str | None = None,
+        recent_date_to: str | None = None,
     ) -> dict[str, object]:
         ord_values = [int(item.ord_qty or 0) for item in items if item.ord_qty is not None]
         avg_ord_qty = round((sum(ord_values) / len(ord_values)) if ord_values else 0.0, 2)
@@ -540,7 +543,8 @@ class OrderingService:
         )
 
         grouped: dict[str, list[tuple[datetime.date, int]]] = {}
-        for item in items:
+        comparison_source = comparison_items or items
+        for item in comparison_source:
             if not item.item_nm or item.ord_qty is None:
                 continue
             item_date = OrderingService._parse_history_date(item.dlv_dt)
@@ -548,17 +552,27 @@ class OrderingService:
                 continue
             grouped.setdefault(item.item_nm, []).append((item_date, int(item.ord_qty)))
 
+        recent_start = OrderingService._parse_history_date(recent_date_from)
+        recent_end = OrderingService._parse_history_date(recent_date_to)
         top_changed_items: list[dict[str, object]] = []
         for item_nm, dated_qty_values in grouped.items():
             dated_qty_values.sort(key=lambda row: row[0], reverse=True)
-            if len(dated_qty_values) < 2:
+            recent_candidates = dated_qty_values
+            if recent_start is not None or recent_end is not None:
+                recent_candidates = [
+                    (item_date, qty)
+                    for item_date, qty in dated_qty_values
+                    if (recent_start is None or item_date >= recent_start)
+                    and (recent_end is None or item_date <= recent_end)
+                ]
+            if not recent_candidates:
                 continue
-            latest_date, latest = dated_qty_values[0]
+            latest_date, latest = max(recent_candidates, key=lambda row: row[0])
             baseline_start = latest_date - timedelta(days=28)
             baseline_end = latest_date - timedelta(days=1)
             baseline_values = [
                 qty
-                for item_date, qty in dated_qty_values[1:]
+                for item_date, qty in dated_qty_values
                 if baseline_start <= item_date <= baseline_end
             ]
             if not baseline_values:
@@ -594,11 +608,14 @@ class OrderingService:
         store_id: str,
         filters: dict[str, object],
         history_items: list[dict[str, object]],
+        comparison_history_items: list[dict[str, object]] | None = None,
     ) -> str:
         payload = {
+            "version": 2,
             "store_id": store_id,
             "filters": filters,
             "history_items": history_items,
+            "comparison_history_items": comparison_history_items or [],
         }
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -661,11 +678,29 @@ class OrderingService:
             reference_datetime=resolved_reference_datetime,
         )
         items = [OrderingHistoryItem(**item) for item in data["items"]]
+        comparison_date_from = None
+        if date_from:
+            parsed_date_from = self._parse_history_date(date_from)
+            if parsed_date_from is not None:
+                comparison_date_from = (parsed_date_from - timedelta(days=28)).isoformat()
+        comparison_data = self.repository.get_history_filtered(
+            store_id=normalized_store_id,
+            limit=max(limit, 500),
+            date_from=comparison_date_from,
+            date_to=date_to,
+            item_nm=item_nm,
+            is_auto=is_auto,
+            reference_datetime=resolved_reference_datetime,
+        )
+        comparison_items = [OrderingHistoryItem(**item) for item in comparison_data["items"]]
         summary_stats = self._build_history_summary_stats(
             items=items,
             total_count=data["total_count"],
             auto_rate=data["auto_rate"],
             manual_rate=data["manual_rate"],
+            comparison_items=comparison_items,
+            recent_date_from=date_from,
+            recent_date_to=date_to,
         )
         filters = {
             "date_from": date_from,
@@ -675,17 +710,19 @@ class OrderingService:
             "limit": limit,
         }
         history_items_payload = [item.model_dump() for item in items]
+        comparison_history_items_payload = [item.model_dump() for item in comparison_items]
         cache_key = self._build_history_insights_cache_key(
             store_id=normalized_store_id,
             filters=filters,
             history_items=history_items_payload,
+            comparison_history_items=comparison_history_items_payload,
         )
         ai_payload = self._load_cached_history_insights(cache_key)
         if ai_payload is None:
             ai_payload = await self.ai_client.generate_ordering_history_insights(
                 store_id=normalized_store_id,
                 filters=filters,
-                history_items=history_items_payload,
+                history_items=comparison_history_items_payload,
                 summary_stats=summary_stats,
             )
             if ai_payload is not None:
