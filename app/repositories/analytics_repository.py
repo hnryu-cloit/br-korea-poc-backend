@@ -55,7 +55,7 @@ class AnalyticsRepository:
         store_id: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
-    ) -> list[dict]:
+    ) -> dict:
         if not self.engine:
             raise RuntimeError("analytics database engine is not configured")
 
@@ -75,14 +75,19 @@ class AnalyticsRepository:
             )
 
         sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
+        selected_period_total_sales = None
         if sales_metrics:
             items.extend([sales_metrics["total_sales"], sales_metrics["coffee_attach_ratio"]])
+            selected_period_total_sales = sales_metrics.get("total_sales_amount")
 
         discount_metrics = self._get_discount_metrics(store_id=resolved_store_id, period=period)
         if discount_metrics:
             items.append(discount_metrics["discount_ratio"])
 
-        return items
+        return {
+            "items": items,
+            "selected_period_total_sales": selected_period_total_sales,
+        }
 
     async def get_weather_impact(
         self,
@@ -610,6 +615,7 @@ class AnalyticsRepository:
                 "trend": coffee_trend,
                 "detail": "커피 계열 매출 비중",
             },
+            "total_sales_amount": round(recent_total_sales, 0),
         }
 
     def _get_discount_metrics(
@@ -936,267 +942,239 @@ class AnalyticsRepository:
 
         return {"customer_segments": customer_segments, "telecom_discounts": telecom_discounts}
 
-    def get_sales_trend(self, store_id: str | None = None) -> dict:
-        """이번 달 vs 지난달 누적 매출 + 요일별/시간대별 추이"""
-        from calendar import monthrange
-        from datetime import date as date_type
-        today = datetime.utcnow().date()
-
-        # DB 최신 데이터 기준일 조정: 데이터가 현재 월보다 과거 월까지만 있으면 그 날짜를 기준일로 사용
-        if self.engine:
-            _sf = "WHERE masked_stor_cd = :store_id" if store_id else ""
-            _pq: dict = {"store_id": store_id} if store_id else {}
-            try:
-                with self.engine.connect() as _conn:
-                    _row = (
-                        _conn.execute(
-                            text(f"SELECT MAX(sale_dt) AS latest FROM raw_daily_store_item {_sf}"),
-                            _pq,
-                        )
-                        .mappings()
-                        .one_or_none()
-                    )
-                if _row and _row["latest"]:
-                    _s = str(_row["latest"])
-                    _latest = date_type(int(_s[:4]), int(_s[4:6]), int(_s[6:8]))
-                    if _latest < today:
-                        today = _latest
-            except SQLAlchemyError:
-                pass
-
-        this_month_start = today.replace(day=1)
-        last_month_end = this_month_start - timedelta(days=1)
-        last_month_start = last_month_end.replace(day=1)
-        days_in_this_month = monthrange(today.year, today.month)[1]
-        last_month_days = monthrange(last_month_end.year, last_month_end.month)[1]
-
-        dow_labels = ["월", "화", "수", "목", "금", "토", "일"]
-
+    def get_sales_trend(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        compare_mode: str = "prev_month",
+    ) -> dict:
+        """선택 기간 vs 비교 기간 누적 매출 + 요일별/시간대별 추이."""
         if not self.engine:
             raise RuntimeError("analytics database engine is not configured")
 
-        daily_table = "raw_daily_store_item"
-        amount_col = "sale_amt"
+        resolved_store_id = self._resolve_metrics_store_id(store_id)
+        normalized_from = self._normalize_date(date_from) if date_from else None
+        normalized_to = self._normalize_date(date_to) if date_to else None
 
-        def _fmt(d) -> str:
-            return d.strftime("%Y%m%d")
+        if not normalized_from or not normalized_to:
+            latest = datetime.utcnow().date()
+            normalized_to = latest.strftime("%Y%m%d")
+            normalized_from = (latest - timedelta(days=6)).strftime("%Y%m%d")
+
+        current_from = datetime.strptime(normalized_from, "%Y%m%d").date()
+        current_to = datetime.strptime(normalized_to, "%Y%m%d").date()
+        if current_from > current_to:
+            current_from, current_to = current_to, current_from
+        if (current_to - current_from).days > 30:
+            raise ValueError("date range must be within 31 days")
+
+        if compare_mode not in {"prev_week", "prev_month"}:
+            raise ValueError(f"unsupported compare_mode: {compare_mode}")
+
+        def _fmt(value: date_type) -> str:
+            return value.strftime("%Y%m%d")
+
+        def _shift_to_previous_month(value: date_type) -> date_type:
+            if value.month == 1:
+                year = value.year - 1
+                month = 12
+            else:
+                year = value.year
+                month = value.month - 1
+            max_day = monthrange(year, month)[1]
+            return date_type(year, month, min(value.day, max_day))
+
+        def _build_compare_period() -> tuple[date_type, date_type]:
+            if compare_mode == "prev_week":
+                return current_from - timedelta(days=7), current_to - timedelta(days=7)
+
+            previous_month_anchor = _shift_to_previous_month(current_to)
+            previous_month_start = previous_month_anchor.replace(day=1)
+            previous_month_end = previous_month_anchor.replace(
+                day=monthrange(previous_month_anchor.year, previous_month_anchor.month)[1]
+            )
+            return previous_month_start, previous_month_end
+
+        comparison_from, comparison_to = _build_compare_period()
+        dow_labels = ["월", "화", "수", "목", "금", "토", "일"]
+        store_filter = "AND masked_stor_cd = :store_id" if resolved_store_id else ""
+        params: dict[str, str] = {"store_id": resolved_store_id} if resolved_store_id else {}
+
+        def _fetch_daily_rows(connection, start: date_type, end: date_type) -> list[dict]:
+            return (
+                connection.execute(
+                    text(
+                        f"""
+                        SELECT CAST(sale_dt AS TEXT) AS d,
+                               SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS amt
+                        FROM raw_daily_store_item
+                        WHERE sale_dt BETWEEN :date_from AND :date_to
+                          {store_filter}
+                        GROUP BY d
+                        ORDER BY d
+                        """
+                    ),
+                    {**params, "date_from": _fmt(start), "date_to": _fmt(end)},
+                )
+                .mappings()
+                .all()
+            )
+
+        def _fetch_hour_rows(connection, start: date_type, end: date_type) -> list[dict]:
+            return (
+                connection.execute(
+                    text(
+                        f"""
+                        SELECT CAST(tmzon_div AS INTEGER) AS hr,
+                               AVG(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS avg_amt
+                        FROM raw_daily_store_item_tmzon
+                        WHERE sale_dt BETWEEN :date_from AND :date_to
+                          {store_filter}
+                        GROUP BY hr
+                        ORDER BY hr
+                        """
+                    ),
+                    {**params, "date_from": _fmt(start), "date_to": _fmt(end)},
+                )
+                .mappings()
+                .all()
+            )
+
+        def _build_daily_maps(rows: list[dict]) -> tuple[dict[date_type, float], dict[int, list[float]]]:
+            by_date: dict[date_type, float] = {}
+            by_weekday: dict[int, list[float]] = {index: [] for index in range(7)}
+            for row in rows:
+                d_str = str(row["d"] or "")
+                try:
+                    day = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
+                except (ValueError, IndexError):
+                    continue
+                amount = float(row["amt"] or 0)
+                by_date[day] = amount
+                by_weekday[day.weekday()].append(amount)
+            return by_date, by_weekday
 
         with self.engine.connect() as conn:
-            store_filter = "AND masked_stor_cd = :store_id" if store_id else ""
-            params: dict = {"store_id": store_id} if store_id else {}
+            current_rows = _fetch_daily_rows(conn, current_from, current_to)
+            comparison_rows = _fetch_daily_rows(conn, comparison_from, comparison_to)
 
-            # 1. 이번 달 일별 매출
-            this_rows = (
+            current_hour_rows = _fetch_hour_rows(conn, current_from, current_to)
+            comparison_hour_rows = _fetch_hour_rows(conn, comparison_from, comparison_to)
+
+            channel_rows = (
                 conn.execute(
                     text(
                         f"""
-                        SELECT CAST(sale_dt AS TEXT) AS d,
-                               SUM(CAST({amount_col} AS NUMERIC)) AS amt
-                        FROM {daily_table}
-                        WHERE sale_dt >= :this_start AND sale_dt <= :this_end
+                        SELECT ho_chnl_div,
+                               SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS amt
+                        FROM raw_daily_store_channel
+                        WHERE sale_dt BETWEEN :date_from AND :date_to
                           {store_filter}
-                        GROUP BY d ORDER BY d
-                    """
+                        GROUP BY ho_chnl_div
+                        ORDER BY amt DESC
+                        LIMIT 3
+                        """
                     ),
-                    {**params, "this_start": _fmt(this_month_start), "this_end": _fmt(today)},
+                    {**params, "date_from": _fmt(current_from), "date_to": _fmt(current_to)},
                 )
                 .mappings()
                 .all()
             )
 
-            # 2. 지난달 일별 매출
-            last_rows = (
-                conn.execute(
-                    text(
-                        f"""
-                        SELECT CAST(sale_dt AS TEXT) AS d,
-                               SUM(CAST({amount_col} AS NUMERIC)) AS amt
-                        FROM {daily_table}
-                        WHERE sale_dt >= :last_start AND sale_dt <= :last_end
-                          {store_filter}
-                        GROUP BY d ORDER BY d
-                    """
-                    ),
-                    {
-                        **params,
-                        "last_start": _fmt(last_month_start),
-                        "last_end": _fmt(last_month_end),
-                    },
-                )
-                .mappings()
-                .all()
-            )
+        current_daily, current_dow = _build_daily_maps(current_rows)
+        comparison_daily, comparison_dow = _build_daily_maps(comparison_rows)
 
-            # 3. 요일별 평균 매출 (이번달/지난달)
-            dow_this: dict[int, list[float]] = {i: [] for i in range(7)}
-            dow_last: dict[int, list[float]] = {i: [] for i in range(7)}
-            for r in this_rows:
-                d_str = str(r["d"])
-                try:
-                    d = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
-                    dow_this[d.weekday()].append(float(r["amt"] or 0))
-                except (ValueError, IndexError):
-                    pass
-            for r in last_rows:
-                d_str = str(r["d"])
-                try:
-                    d = date_type(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
-                    dow_last[d.weekday()].append(float(r["amt"] or 0))
-                except (ValueError, IndexError):
-                    pass
+        current_total = round(sum(current_daily.values()), 0)
+        comparison_total = round(sum(comparison_daily.values()), 0)
 
-            dow_points = [
-                {
-                    "dow": i,
-                    "label": dow_labels[i],
-                    "this_month_avg": (
-                        round(sum(dow_this[i]) / len(dow_this[i]), 0) if dow_this[i] else 0
-                    ),
-                    "last_month_avg": (
-                        round(sum(dow_last[i]) / len(dow_last[i]), 0) if dow_last[i] else 0
-                    ),
-                }
-                for i in range(7)
-            ]
+        span_days = (current_to - current_from).days + 1
+        current_cumulative = 0.0
+        comparison_cumulative = 0.0
+        points: list[dict] = []
+        for offset in range(span_days):
+            current_day = current_from + timedelta(days=offset)
+            current_cumulative += current_daily.get(current_day, 0)
 
-            # 4. 시간대별 평균 매출 (raw_daily_store_item_tmzon)
-            hour_points: list[dict] = []
-            try:
-                h_this = (
-                    conn.execute(
-                        text(
-                            f"""
-                            SELECT CAST(tmzon_div AS INTEGER) AS hr,
-                                   AVG(CAST(sale_amt AS NUMERIC)) AS avg_amt
-                            FROM raw_daily_store_item_tmzon
-                            WHERE sale_dt >= :this_start AND sale_dt <= :this_end
-                              {store_filter}
-                            GROUP BY hr ORDER BY hr
-                        """
-                        ),
-                        {
-                            **params,
-                            "this_start": _fmt(this_month_start),
-                            "this_end": _fmt(today),
-                        },
-                    )
-                    .mappings()
-                    .all()
-                )
-                h_last = (
-                    conn.execute(
-                        text(
-                            f"""
-                            SELECT CAST(tmzon_div AS INTEGER) AS hr,
-                                   AVG(CAST(sale_amt AS NUMERIC)) AS avg_amt
-                            FROM raw_daily_store_item_tmzon
-                            WHERE sale_dt >= :last_start AND sale_dt <= :last_end
-                              {store_filter}
-                            GROUP BY hr ORDER BY hr
-                        """
-                        ),
-                        {
-                            **params,
-                            "last_start": _fmt(last_month_start),
-                            "last_end": _fmt(last_month_end),
-                        },
-                    )
-                    .mappings()
-                    .all()
-                )
-                this_by_hour = {int(r["hr"]): float(r["avg_amt"] or 0) for r in h_this}
-                last_by_hour = {int(r["hr"]): float(r["avg_amt"] or 0) for r in h_last}
-                all_hours = sorted(set(this_by_hour) | set(last_by_hour))
-                hour_points = [
-                    {
-                        "hour": h,
-                        "this_month_avg": round(this_by_hour.get(h, 0), 0),
-                        "last_month_avg": round(last_by_hour.get(h, 0), 0),
-                    }
-                    for h in all_hours
-                ]
-            except SQLAlchemyError:
-                raise
-
-            # 5. 채널별 인사이트 chip
-            channel_chips: list[dict] = []
-            ch_rows = (
-                conn.execute(
-                    text(
-                        """
-                            SELECT ho_chnl_div,
-                                   SUM(CAST(sale_amt AS NUMERIC)) AS amt
-                            FROM raw_daily_store_channel
-                            WHERE sale_dt >= :this_start
-                            GROUP BY ho_chnl_div ORDER BY amt DESC LIMIT 3
-                        """
-                    ),
-                    {"this_start": _fmt(this_month_start)},
-                )
-                .mappings()
-                .all()
-            )
-            for r in ch_rows:
-                channel_chips.append(
-                    {
-                        "label": r["ho_chnl_div"] or "기타",
-                        "value": f'{int(float(r["amt"] or 0)):,}원',
-                        "trend": "up",
-                    }
-                )
-
-        # 누적합 계산
-        this_daily: dict[int, float] = {}
-        for r in this_rows:
-            day = int(str(r["d"])[-2:])
-            this_daily[day] = float(r["amt"] or 0)
-
-        last_daily: dict[int, float] = {}
-        for r in last_rows:
-            day = int(str(r["d"])[-2:])
-            last_daily[day] = float(r["amt"] or 0)
-
-        max_days = max(days_in_this_month, last_month_days)
-        this_cum = 0.0
-        last_cum = 0.0
-        points = []
-        for day in range(1, max_days + 1):
-            if day <= days_in_this_month:
-                this_cum += this_daily.get(day, 0)
-            if day <= last_month_days:
-                last_cum += last_daily.get(day, 0)
-
-            projection = None
-            if day > today.day and day <= days_in_this_month and today.day > 0:
-                daily_avg = this_cum / today.day
-                projection = round(this_cum + daily_avg * (day - today.day), 0)
+            comparison_value = None
+            comparison_day = comparison_from + timedelta(days=offset)
+            if comparison_day <= comparison_to:
+                comparison_cumulative += comparison_daily.get(comparison_day, 0)
+                comparison_value = round(comparison_cumulative, 0)
 
             points.append(
                 {
-                    "day": day,
-                    "this_month": round(this_cum, 0) if day <= today.day else None,
-                    "last_month": round(last_cum, 0) if day <= last_month_days else None,
-                    "projection": projection,
+                    "day": offset + 1,
+                    "current_period": round(current_cumulative, 0),
+                    "comparison_period": comparison_value,
+                    "projection": None,
                 }
             )
 
-        # 헤드라인
-        this_total = sum(this_daily.get(d, 0) for d in range(1, today.day + 1))
-        last_same = sum(last_daily.get(d, 0) for d in range(1, today.day + 1))
-        diff = this_total - last_same
-        if diff > 0:
-            headline = f"지난달 오늘보다 {int(diff):,}원 더 팔았어요."
+        dow_points = [
+            {
+                "dow": index,
+                "label": dow_labels[index],
+                "current_period_avg": (
+                    round(sum(current_dow[index]) / len(current_dow[index]), 0)
+                    if current_dow[index]
+                    else 0
+                ),
+                "comparison_period_avg": (
+                    round(sum(comparison_dow[index]) / len(comparison_dow[index]), 0)
+                    if comparison_dow[index]
+                    else 0
+                ),
+            }
+            for index in range(7)
+        ]
+
+        current_hours = {int(row["hr"]): float(row["avg_amt"] or 0) for row in current_hour_rows}
+        comparison_hours = {
+            int(row["hr"]): float(row["avg_amt"] or 0) for row in comparison_hour_rows
+        }
+        all_hours = sorted(set(current_hours) | set(comparison_hours))
+        hour_points = [
+            {
+                "hour": hour,
+                "current_period_avg": round(current_hours.get(hour, 0), 0),
+                "comparison_period_avg": round(comparison_hours.get(hour, 0), 0),
+            }
+            for hour in all_hours
+        ]
+
+        channel_chips = [
+            {
+                "label": row["ho_chnl_div"] or "기타",
+                "value": f'{int(float(row["amt"] or 0)):,}원',
+                "trend": "up",
+            }
+            for row in channel_rows
+        ]
+
+        compare_label = "전주" if compare_mode == "prev_week" else "전월"
+
+        difference = current_total - comparison_total
+        if difference > 0:
+            headline = f"{compare_label}보다 {int(difference):,}원 더 팔았어요."
             headline_trend = "up"
-        elif diff < 0:
-            headline = f"지난달 오늘보다 {int(abs(diff)):,}원 덜 팔았어요."
+        elif difference < 0:
+            headline = f"{compare_label}보다 {int(abs(difference)):,}원 덜 팔았어요."
             headline_trend = "down"
         else:
-            headline = "지난달 오늘과 같은 매출 페이스예요."
+            headline = f"{compare_label}과 같은 매출 흐름이에요."
             headline_trend = "flat"
 
         return {
             "headline": headline,
             "headline_trend": headline_trend,
+            "compare_mode": compare_mode,
+            "date_from": _fmt(current_from),
+            "date_to": _fmt(current_to),
+            "comparison_date_from": _fmt(comparison_from),
+            "comparison_date_to": _fmt(comparison_to),
+            "selected_period_total_sales": float(current_total),
+            "comparison_period_total_sales": float(comparison_total),
             "points": points,
             "insight_chips": channel_chips,
             "dow_points": dow_points,

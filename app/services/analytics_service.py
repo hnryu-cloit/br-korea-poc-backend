@@ -72,12 +72,13 @@ class AnalyticsService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> AnalyticsMetricsResponse:
-        items = await self.repository.get_metrics(
+        metrics_data = await self.repository.get_metrics(
             store_id=store_id, date_from=date_from, date_to=date_to
         )
-        response_items = [AnalyticsMetric(**item) for item in items]
+        response_items = [AnalyticsMetric(**item) for item in metrics_data["items"]]
         return AnalyticsMetricsResponse(
             items=response_items,
+            selected_period_total_sales=metrics_data.get("selected_period_total_sales"),
             explainability=create_ready_payload(
                 trace_id=f"analytics-metrics-{store_id or 'all'}",
                 actions=["지표 변동이 큰 항목 1개를 선택해 오늘 운영 액션으로 연결하세요."],
@@ -128,11 +129,29 @@ class AnalyticsService:
             telecom_discounts=[TelecomDiscountItem(**t) for t in data["telecom_discounts"]],
         )
 
-    def get_sales_trend(self, store_id: str | None = None):
-        data = self.repository.get_sales_trend(store_id=store_id)
+    def get_sales_trend(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        compare_mode: Literal["prev_week", "prev_month"] = "prev_month",
+    ):
+        data = self.repository.get_sales_trend(
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+            compare_mode=compare_mode,
+        )
         response = SalesTrendResponse(
             headline=data["headline"],
             headline_trend=data["headline_trend"],
+            compare_mode=data["compare_mode"],
+            date_from=data["date_from"],
+            date_to=data["date_to"],
+            comparison_date_from=data["comparison_date_from"],
+            comparison_date_to=data["comparison_date_to"],
+            selected_period_total_sales=data["selected_period_total_sales"],
+            comparison_period_total_sales=data["comparison_period_total_sales"],
             points=[SalesTrendPoint(**p) for p in data["points"]],
             insight_chips=[SalesTrendInsightChip(**c) for c in data["insight_chips"]],
             dow_points=[DowPoint(**d) for d in data["dow_points"]],

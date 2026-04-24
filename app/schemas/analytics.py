@@ -16,6 +16,7 @@ class AnalyticsMetric(BaseModel):
 
 class AnalyticsMetricsResponse(BaseModel):
     items: list[AnalyticsMetric]
+    selected_period_total_sales: float | None = None
     explainability: ExplainabilityPayload | None = None
 
 
@@ -50,8 +51,8 @@ class CustomerProfileResponse(BaseModel):
 
 class SalesTrendPoint(BaseModel):
     day: int
-    this_month: float | None = None
-    last_month: float | None = None
+    current_period: float | None = None
+    comparison_period: float | None = None
     projection: float | None = None
 
 
@@ -64,19 +65,26 @@ class SalesTrendInsightChip(BaseModel):
 class DowPoint(BaseModel):
     dow: int  # 0=월 ~ 6=일
     label: str  # 월·화·수·목·금·토·일
-    this_month_avg: float
-    last_month_avg: float
+    current_period_avg: float
+    comparison_period_avg: float
 
 
 class HourPoint(BaseModel):
     hour: int
-    this_month_avg: float
-    last_month_avg: float
+    current_period_avg: float
+    comparison_period_avg: float
 
 
 class SalesTrendResponse(BaseModel):
     headline: str
     headline_trend: str
+    compare_mode: Literal["prev_week", "prev_month"]
+    date_from: str
+    date_to: str
+    comparison_date_from: str | None = None
+    comparison_date_to: str | None = None
+    selected_period_total_sales: float
+    comparison_period_total_sales: float
     points: list[SalesTrendPoint]
     insight_chips: list[SalesTrendInsightChip]
     dow_points: list[DowPoint]
