@@ -1224,3 +1224,23 @@ POC_030         20260101  두바이 스타일 초콜릿도넛  303      15      
 - `production` lot ← `raw_production_extract` (prod_qty 합산), 유통기한 ← `raw_product_shelf_life.shelf_life_days`
 - `delivery` lot ← `raw_order_extract.confrm_qty`, 단가 ← `confrm_prc`
 - FIFO 소진 기준 ← `core_daily_item_sales.sale_qty` (날짜 오름차순, production lot만 소진)
+
+## Session Update (2026-04-25)
+
+- 본 세션은 프론트 `/settings` 로고 정렬 작업으로, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, production table JSX tag fix 영향도)
+
+- 본 세션의 추가 작업은 프론트 JSX 태그 정합성 수정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, dashboard alert summary prop type fix 영향도)
+
+- 본 세션의 추가 작업은 프론트 타입 정합성 수정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, settings logo click navigation 영향도)
+
+- 본 세션의 추가 작업은 프론트 내비게이션 변경이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.

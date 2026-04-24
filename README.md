@@ -780,3 +780,23 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 - 골든쿼리 사용 방식이 원문 일치가 아닌 패턴 매칭 중심으로 강화되었습니다(AI 서비스).
 - backend API 계약 변경은 없고, 기존 `/api/sales/query` 경로에서 동일하게 사용됩니다.
+
+## Session Update (2026-04-25, settings logo alignment 영향도)
+
+- 프론트 `/settings` 로고 정렬 작업(점주 유입 헤더와 동일 자산 적용)이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, production table JSX tag fix 영향도)
+
+- 프론트 `ProductionTableSection` JSX 태그 정합성 수정이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, dashboard alert summary prop type fix 영향도)
+
+- 프론트 `DashboardScreen` prop 타입 정리 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, settings logo click navigation 영향도)
+
+- 프론트 `/settings` 로고 클릭 이동(`/`) 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
