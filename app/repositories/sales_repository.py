@@ -129,28 +129,14 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     .all()
                 )
 
-                _DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
-                weekly = []
-                for row in weekly_rows:
-                    dt_str = str(row["sale_dt"])
-                    if len(dt_str) == 8:
-                        try:
-                            from datetime import datetime as _dt
-
-                            dow = _dt.strptime(dt_str, "%Y%m%d").weekday()
-                            day_label = _DAY_LABELS[dow]
-                        except ValueError:
-                            day_label = dt_str[-2:]
-                    else:
-                        day_label = dt_str
-                    weekly.append(
-                        {
-                            "day": day_label,
-                            "revenue": float(row["revenue"] or 0),
-                            "net_revenue": float(row["net_revenue"] or 0),
-                        }
-                    )
-                result["weekly_data"] = weekly
+                result["weekly_data"] = [
+                    {
+                        "sale_dt": str(row["sale_dt"]),
+                        "revenue": float(row["revenue"] or 0),
+                        "net_revenue": float(row["net_revenue"] or 0),
+                    }
+                    for row in weekly_rows
+                ]
 
                 # 5. 상품별 매출 순위 (전체 기간 기준)
                 product_rows = (
