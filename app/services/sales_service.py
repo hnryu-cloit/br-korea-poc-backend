@@ -30,6 +30,15 @@ _FAQ_KEYWORDS = ["무엇", "어떻게", "왜", "설명", "가이드"]
 _DATA_LOOKUP_KEYWORDS = ["조회", "건수", "수치", "비율", "얼마", "몇"]
 _SENSITIVE_KEYWORDS = ["이익", "이익률", "원가", "손익", "마진", "타점포", "점포 성과"]
 _HQ_ROLES = {"hq_admin", "hq_operator", "hq_planner"}
+_FLOATING_CHAT_REQUIRED_INSTRUCTION = """
+당신은 점주 운영 보조 AI다.
+- 단순 데이터 요약이 아니라 질문 맥락에 맞는 실행 가능한 인사이트를 제시한다.
+- 모든 응답과 알림에는 점주가 즉시 할 수 있는 Action을 포함한다.
+- 수치 제안은 과거 데이터 또는 예측 모델 근거를 evidence로 제시한다.
+- 매장 맞춤형 답변을 제공한다.
+- 재고/생산 답변은 1시간 후 예측 오차 허용범위(±10%)와 찬스 로스 방지 알림 시점 근거를 포함한다.
+- 출력은 설명(text), 출처/근거(evidence), 후속 액션(actions), 추가 예상질문 3개(follow_up_questions)를 포함한다.
+""".strip()
 
 # 한국 전화번호 패턴 (010-XXXX-XXXX, 0X0-XXXXXXXX 등 변형 포함)
 _PHONE_RE = re.compile(r"0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}")
@@ -214,6 +223,26 @@ class SalesService:
             {"label": "다음주 우선 과제", "category": "운영", "prompt": f"{store} 다음 주 우선 실행 과제 3가지를 제안해줘"},
         ]
 
+    def _build_query_system_instruction(self, domain: str) -> str:
+        configured = (
+            self.prompt_settings_service.get_system_instruction(domain)
+            if self.prompt_settings_service
+            else ""
+        )
+        configured = str(configured or "").strip()
+        if configured:
+            return f"{_FLOATING_CHAT_REQUIRED_INSTRUCTION}\n\n{configured}"
+        return _FLOATING_CHAT_REQUIRED_INSTRUCTION
+
+    @staticmethod
+    def _default_follow_up_questions(prompt: str) -> list[str]:
+        compact_prompt = prompt.strip() or "현재 질의"
+        return [
+            f"{compact_prompt}를 최근 7일 기준으로 다시 보여줘",
+            "이 결과의 근거 테이블과 기간을 요약해줘",
+            "지금 당장 실행할 액션 3가지를 우선순위로 알려줘",
+        ]
+
     async def query(self, payload: SalesQueryRequest, actor_role: str = "store_owner") -> SalesQueryResponse:
         # 1. PII 마스킹 (전화번호 등)
         safe_prompt, pii_masked_fields = _mask_pii(payload.prompt)
@@ -274,12 +303,14 @@ class SalesService:
         else:
             ai_result: Optional[dict] = None
             if self.ai_client:
+                system_instruction = self._build_query_system_instruction(payload.domain or "sales")
                 ai_result = await self.ai_client.query_sales(
                     safe_prompt,
                     store_id=payload.store_id,
                     domain=payload.domain,
                     business_date=payload.business_date,
                     business_time=payload.business_time,
+                    system_instruction=system_instruction,
                 )
 
             if ai_result is not None:
@@ -295,11 +326,13 @@ class SalesService:
                     "text": response.get("text", ""),
                     "evidence": response.get("evidence", []),
                     "actions": response.get("actions", []),
+                    "follow_up_questions": response.get("follow_up_questions", []),
                 }
             response["answer"] = answer_payload
             response.setdefault("text", answer_payload.get("text", ""))
             response.setdefault("evidence", answer_payload.get("evidence", []))
             response.setdefault("actions", answer_payload.get("actions", []))
+            response.setdefault("follow_up_questions", answer_payload.get("follow_up_questions", []))
             response.setdefault("request_context", request_context.model_dump())
             response.setdefault(
                 "agent_trace",
@@ -333,13 +366,24 @@ class SalesService:
         )
         result.actions = ensured_actions
         result.evidence = ensured_evidence
+        if not result.follow_up_questions:
+            result.follow_up_questions = self._default_follow_up_questions(safe_prompt)
         if result.request_context is None:
             result.request_context = request_context
         if result.answer is None:
-            result.answer = SalesAnswer(text=result.text, evidence=result.evidence, actions=result.actions)
+            result.answer = SalesAnswer(
+                text=result.text,
+                evidence=result.evidence,
+                actions=result.actions,
+                follow_up_questions=result.follow_up_questions,
+            )
+        elif not result.answer.follow_up_questions:
+            result.answer.follow_up_questions = result.follow_up_questions
         if result.agent_trace is None:
             result.agent_trace = SalesQueryAgentTrace(row_count=0)
         if self.audit_service:
+            matched_query_id = result.agent_trace.matched_query_id if result.agent_trace else None
+            match_score = result.agent_trace.match_score if result.agent_trace else None
             await self.audit_service.record(
                 domain="sales",
                 event_type="sales_query_completed",
@@ -347,7 +391,13 @@ class SalesService:
                 route=processing_route,
                 outcome="success",
                 message="매출 질의를 처리했습니다.",
-                metadata={"prompt": safe_prompt, "query_type": query_type, "comparison": False},
+                metadata={
+                    "prompt": safe_prompt,
+                    "query_type": query_type,
+                    "comparison": False,
+                    "matched_query_id": matched_query_id,
+                    "match_score": match_score,
+                },
             )
         return result
 
