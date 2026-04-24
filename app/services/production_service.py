@@ -166,6 +166,21 @@ class ProductionService:
             return 0
         return 1
 
+    def _resolve_shelf_life_days(
+        self,
+        *,
+        shelf_life_map: dict[str, int],
+        item_cd: str | None,
+        item_nm: str,
+    ) -> int:
+        normalized_item_cd = str(item_cd or "").strip()
+        normalized_item_nm = str(item_nm).strip()
+        if normalized_item_cd and normalized_item_cd in shelf_life_map:
+            return int(shelf_life_map[normalized_item_cd])
+        if normalized_item_nm and normalized_item_nm in shelf_life_map:
+            return int(shelf_life_map[normalized_item_nm])
+        return self._assumed_shelf_life_days(normalized_item_nm)
+
     @staticmethod
     def _safe_float(value: object, default: float = 0.0) -> float:
         try:
@@ -634,6 +649,19 @@ class ProductionService:
         total_adjusted_loss_amount = 0.0
         total_disuse_amount = 0.0
         total_estimated_expiry_loss_qty = 0.0
+        shelf_life_map: dict[str, int] = {}
+        get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
+        if callable(get_shelf_life_days_map):
+            shelf_life_map = get_shelf_life_days_map(
+                item_codes=[
+                    str(window.get(1, {}).get("item_cd") or window.get(2, {}).get("item_cd") or "").strip()
+                    for window in by_item.values()
+                ],
+                item_names=[
+                    str(window.get(1, {}).get("item_nm") or window.get(2, {}).get("item_nm") or "").strip()
+                    for window in by_item.values()
+                ],
+            )
 
         for _, window in by_item.items():
             latest = window.get(1)
@@ -665,7 +693,11 @@ class ProductionService:
             avg_cost = self._safe_float(disuse_row.get("avg_cost"))
             adjusted_loss_amount = round(adjusted_loss_qty * avg_cost, 2)
             disuse_amount = round(confirmed_disuse_qty * avg_cost, 2)
-            shelf_life_days = self._assumed_shelf_life_days(item_nm)
+            shelf_life_days = self._resolve_shelf_life_days(
+                shelf_life_map=shelf_life_map,
+                item_cd=str(pivot.get("item_cd") or "").strip(),
+                item_nm=item_nm,
+            )
             estimated_expiry_loss_qty = (
                 adjusted_loss_qty
                 if shelf_life_days <= 1
@@ -867,6 +899,13 @@ class ProductionService:
             raise LookupError("해당 점포의 재고 진단 데이터가 없습니다.")
 
         items: list[InventoryStatusItem] = []
+        shelf_life_map: dict[str, int] = {}
+        get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
+        if callable(get_shelf_life_days_map):
+            shelf_life_map = get_shelf_life_days_map(
+                item_codes=[str(row.get("item_cd") or "").strip() for row in rows],
+                item_names=[str(row.get("item_nm") or "").strip() for row in rows],
+            )
         for row in rows:
             item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
             item_nm = str(row.get("item_nm") or item_cd)
@@ -888,7 +927,11 @@ class ProductionService:
             else:
                 status = "적정"
 
-            shelf_life_days = self._assumed_shelf_life_days(item_nm)
+            shelf_life_days = self._resolve_shelf_life_days(
+                shelf_life_map=shelf_life_map,
+                item_cd=item_cd,
+                item_nm=item_nm,
+            )
             expiry_risk_level = (
                 "높음"
                 if shelf_life_days <= 1 and stock_rate > 0.25
@@ -940,9 +983,9 @@ class ProductionService:
                 },
                 {
                     "label": "가설 유통기한",
-                    "value": "품목군 키워드 규칙",
-                    "calculation": "도넛/샌드/샐러드=1일, 케이크=2일, 음료=0일",
-                    "source_table": "assumption_rule",
+                    "value": "raw_product_shelf_life 우선",
+                    "calculation": "DB 유통기한 우선 적용, 미존재 시 키워드 규칙 fallback",
+                    "source_table": "raw_product_shelf_life or assumption_rule",
                 },
             ],
         }

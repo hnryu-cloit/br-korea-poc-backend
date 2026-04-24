@@ -161,6 +161,42 @@ class _FakeOrderingOptionsEngine:
         return self._connection
 
 
+class _FakeOrderArrivalScheduleConnection:
+    def __init__(self) -> None:
+        self.executed_sql: list[str] = []
+        self.executed_params: list[dict | None] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, statement, params=None):
+        self.executed_sql.append(str(statement))
+        self.executed_params.append(params)
+        return _FakeMappingsResult(
+            all_rows=[
+                {
+                    "item_cd": "700611",
+                    "item_nm": "리드,아이스,돔형",
+                    "order_deadline_at": "12:00",
+                    "arrival_day_offset": "D+1",
+                    "arrival_expected_at": "12:00",
+                    "arrival_bucket": "next_noon_arrival",
+                }
+            ]
+        )
+
+
+class _FakeOrderArrivalScheduleEngine:
+    def __init__(self, connection: _FakeOrderArrivalScheduleConnection) -> None:
+        self._connection = connection
+
+    def connect(self):
+        return self._connection
+
+
 def test_ordering_selection_summary_uses_last_7_days_window_when_date_from_missing(monkeypatch) -> None:
     monkeypatch.setattr(ordering_repository_module, "has_table", lambda engine, table_name: True)
     repository = OrderingRepository(engine=_FakeOrderingSummaryEngine())
@@ -232,6 +268,104 @@ async def test_ordering_service_list_options_defaults_store_id_to_poc_010() -> N
 
     assert response.business_date is not None
     assert service.repository.store_ids == ["POC_010"]
+
+
+@pytest.mark.asyncio
+async def test_ordering_service_deadline_uses_order_arrival_schedule() -> None:
+    class _Repo:
+        def get_order_arrival_schedule(self, store_id: str | None = None) -> dict[str, str] | None:
+            return {"order_deadline_at": "12:00"}
+
+    service = OrderingService(repository=_Repo(), ai_client=None)
+    response = await service.get_deadline(
+        store_id="POC_010",
+        reference_datetime=datetime(2026, 3, 5, 9, 0, 0),
+    )
+    assert response["deadline"] == "12:00"
+    assert response["minutes_remaining"] == 180
+
+
+@pytest.mark.asyncio
+async def test_ordering_service_list_options_enriches_items_with_arrival_and_shelf_life() -> None:
+    class _Repo:
+        async def list_options(self, store_id: str | None = None) -> list[dict]:
+            return [
+                {
+                    "option_id": "opt-a",
+                    "title": "지난주 같은 요일",
+                    "basis": "2026-03-01",
+                    "description": "기준 설명",
+                    "recommended": True,
+                    "reasoning_text": "기존 근거",
+                    "reasoning_metrics": [],
+                    "special_factors": [],
+                    "items": [{"sku_id": "700611", "sku_name": "리드,아이스,돔형", "quantity": 2}],
+                }
+            ]
+
+        async def get_weather_forecast(self, store_id: str | None = None, reference_date: str | None = None) -> dict | None:
+            return None
+
+        def get_order_arrival_schedule_map(
+            self,
+            *,
+            store_id: str | None = None,
+            item_codes: list[str] | None = None,
+            item_names: list[str] | None = None,
+        ) -> dict[str, dict[str, str]]:
+            return {
+                "700611": {
+                    "order_deadline_at": "12:00",
+                    "arrival_day_offset": "D+1",
+                    "arrival_expected_at": "12:00",
+                    "arrival_bucket": "next_noon_arrival",
+                }
+            }
+
+        def get_shelf_life_days_map(
+            self,
+            *,
+            item_codes: list[str] | None = None,
+            item_names: list[str] | None = None,
+        ) -> dict[str, int]:
+            return {"700611": 2}
+
+        def get_order_arrival_schedule(self, store_id: str | None = None) -> dict[str, str] | None:
+            return {
+                "order_deadline_at": "12:00",
+                "arrival_day_offset": "D+1",
+                "arrival_expected_at": "12:00",
+            }
+
+    service = OrderingService(repository=_Repo(), ai_client=None)
+    response = await service.list_options(store_id="POC_010", skip_ai=True)
+
+    assert response.options[0].items[0].note is not None
+    assert "마감 12:00" in str(response.options[0].items[0].note)
+    assert "유통기한 2일" in str(response.options[0].items[0].note)
+    assert len(response.deadline_items) == 1
+    assert response.deadline_items[0].sku_name == "리드,아이스,돔형"
+    assert response.deadline_items[0].deadline_at == "12:00"
+    assert response.trend_summary is not None
+    assert "납품 기준" in response.trend_summary
+
+
+def test_ordering_repository_get_order_arrival_schedule_map_uses_deterministic_ranking(monkeypatch) -> None:
+    connection = _FakeOrderArrivalScheduleConnection()
+    repository = OrderingRepository(engine=_FakeOrderArrivalScheduleEngine(connection))
+    monkeypatch.setattr(ordering_repository_module, "has_table", lambda engine, table_name: table_name == "raw_order_arrival_schedule")
+
+    result = repository.get_order_arrival_schedule_map(
+        store_id="POC_010",
+        item_codes=["700611"],
+        item_names=["리드,아이스,돔형"],
+    )
+
+    assert result["700611"]["order_deadline_at"] == "12:00"
+    sql_text = "\n".join(connection.executed_sql)
+    assert "ROW_NUMBER() OVER" in sql_text
+    assert "hit_count DESC" in sql_text
+    assert "PARTITION BY COALESCE(item_cd, item_nm)" in sql_text
 
 
 def test_ordering_repository_history_prefers_store_cache() -> None:
@@ -693,6 +827,18 @@ async def test_production_service_inventory_status_handles_string_summary_metric
     assert response.summary["shortage_count"] == 1
     assert response.summary["excess_count"] == 0
     assert response.summary["normal_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_production_service_inventory_status_uses_shelf_life_table_when_present() -> None:
+    class _Repo(_StringMetricInventoryStatusRepository):
+        def get_shelf_life_days_map(self, *, item_codes: list[str] | None = None, item_names: list[str] | None = None) -> dict[str, int]:
+            return {"SKU-002": 3}
+
+    service = ProductionService(repository=_Repo())
+    response = await service.get_inventory_status(store_id="POC_004")
+
+    assert response.items[0].assumed_shelf_life_days == 3
 
 
 class _MonthlyWasteRepository:

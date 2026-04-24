@@ -35,6 +35,13 @@ class OrderingWeather(BaseModel):
     precipitation_probability: int | None = None
 
 
+class OrderingDeadlineItem(BaseModel):
+    id: str
+    sku_name: str
+    deadline_at: str
+    is_ordered: bool
+
+
 class OrderingOptionsResponse(BaseModel):
     deadline_minutes: int
     deadline_at: str | None = None
@@ -44,6 +51,7 @@ class OrderingOptionsResponse(BaseModel):
     weather: OrderingWeather | None = None
     trend_summary: str | None = None
     business_date: str | None = None
+    deadline_items: list[OrderingDeadlineItem] = []
     options: list[OrderOption]
     explainability: ExplainabilityPayload | None = None
 

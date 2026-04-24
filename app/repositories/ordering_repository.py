@@ -363,6 +363,121 @@ class OrderingRepository:
         except (httpx.HTTPError, ValueError, TypeError):
             return None
 
+    def get_order_arrival_schedule(self, store_id: str | None = None) -> dict[str, str] | None:
+        if not self.engine:
+            return None
+
+        try:
+            with self.engine.connect() as connection:
+                if has_table(self.engine, "raw_order_arrival_schedule"):
+                    if store_id:
+                        row = (
+                            connection.execute(
+                                text(
+                                    """
+                                    SELECT
+                                        order_deadline_at,
+                                        arrival_day_offset,
+                                        arrival_expected_at,
+                                        arrival_bucket,
+                                        applied_reference_note,
+                                        COUNT(*) AS hit_count
+                                    FROM raw_order_arrival_schedule
+                                    WHERE masked_stor_cd = :store_id
+                                      AND NULLIF(TRIM(CAST(order_deadline_at AS TEXT)), '') IS NOT NULL
+                                    GROUP BY
+                                        order_deadline_at,
+                                        arrival_day_offset,
+                                        arrival_expected_at,
+                                        arrival_bucket,
+                                        applied_reference_note
+                                    ORDER BY hit_count DESC
+                                    LIMIT 1
+                                    """
+                                ),
+                                {"store_id": store_id},
+                            )
+                            .mappings()
+                            .first()
+                        )
+                        if row:
+                            return {
+                                "order_deadline_at": str(row["order_deadline_at"]),
+                                "arrival_day_offset": str(row["arrival_day_offset"] or ""),
+                                "arrival_expected_at": str(row["arrival_expected_at"] or ""),
+                                "arrival_bucket": str(row["arrival_bucket"] or ""),
+                                "reference_note": str(row["applied_reference_note"] or ""),
+                            }
+
+                    row = (
+                        connection.execute(
+                            text(
+                                """
+                                SELECT
+                                    order_deadline_at,
+                                    arrival_day_offset,
+                                    arrival_expected_at,
+                                    arrival_bucket,
+                                    applied_reference_note,
+                                    COUNT(*) AS hit_count
+                                FROM raw_order_arrival_schedule
+                                WHERE NULLIF(TRIM(CAST(order_deadline_at AS TEXT)), '') IS NOT NULL
+                                GROUP BY
+                                    order_deadline_at,
+                                    arrival_day_offset,
+                                    arrival_expected_at,
+                                    arrival_bucket,
+                                    applied_reference_note
+                                ORDER BY hit_count DESC
+                                LIMIT 1
+                                """
+                            )
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if row:
+                        return {
+                            "order_deadline_at": str(row["order_deadline_at"]),
+                            "arrival_day_offset": str(row["arrival_day_offset"] or ""),
+                            "arrival_expected_at": str(row["arrival_expected_at"] or ""),
+                            "arrival_bucket": str(row["arrival_bucket"] or ""),
+                            "reference_note": str(row["applied_reference_note"] or ""),
+                        }
+
+                if has_table(self.engine, "raw_order_arrival_reference"):
+                    row = (
+                        connection.execute(
+                            text(
+                                """
+                                SELECT
+                                    order_deadline_at,
+                                    arrival_day_offset,
+                                    arrival_expected_at,
+                                    arrival_bucket,
+                                    reference_note_kr
+                                FROM raw_order_arrival_reference
+                                WHERE NULLIF(TRIM(CAST(order_deadline_at AS TEXT)), '') IS NOT NULL
+                                ORDER BY arrival_bucket
+                                LIMIT 1
+                                """
+                            )
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if row:
+                        return {
+                            "order_deadline_at": str(row["order_deadline_at"]),
+                            "arrival_day_offset": str(row["arrival_day_offset"] or ""),
+                            "arrival_expected_at": str(row["arrival_expected_at"] or ""),
+                            "arrival_bucket": str(row["arrival_bucket"] or ""),
+                            "reference_note": str(row["reference_note_kr"] or ""),
+                        }
+        except SQLAlchemyError:
+            return None
+        return None
+
     def _table_columns(self, table_name: str) -> dict[str, str]:
         if not self.engine:
             return {}
@@ -389,6 +504,178 @@ class OrderingRepository:
             return int(round(float(value)))
         except (TypeError, ValueError):
             return 0
+
+    def get_shelf_life_days_map(
+        self,
+        *,
+        item_codes: list[str] | None = None,
+        item_names: list[str] | None = None,
+    ) -> dict[str, int]:
+        if not self.engine or not has_table(self.engine, "raw_product_shelf_life"):
+            return {}
+
+        normalized_codes = [str(code).strip() for code in (item_codes or []) if str(code).strip()]
+        normalized_names = [str(name).strip() for name in (item_names or []) if str(name).strip()]
+        if not normalized_codes and not normalized_names:
+            return {}
+
+        where_clauses: list[str] = []
+        params: dict[str, object] = {}
+        if normalized_codes:
+            where_clauses.append("NULLIF(TRIM(CAST(item_cd AS TEXT)), '') = ANY(:item_codes)")
+            params["item_codes"] = normalized_codes
+        if normalized_names:
+            where_clauses.append("NULLIF(TRIM(CAST(item_nm AS TEXT)), '') = ANY(:item_names)")
+            params["item_names"] = normalized_names
+
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT
+                                NULLIF(TRIM(CAST(item_cd AS TEXT)), '') AS item_cd,
+                                NULLIF(TRIM(CAST(item_nm AS TEXT)), '') AS item_nm,
+                                NULLIF(TRIM(CAST(shelf_life_days AS TEXT)), '') AS shelf_life_days
+                            FROM raw_product_shelf_life
+                            WHERE {" OR ".join(where_clauses)}
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return {}
+
+        shelf_life_map: dict[str, int] = {}
+        for row in rows:
+            shelf_life_days = self._safe_int(row.get("shelf_life_days"))
+            if shelf_life_days < 0:
+                continue
+            item_cd = str(row.get("item_cd") or "").strip()
+            item_nm = str(row.get("item_nm") or "").strip()
+            if item_cd and item_cd not in shelf_life_map:
+                shelf_life_map[item_cd] = shelf_life_days
+            if item_nm and item_nm not in shelf_life_map:
+                shelf_life_map[item_nm] = shelf_life_days
+        return shelf_life_map
+
+    def get_order_arrival_schedule_map(
+        self,
+        *,
+        store_id: str | None = None,
+        item_codes: list[str] | None = None,
+        item_names: list[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        if not self.engine or not has_table(self.engine, "raw_order_arrival_schedule"):
+            return {}
+
+        normalized_codes = [str(code).strip() for code in (item_codes or []) if str(code).strip()]
+        normalized_names = [str(name).strip() for name in (item_names or []) if str(name).strip()]
+        if not normalized_codes and not normalized_names:
+            return {}
+
+        where_clauses: list[str] = []
+        params: dict[str, object] = {}
+        if store_id:
+            where_clauses.append("masked_stor_cd = :store_id")
+            params["store_id"] = store_id
+        item_filters: list[str] = []
+        if normalized_codes:
+            item_filters.append("NULLIF(TRIM(CAST(item_cd AS TEXT)), '') = ANY(:item_codes)")
+            params["item_codes"] = normalized_codes
+        if normalized_names:
+            item_filters.append("NULLIF(TRIM(CAST(item_nm AS TEXT)), '') = ANY(:item_names)")
+            params["item_names"] = normalized_names
+        if item_filters:
+            where_clauses.append(f"({' OR '.join(item_filters)})")
+
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                            WITH filtered AS (
+                                SELECT
+                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), '') AS item_cd,
+                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '') AS item_nm,
+                                    NULLIF(TRIM(CAST(order_deadline_at AS TEXT)), '') AS order_deadline_at,
+                                    NULLIF(TRIM(CAST(arrival_day_offset AS TEXT)), '') AS arrival_day_offset,
+                                    NULLIF(TRIM(CAST(arrival_expected_at AS TEXT)), '') AS arrival_expected_at,
+                                    NULLIF(TRIM(CAST(arrival_bucket AS TEXT)), '') AS arrival_bucket
+                                FROM raw_order_arrival_schedule
+                                WHERE {' AND '.join(where_clauses)}
+                            ),
+                            counted AS (
+                                SELECT
+                                    item_cd,
+                                    item_nm,
+                                    order_deadline_at,
+                                    arrival_day_offset,
+                                    arrival_expected_at,
+                                    arrival_bucket,
+                                    COUNT(*) AS hit_count
+                                FROM filtered
+                                GROUP BY
+                                    item_cd,
+                                    item_nm,
+                                    order_deadline_at,
+                                    arrival_day_offset,
+                                    arrival_expected_at,
+                                    arrival_bucket
+                            ),
+                            ranked AS (
+                                SELECT
+                                    *,
+                                    ROW_NUMBER() OVER (
+                                        PARTITION BY COALESCE(item_cd, item_nm)
+                                        ORDER BY
+                                            hit_count DESC,
+                                            order_deadline_at NULLS LAST,
+                                            arrival_day_offset NULLS LAST,
+                                            arrival_expected_at NULLS LAST,
+                                            arrival_bucket NULLS LAST
+                                    ) AS rank_order
+                                FROM counted
+                            )
+                            SELECT
+                                item_cd,
+                                item_nm,
+                                order_deadline_at,
+                                arrival_day_offset,
+                                arrival_expected_at,
+                                arrival_bucket
+                            FROM ranked
+                            WHERE rank_order = 1
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return {}
+
+        schedule_map: dict[str, dict[str, str]] = {}
+        for row in rows:
+            payload = {
+                "order_deadline_at": str(row.get("order_deadline_at") or ""),
+                "arrival_day_offset": str(row.get("arrival_day_offset") or ""),
+                "arrival_expected_at": str(row.get("arrival_expected_at") or ""),
+                "arrival_bucket": str(row.get("arrival_bucket") or ""),
+            }
+            item_cd = str(row.get("item_cd") or "").strip()
+            item_nm = str(row.get("item_nm") or "").strip()
+            if item_cd and item_cd not in schedule_map:
+                schedule_map[item_cd] = payload
+            if item_nm and item_nm not in schedule_map:
+                schedule_map[item_nm] = payload
+        return schedule_map
 
     @staticmethod
     def _is_auto_order_flag(value: object | None) -> bool:

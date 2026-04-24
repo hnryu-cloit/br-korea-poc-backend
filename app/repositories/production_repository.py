@@ -39,6 +39,66 @@ class ProductionRepository(BaseRepository):
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
 
+    def get_shelf_life_days_map(
+        self,
+        *,
+        item_codes: list[str] | None = None,
+        item_names: list[str] | None = None,
+    ) -> dict[str, int]:
+        if not self.engine or not has_table(self.engine, "raw_product_shelf_life"):
+            return {}
+
+        normalized_codes = [str(code).strip() for code in (item_codes or []) if str(code).strip()]
+        normalized_names = [str(name).strip() for name in (item_names or []) if str(name).strip()]
+        if not normalized_codes and not normalized_names:
+            return {}
+
+        where_clauses: list[str] = []
+        params: dict[str, object] = {}
+        if normalized_codes:
+            where_clauses.append("NULLIF(TRIM(CAST(item_cd AS TEXT)), '') = ANY(:item_codes)")
+            params["item_codes"] = normalized_codes
+        if normalized_names:
+            where_clauses.append("NULLIF(TRIM(CAST(item_nm AS TEXT)), '') = ANY(:item_names)")
+            params["item_names"] = normalized_names
+
+        try:
+            with self.engine.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                            SELECT
+                                NULLIF(TRIM(CAST(item_cd AS TEXT)), '') AS item_cd,
+                                NULLIF(TRIM(CAST(item_nm AS TEXT)), '') AS item_nm,
+                                NULLIF(TRIM(CAST(shelf_life_days AS TEXT)), '') AS shelf_life_days
+                            FROM raw_product_shelf_life
+                            WHERE {" OR ".join(where_clauses)}
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError as exc:
+            logger.warning("get_shelf_life_days_map query failed: error=%s", exc)
+            return {}
+
+        shelf_life_map: dict[str, int] = {}
+        for row in rows:
+            shelf_life_days = self._safe_int(row.get("shelf_life_days"))
+            if shelf_life_days < 0:
+                continue
+
+            item_cd = str(row.get("item_cd") or "").strip()
+            item_nm = str(row.get("item_nm") or "").strip()
+            if item_cd and item_cd not in shelf_life_map:
+                shelf_life_map[item_cd] = shelf_life_days
+            if item_nm and item_nm not in shelf_life_map:
+                shelf_life_map[item_nm] = shelf_life_days
+        return shelf_life_map
+
     @staticmethod
     def _safe_non_negative_int(value: object) -> int:
         return max(0, ProductionRepository._safe_int(value))

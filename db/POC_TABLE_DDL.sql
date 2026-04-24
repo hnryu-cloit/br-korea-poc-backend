@@ -452,6 +452,61 @@ CREATE TABLE raw_stockout_time (
     loaded_at      TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE raw_order_arrival_schedule (
+    masked_stor_cd         TEXT,
+    masked_stor_nm         TEXT,
+    shipment_center        TEXT,
+    item_cd                TEXT,
+    item_nm                TEXT,
+    ord_grp                TEXT,
+    ord_grp_nm             TEXT,
+    erp_dgre               TEXT,
+    erp_dgre_nm            TEXT,
+    erp_web_item_grp       TEXT,
+    erp_web_item_grp_nm    TEXT,
+    arrival_bucket         TEXT,
+    order_deadline_at      TEXT,
+    arrival_day_offset     TEXT,
+    arrival_expected_at    TEXT,
+    applied_reference_note TEXT,
+    source_file            TEXT NOT NULL,
+    source_sheet           VARCHAR(255),
+    loaded_at              TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE raw_order_arrival_reference (
+    arrival_bucket      TEXT,
+    order_deadline_at   TEXT,
+    arrival_day_offset  TEXT,
+    arrival_expected_at TEXT,
+    reference_note_kr   TEXT,
+    source_file         TEXT NOT NULL,
+    source_sheet        VARCHAR(255),
+    loaded_at           TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE raw_product_shelf_life (
+    item_cd                TEXT,
+    item_nm                TEXT,
+    item_group             TEXT,
+    shelf_life_days        TEXT,
+    source_order_group_cd  TEXT,
+    source_order_group_nm  TEXT,
+    applied_reference_note TEXT,
+    source_file            TEXT NOT NULL,
+    source_sheet           VARCHAR(255),
+    loaded_at              TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE raw_product_shelf_life_group_reference (
+    item_group        TEXT,
+    shelf_life_days   TEXT,
+    reference_note_kr TEXT,
+    source_file       TEXT NOT NULL,
+    source_sheet      VARCHAR(255),
+    loaded_at         TIMESTAMPTZ NOT NULL
+);
+
 -- ──────────────────────────────────────────────
 -- Derived
 -- ──────────────────────────────────────────────
