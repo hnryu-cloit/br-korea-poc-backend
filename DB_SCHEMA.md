@@ -15,6 +15,17 @@
 - 본 세션에서 DB 마이그레이션 변경은 없으며, 기존 스키마를 그대로 사용합니다.
 - 추가 세션에서 동일 파일에 200건을 더 확장(총 400건)했으며, 스키마 기준은 동일합니다.
 
+## Session Update (2026-04-24)
+
+- `docs/golden-queries-new.csv`를 `실제 쿼리` 단일 컬럼에서 `일반화 쿼리` / `예시 쿼리` 2개 컬럼 구조로 재작성했습니다.
+- `일반화 쿼리`는 `:store_id`, `:start_date`, `:end_date` 바인딩 파라미터 기준으로 통일했습니다.
+- `예시 쿼리`는 `POC_010`과 기준 기간 실값을 유지해 즉시 실행 예시로 분리했습니다.
+- 위 변경은 본 문서의 raw/core/운영 테이블 정의와 `db/POC_TABLE_DDL.sql` 컬럼 기준으로 정합성을 맞췄습니다.
+- `resource/06. 유통기한 및 납품일/*.xlsx`를 신규 적재 대상으로 추가했습니다.
+  - 마이그레이션: `0019_create_order_arrival_schedule.sql`, `0020_create_product_shelf_life.sql`
+  - 신규 raw 테이블: `raw_order_arrival_schedule`, `raw_order_arrival_reference`, `raw_product_shelf_life`, `raw_product_shelf_life_group_reference`
+  - manifest dataset: direct load 4건 + workbook 보존 2건
+
 ---
 
 ## 원본 테이블 분류
@@ -84,6 +95,8 @@
   - `db/migrations/0005_create_new_workbook_raw_tables.sql`
   - `db/migrations/0006_create_campaign_raw_tables.sql`
   - `db/migrations/0007_create_settlement_and_telecom_raw_tables.sql`
+  - `db/migrations/0019_create_order_arrival_schedule.sql`
+  - `db/migrations/0020_create_product_shelf_life.sql`
 - 예시:
   - `raw_store_master`
   - `raw_pay_cd`
@@ -102,6 +115,10 @@
   - `raw_telecom_discount_type`
   - `raw_telecom_discount_policy`
   - `raw_telecom_discount_item`
+  - `raw_order_arrival_schedule`
+  - `raw_order_arrival_reference`
+  - `raw_product_shelf_life`
+  - `raw_product_shelf_life_group_reference`
   - `raw_workbook_rows`
 
 특징:
@@ -173,6 +190,8 @@
 | `07. 정산 기준 정보/*.xlsx` | `raw_settlement_master`, `raw_workbook_rows` | 예 (`sales_repository`, `signals_repository`) | 결제·할인 인사이트 및 시그널 컨텍스트에 사용 |
 | `08. 통신사 제휴 할인 마스터/*.xlsx` | `raw_telecom_discount_type`, `raw_telecom_discount_policy`, `raw_telecom_discount_item`, `raw_workbook_rows` | 예 (`sales_repository`, `signals_repository`) | 활성 제휴 할인 맥락, 인사이트, 시그널에 사용 |
 | `09. 캠페인 마스터/캠페인+마스터.xlsx` | `raw_campaign_master`, `raw_campaign_item_group`, `raw_campaign_item` | 예 (`sales_repository`) | 캠페인 시즌성 보정 인사이트에 사용 |
+| `06. 유통기한 및 납품일/order_arrival_schedule.xlsx` | `raw_order_arrival_schedule`, `raw_order_arrival_reference`, `raw_workbook_rows` | 예 (`ordering_repository`, `ordering_service`) | 점포 납품도착 버킷/마감 기준 조회 |
+| `06. 유통기한 및 납품일/product_shelf_life.xlsx` | `raw_product_shelf_life`, `raw_product_shelf_life_group_reference`, `raw_workbook_rows` | 예 (`production_repository`, `production_service`) | SKU 유통기한 우선 조회 |
 
 resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 
@@ -196,6 +215,8 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | `05. 재고 및 품절/품절시간_CK.xlsx` | `stockout_time_ck` | `raw_stockout_time` | Sheet1 direct load (CK 카테고리) |
 | `05. 재고 및 품절/품절시간_JBOD.xlsx` | `stockout_time_jbod` | `raw_stockout_time` | Sheet1 direct load (JBOD 카테고리) |
 | `05. 재고 및 품절/품절시간_기타.xlsx` | `stockout_time_etc` | `raw_stockout_time` | Sheet1 direct load (기타 카테고리) |
+| `06. 유통기한 및 납품일/order_arrival_schedule.xlsx` | `order_arrival_schedule`, `order_arrival_reference`, `order_arrival_schedule_workbook` | `raw_order_arrival_schedule`, `raw_order_arrival_reference`, `raw_workbook_rows` | 데이터 시트 direct load + workbook 보존 |
+| `06. 유통기한 및 납품일/product_shelf_life.xlsx` | `product_shelf_life`, `product_shelf_life_group_reference`, `product_shelf_life_workbook` | `raw_product_shelf_life`, `raw_product_shelf_life_group_reference`, `raw_workbook_rows` | 데이터 시트 direct load + workbook 보존 |
 
 ## 현재 앱 사용 방식
 
@@ -1070,8 +1091,70 @@ POC_030         20260101  두바이 스타일 초콜릿도넛  303      15      
 
 ---
 
+## 신규 테이블 (유통기한 및 납품일)
+
+> 출처: `resource/06. 유통기한 및 납품일/*.xlsx`  
+> 마이그레이션: `0019_create_order_arrival_schedule.sql`, `0020_create_product_shelf_life.sql`
+
+### raw_order_arrival_schedule
+
+| DB 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `masked_stor_cd` | TEXT | 비식별 점포코드 |
+| `masked_stor_nm` | TEXT | 비식별 점포명 |
+| `shipment_center` | TEXT | 출고 센터 |
+| `item_cd` | TEXT | SKU 코드 |
+| `item_nm` | TEXT | SKU 명 |
+| `ord_grp`, `ord_grp_nm` | TEXT | 주문 그룹 코드/명 |
+| `erp_dgre`, `erp_dgre_nm` | TEXT | ERP 차수 코드/명 |
+| `erp_web_item_grp`, `erp_web_item_grp_nm` | TEXT | ERP 웹 상품 그룹 코드/명 |
+| `arrival_bucket` | TEXT | 도착 버킷 식별자 |
+| `order_deadline_at` | TEXT | 주문 마감 시각 (`HH:MM`) |
+| `arrival_day_offset` | TEXT | 도착일 오프셋 (`D+1` 등) |
+| `arrival_expected_at` | TEXT | 예상 도착 시각 (`HH:MM`) |
+| `applied_reference_note` | TEXT | 적용 기준 설명 |
+
+### raw_order_arrival_reference
+
+| DB 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `arrival_bucket` | TEXT | 도착 버킷 식별자 |
+| `order_deadline_at` | TEXT | 주문 마감 시각 |
+| `arrival_day_offset` | TEXT | 도착일 오프셋 |
+| `arrival_expected_at` | TEXT | 예상 도착 시각 |
+| `reference_note_kr` | TEXT | 기준 설명 |
+
+### raw_product_shelf_life
+
+| DB 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `item_cd` | TEXT | SKU 코드 |
+| `item_nm` | TEXT | SKU 명 |
+| `item_group` | TEXT | 품목 그룹 |
+| `shelf_life_days` | TEXT | 유통기한(일) |
+| `source_order_group_cd` | TEXT | 원본 주문그룹 코드 |
+| `source_order_group_nm` | TEXT | 원본 주문그룹 명 |
+| `applied_reference_note` | TEXT | 적용 기준 설명 |
+
+### raw_product_shelf_life_group_reference
+
+| DB 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `item_group` | TEXT | 품목 그룹 |
+| `shelf_life_days` | TEXT | 유통기한(일) |
+| `reference_note_kr` | TEXT | 기준 설명 |
+
+---
+
 ## Session Note (2026-04-22, analytics/sales no-fallback + RAG/Gemini)
 
 - 상권 인사이트(`GET /api/analytics/market-intelligence/insights*`)는 fallback 응답을 제거하고 AI 생성 실패 시 오류를 반환합니다.
 - `MarketInsightsResponse.source`는 `"ai"` 단일 계약으로 고정했습니다.
 - 매출 화면(`GET /api/sales/prompts`, `GET /api/sales/insights`, `GET /api/sales/campaign-effect`)의 서술형 텍스트는 실데이터 payload 기반 AI 생성 경로를 사용하며 실패 시 오류를 반환합니다.
+
+## Session Update (2026-04-24, golden-queries-new-02)
+
+- `docs/golden-queries-new-02.csv`를 신규 생성했습니다.
+- 본 문서와 `db/POC_TABLE_DDL.sql` 기준으로 질문/파생질문용 SQL 템플릿을 구성했습니다.
+- 구성 범위: 전 에이전트 공통조건 + 매출/생산/주문 에이전트 필수 시나리오 및 파생 질문.
+- `예상 답변`은 모든 행에 `즉시 실행 액션`과 `근거` 문구를 포함하도록 작성했습니다.

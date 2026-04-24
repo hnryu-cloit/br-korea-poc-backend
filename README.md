@@ -2,7 +2,39 @@
 
 BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
+## 최근 업데이트 (2026-04-24)
+
+- Docker `load` 단계 실패 이슈를 보완했습니다.
+  - 기존 DB에서 `store_clusters`가 구스키마여도 동작하도록 `0021_backfill_store_clusters_columns.sql` 마이그레이션을 추가했습니다.
+
+- 프론트 주문관리에서 mock 마감데이터를 제거하고 backend 실데이터(`options/deadline`)를 직접 표기하도록 연동되었습니다.
+
+- `resource/06. 유통기한 및 납품일/*.xlsx`를 기존 적재 규약과 동일하게 DB 파이프라인에 추가했습니다.
+  - migration 추가: `0019_create_order_arrival_schedule.sql`, `0020_create_product_shelf_life.sql`
+  - 신규 raw 테이블: `raw_order_arrival_schedule`, `raw_order_arrival_reference`, `raw_product_shelf_life`, `raw_product_shelf_life_group_reference`
+  - manifest dataset: direct load 4건 + workbook 보존 2건
+- 주문/생산 기초 조회에 신규 raw 데이터를 연결했습니다.
+  - `OrderingService.get_deadline`: AI 응답 부재 시 `raw_order_arrival_schedule` 마감시간을 우선 사용
+  - `ProductionService`: `raw_product_shelf_life` 유통기한 값을 우선 사용하고 미존재 시 기존 키워드 규칙 fallback
+- 폐기손실/재고현황/주문관리/발주이력에서 가설 기반 설명을 실데이터 기준으로 강화했습니다.
+  - `폐기손실`, `재고현황`: SKU 유통기한(`raw_product_shelf_life`) 우선 조회
+  - `주문관리(/api/ordering/options)`: 옵션 아이템 note에 마감/도착/유통기한 정보를 주입
+  - `발주이력(/api/ordering/history)`: explainability 근거에 납품/유통기한 데이터 소스를 명시
+- 주문 옵션 응답 계약과 스케줄 매핑 안정성을 보강했습니다.
+  - `OrderingOptionsResponse`에 `deadline_items`를 명시하고 `list_options`에서 항상 생성해 반환
+  - `get_order_arrival_schedule_map`이 SKU별 대표 row를 `hit_count DESC` + 시간 정렬로 결정하도록 보강
+
 ## 최근 업데이트 (2026-04-23)
+
+- `docs/golden-queries-new.csv`를 `일반화 쿼리`/`예시 쿼리` 분리 컬럼으로 재작성했습니다.
+  - `일반화 쿼리`: `:store_id`, `:start_date`, `:end_date` 파라미터 기준 템플릿
+  - `예시 쿼리`: `POC_010` + 기간 실값 기준 실행 예시
+
+- `docs/design-docs.md`에 본사 시연자/점주 실사용자 이중 타깃 관점이 반영되었습니다.
+  - 이번 세션의 백엔드 API/스키마 변경은 없고, 문서 관점 정렬만 수행했습니다.
+
+- `docs/design-docs.md`가 실제 프론트 라우터 기준 페이지 전략 문서로 정비되었습니다.
+  - 이번 세션의 백엔드 API/스키마 변경은 없고, 화면 목적/메시지/기대행동 문서 정렬만 반영했습니다.
 
 - 점주 골든쿼리 데이터셋 문서(`docs/golden-queries-store-owner.csv`)를 추가했습니다.
   - 이번 세션의 백엔드 API/스키마 코드 변경은 없고, 기존 마이그레이션 기준 테이블/컬럼으로 실행 쿼리 예시를 구성했습니다.
@@ -478,6 +510,12 @@ python scripts/inspect_resource_db.py
 | `resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_master` | `raw_campaign_master` | `CPI_MST` 시트 direct load |
 | `resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_item_group` | `raw_campaign_item_group` | `CPI_ITEM_GRP_MNG` 시트 direct load |
 | `resource/04. POC 대상 데이터_제공데이터/09. 캠페인 마스터/캠페인+마스터.xlsx` | `campaign_item` | `raw_campaign_item` | `CPI_ITEM_MNG` 시트 direct load |
+| `resource/06. 유통기한 및 납품일 /order_arrival_schedule.xlsx` | `order_arrival_schedule` | `raw_order_arrival_schedule` | `order_arrival_schedule` 시트 direct load |
+| `resource/06. 유통기한 및 납품일 /order_arrival_schedule.xlsx` | `order_arrival_reference` | `raw_order_arrival_reference` | `arrival_reference` 시트 direct load |
+| `resource/06. 유통기한 및 납품일 /order_arrival_schedule.xlsx` | `order_arrival_schedule_workbook` | `raw_workbook_rows` | 메타 시트 포함 workbook 보존 |
+| `resource/06. 유통기한 및 납품일 /product_shelf_life.xlsx` | `product_shelf_life` | `raw_product_shelf_life` | `sku_shelf_life` 시트 direct load |
+| `resource/06. 유통기한 및 납품일 /product_shelf_life.xlsx` | `product_shelf_life_group_reference` | `raw_product_shelf_life_group_reference` | `group_reference` 시트 direct load |
+| `resource/06. 유통기한 및 납품일 /product_shelf_life.xlsx` | `product_shelf_life_workbook` | `raw_workbook_rows` | 메타 시트 포함 workbook 보존 |
 | `resource/04. POC 대상 데이터_제공데이터/00. 테이블 구조/*.xlsx` | - | - | 문서/참조용 파일, 적재 대상 아님 |
 | `resource/04. POC 대상 데이터_제공데이터/ERD_V0.2.png` | - | - | ERD 이미지, 적재 대상 아님 |
 | `resource/04. POC 대상 데이터_제공데이터/POC_TABLE_DDL.sql` | - | - | 참고용 DDL, 적재 대상 아님 |
@@ -504,6 +542,10 @@ python scripts/inspect_resource_db.py
 | `raw_telecom_discount_type` | 20 |
 | `raw_telecom_discount_policy` | 53 |
 | `raw_telecom_discount_item` | 38 |
+| `raw_order_arrival_schedule` | 적재 후 갱신 |
+| `raw_order_arrival_reference` | 적재 후 갱신 |
+| `raw_product_shelf_life` | 적재 후 갱신 |
+| `raw_product_shelf_life_group_reference` | 적재 후 갱신 |
 | `raw_workbook_rows` | 1,074,750 |
 
 ### DB 계층 구조
@@ -625,3 +667,44 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 - 이번 라운드의 `signals` 페이지 제거 및 사이드바 항목 제거는 프론트엔드 라우팅/메뉴 작업입니다.
 - 백엔드 API/스키마 코드는 변경하지 않았습니다.
+
+## Session Update (2026-04-23, HQ-as-owner golden queries)
+
+- `docs/golden-queries-hq-as-owner.csv`를 신규 추가해 본사(기획/전략/영업/슈퍼바이저/점장/상품팀) 관점의 점주 질의 200건을 정리했습니다.
+- 컬럼은 `질문번호, 기준일시, 본사직무, 에이전트, 질문, 평가항목, 가용여부, 가용 데이터, 테이블/컬럼, 가정/갭, 실제 쿼리, 예상 답변`이며 기준일시는 `2026-03-05 09:00 (KST)`로 고정했습니다.
+
+## Session Update (2026-04-23, HQ-as-owner dedup rewrite)
+
+- `docs/golden-queries-hq-as-owner.csv` 200건을 기존 `golden-queries-store-owner.csv`와 의미 중복이 없도록 전면 재작성했습니다.
+- 기간 표현 차이(오늘/어제/최근 등)를 동일 의도로 정규화해 교집합 0건을 검증한 후 반영했습니다.
+
+## Session Update (2026-04-23, HQ query simplification)
+
+- 본사 관점 질문 200건을 초기 시연용으로 짧고 쉬운 문장으로 단순화했습니다.
+- 단순화 이후에도 기존 점주 골든쿼리와 의미 중복 0건을 유지했습니다.
+## Session Update (2026-04-23, HQ query tone simplification)
+
+- HQ 질문셋 200건을 현장 대화형 말투(예: "어때?", "뭐부터 보면 돼?")로 단순화했습니다.
+- 기존 점주 골든쿼리와 의미 중복 0건 조건은 유지했습니다.
+## Session Update (2026-04-23, HQ query concrete values)
+
+- HQ 골든쿼리 CSV의 `실제 쿼리`에서 바인딩 변수(`:store_id`, `:date_from`, `:date_to`)를 예시 실값으로 치환했습니다.
+- 적용값: `POC_010`, `20260201`, `20260305`.
+## Session Update (2026-04-23, HQ query columns split)
+
+- `golden-queries-hq-as-owner.csv`의 SQL 컬럼을 `일반화 쿼리`와 `예시 쿼리`로 분리했습니다.
+- 일반화 쿼리는 파라미터형(`:store_id/:date_from/:date_to`), 예시 쿼리는 실값형(`POC_010/20260201/20260305`)으로 정리했습니다.
+
+## Session Update (2026-04-23, HQ golden query dataset 500건 + JSON 변환)
+
+- `docs/golden-queries-hq-as-owner.csv`를 200건 → 500건으로 확장했습니다.
+  - 186~198번 가용여부 ✅ 이나 UNAVAILABLE로 잘못 표기된 13건을 실 SQL로 수정했습니다.
+  - 201~500번 신규 질문 300건을 3개 에이전트(채널매출/생산재고/발주) 및 6개 본사 직무 분포 기준으로 추가했습니다.
+- 500건 전체 예상 답변을 질문 의도별 고유 가이드 문장으로 전면 재작성했습니다 (행별 중복 0건).
+- `docs/golden-queries-hq-as-owner.json`을 신규 생성했습니다.
+  - 500건, 7개 필드 구조: `질문번호`, `사용자 질문`, `참고자료`, `가이드`, `검증사항1`(데이터 정합성 근거), `검수사항2`(답변 작성 가이드), `답변`(빈값)
+
+- 요건 기반 골든쿼리 신규셋 `docs/golden-queries-new-02.csv`를 추가했습니다.
+  - 전 에이전트 공통조건 + 매출/생산/주문 필수 질문과 파생 질문을 함께 구성했습니다.
+  - 각 행은 `일반화 쿼리`와 `예시 쿼리`를 분리하고, 예상 답변에 즉시 실행 액션/근거 요구를 반영했습니다.
+- `docs/golden-queries-new-02.csv`를 파생 질문 포함 112건으로 확장했습니다.
