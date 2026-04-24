@@ -208,33 +208,67 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
 
 
 def populate_store_clusters(connection: Any) -> int:
+    column_rows = connection.execute(
+        text(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'store_clusters'
+            """
+        )
+    ).mappings().all()
+    columns = {str(row["column_name"]).lower(): str(row["data_type"]).lower() for row in column_rows}
+    required_columns = {"masked_stor_cd", "cluster_id", "cluster_label", "updated_at"}
+    if not required_columns.issubset(columns):
+        print(
+            "Skipping store_clusters population: incompatible schema "
+            f"(required={sorted(required_columns)}, actual={sorted(columns.keys())})"
+        )
+        return 0
+
+    cluster_id_type = columns.get("cluster_id", "")
+    if cluster_id_type not in {"text", "character varying", "character"}:
+        print(
+            "Skipping store_clusters population: cluster_id column type is not text "
+            f"(actual={cluster_id_type})"
+        )
+        return 0
+
+    insert_columns = ["masked_stor_cd"]
+    select_columns = ["masked_stor_cd"]
+    if "sido" in columns:
+        insert_columns.append("sido")
+        select_columns.append("NULLIF(TRIM(COALESCE(sido, '')), '') AS sido")
+    if "store_type" in columns:
+        insert_columns.append("store_type")
+        select_columns.append("NULLIF(TRIM(COALESCE(store_type, '')), '') AS store_type")
+    insert_columns.extend(["cluster_id", "cluster_label", "updated_at"])
+    select_columns.extend(
+        [
+            "CONCAT("
+            "COALESCE(NULLIF(TRIM(COALESCE(sido, '')), ''), 'UNKNOWN'),"
+            "'|',"
+            "COALESCE(NULLIF(TRIM(COALESCE(store_type, '')), ''), 'UNKNOWN')"
+            ") AS cluster_id",
+            "CONCAT("
+            "COALESCE(NULLIF(TRIM(COALESCE(sido, '')), ''), 'UNKNOWN'),"
+            "' / ',"
+            "COALESCE(NULLIF(TRIM(COALESCE(store_type, '')), ''), 'UNKNOWN')"
+            ") AS cluster_label",
+            ":loaded_at AS updated_at",
+        ]
+    )
+
     connection.execute(text("DELETE FROM store_clusters"))
     result = connection.execute(
         text(
-            """
+            f"""
             INSERT INTO store_clusters (
-                masked_stor_cd,
-                sido,
-                store_type,
-                cluster_id,
-                cluster_label,
-                updated_at
+                {", ".join(insert_columns)}
             )
             SELECT
-                masked_stor_cd,
-                NULLIF(TRIM(COALESCE(sido, '')), '') AS sido,
-                NULLIF(TRIM(COALESCE(store_type, '')), '') AS store_type,
-                CONCAT(
-                    COALESCE(NULLIF(TRIM(COALESCE(sido, '')), ''), 'UNKNOWN'),
-                    '|',
-                    COALESCE(NULLIF(TRIM(COALESCE(store_type, '')), ''), 'UNKNOWN')
-                ) AS cluster_id,
-                CONCAT(
-                    COALESCE(NULLIF(TRIM(COALESCE(sido, '')), ''), 'UNKNOWN'),
-                    ' / ',
-                    COALESCE(NULLIF(TRIM(COALESCE(store_type, '')), ''), 'UNKNOWN')
-                ) AS cluster_label,
-                :loaded_at
+                {", ".join(select_columns)}
             FROM raw_store_master
             WHERE NULLIF(TRIM(COALESCE(masked_stor_cd, '')), '') IS NOT NULL
             """

@@ -829,6 +829,97 @@
         "STK_RT",
         "SOLD_OUT_TM"
       ]
+    },
+    {
+      "name": "order_arrival_schedule",
+      "loader": "xlsx",
+      "table": "raw_order_arrival_schedule",
+      "sheet": "order_arrival_schedule",
+      "paths": [
+        "../resource/06. 유통기한 및 납품일 /order_arrival_schedule.xlsx"
+      ],
+      "columns": [
+        "masked_stor_cd",
+        "masked_stor_nm",
+        "shipment_center",
+        "item_cd",
+        "item_nm",
+        "ord_grp",
+        "ord_grp_nm",
+        "erp_dgre",
+        "erp_dgre_nm",
+        "erp_web_item_grp",
+        "erp_web_item_grp_nm",
+        "arrival_bucket",
+        "order_deadline_at",
+        "arrival_day_offset",
+        "arrival_expected_at",
+        "applied_reference_note"
+      ]
+    },
+    {
+      "name": "order_arrival_reference",
+      "loader": "xlsx",
+      "table": "raw_order_arrival_reference",
+      "sheet": "arrival_reference",
+      "paths": [
+        "../resource/06. 유통기한 및 납품일 /order_arrival_schedule.xlsx"
+      ],
+      "columns": [
+        "arrival_bucket",
+        "order_deadline_at",
+        "arrival_day_offset",
+        "arrival_expected_at",
+        "reference_note_kr"
+      ]
+    },
+    {
+      "name": "order_arrival_schedule_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/06. 유통기한 및 납품일 /order_arrival_schedule.xlsx"
+      ]
+    },
+    {
+      "name": "product_shelf_life",
+      "loader": "xlsx",
+      "table": "raw_product_shelf_life",
+      "sheet": "sku_shelf_life",
+      "paths": [
+        "../resource/06. 유통기한 및 납품일 /product_shelf_life.xlsx"
+      ],
+      "columns": [
+        "item_cd",
+        "item_nm",
+        "item_group",
+        "shelf_life_days",
+        "source_order_group_cd",
+        "source_order_group_nm",
+        "applied_reference_note"
+      ]
+    },
+    {
+      "name": "product_shelf_life_group_reference",
+      "loader": "xlsx",
+      "table": "raw_product_shelf_life_group_reference",
+      "sheet": "group_reference",
+      "paths": [
+        "../resource/06. 유통기한 및 납품일 /product_shelf_life.xlsx"
+      ],
+      "columns": [
+        "item_group",
+        "shelf_life_days",
+        "reference_note_kr"
+      ]
+    },
+    {
+      "name": "product_shelf_life_workbook",
+      "loader": "workbook_rows",
+      "table": "raw_workbook_rows",
+      "paths": [
+        "../resource/06. 유통기한 및 납품일 /product_shelf_life.xlsx"
+      ]
     }
   ]
 }

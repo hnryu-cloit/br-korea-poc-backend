@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional, Any
 
 from pydantic import BaseModel, Field
@@ -50,7 +51,7 @@ class SalesQueryRequest(BaseModel):
     prompt: str
     store_id: str = Field(..., min_length=1)
     domain: str = Field(default="sales")
-    business_date: str = Field(default="2026-03-05")
+    business_date: str = Field(default_factory=lambda: date.today().isoformat())
     business_time: Optional[str] = None
 
 

@@ -71,6 +71,18 @@ class SalesService:
         )
 
     @staticmethod
+    def _sale_dt_to_day_label(dt_str: str) -> str:
+        """YYYYMMDD 형식 날짜 문자열을 요일 라벨로 변환"""
+        _DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
+        if len(dt_str) == 8:
+            try:
+                from datetime import datetime as _dt
+                return _DAY_LABELS[_dt.strptime(dt_str, "%Y%m%d").weekday()]
+            except ValueError:
+                return dt_str[-2:]
+        return dt_str
+
+    @staticmethod
     def _is_tday_prompt(prompt: str) -> bool:
         lowered = prompt.lower()
         return "티데이" in prompt or "tday" in lowered
@@ -456,6 +468,14 @@ class SalesService:
         date_to: str | None = None,
     ) -> SalesSummaryResponse:
         payload = await self.repository.get_summary(store_id=store_id, date_from=date_from, date_to=date_to)
+        payload["weekly_data"] = [
+            {
+                "day": self._sale_dt_to_day_label(item["sale_dt"]),
+                "revenue": item["revenue"],
+                "net_revenue": item["net_revenue"],
+            }
+            for item in payload.get("weekly_data", [])
+        ]
         response = SalesSummaryResponse(**payload)
         response.explainability = create_ready_payload(
             trace_id=f"sales-summary-{store_id or 'all'}",

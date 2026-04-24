@@ -53,11 +53,10 @@ from app.services.explainability_service import create_ready_payload
 logger = logging.getLogger(__name__)
 
 
-class AnalyticsService:
-    _market_insights_cache = TTLMemoryCache(max_size=128)
-    _market_insights_ttl_sec = 60
-    _market_insights_refreshing: set[str] = set()
+_MARKET_INSIGHTS_TTL_SEC = 60
 
+
+class AnalyticsService:
     def __init__(
         self,
         repository: AnalyticsRepository,
@@ -65,6 +64,8 @@ class AnalyticsService:
     ) -> None:
         self.repository = repository
         self.ai_client = ai_client
+        self._market_insights_cache = TTLMemoryCache(max_size=128)
+        self._market_insights_refreshing: set[str] = set()
 
     async def get_metrics(
         self,
@@ -383,7 +384,7 @@ class AnalyticsService:
         self._market_insights_cache.set(
             cache_key,
             ai_result,
-            ttl_sec=self._market_insights_ttl_sec,
+            ttl_sec=_MARKET_INSIGHTS_TTL_SEC,
         )
         return self._to_market_insights_response(
             ai_result,
@@ -485,7 +486,7 @@ class AnalyticsService:
         self._market_insights_cache.set(
             cache_key,
             ai_result,
-            ttl_sec=self._market_insights_ttl_sec,
+            ttl_sec=_MARKET_INSIGHTS_TTL_SEC,
         )
         summary = self._to_market_insights_response(
             ai_result,
@@ -609,7 +610,7 @@ class AnalyticsService:
             self._market_insights_cache.set(
                 cache_key,
                 ai_result,
-                ttl_sec=self._market_insights_ttl_sec,
+                ttl_sec=_MARKET_INSIGHTS_TTL_SEC,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("상권 인사이트 캐시 백그라운드 갱신 실패: %s", exc)
