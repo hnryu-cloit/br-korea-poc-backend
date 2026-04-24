@@ -40,14 +40,100 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  weather-load:
+    build:
+      context: .
+    container_name: br-korea-weather-load
+    command:
+      [
+        "sh",
+        "-c",
+        "python scripts/load_weather_data.py || echo '[WARN] load_weather_data.py failed; backend startup will continue.' >&2",
+      ]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+    depends_on:
+      load:
+        condition: service_completed_successfully
+
+  stockout-populate:
+    build:
+      context: .
+    container_name: br-korea-stockout-populate
+    command:
+      [
+        "sh",
+        "-c",
+        "python scripts/populate_inferred_stockout_events.py || echo '[WARN] populate_inferred_stockout_events.py failed; backend startup will continue.' >&2",
+      ]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+    depends_on:
+      load:
+        condition: service_completed_successfully
+
+  poc-analytics-populate:
+    build:
+      context: .
+    container_name: br-korea-poc-analytics-populate
+    command:
+      [
+        "sh",
+        "-c",
+        "python scripts/populate_poc_010_analytics_marts.py || echo '[WARN] populate_poc_010_analytics_marts.py failed; backend startup will continue.' >&2",
+      ]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+    depends_on:
+      load:
+        condition: service_completed_successfully
+
+  production-prediction-snapshot-load:
+    build:
+      context: .
+    container_name: br-korea-production-prediction-snapshot-load
+    command:
+      [
+        "sh",
+        "-c",
+        "python scripts/populate_production_prediction_snapshots.py || echo '[WARN] populate_production_prediction_snapshots.py failed; backend startup will continue.' >&2",
+      ]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+      - AI_SERVICE_URL=http://ai:6001
+      - AI_SERVICE_TOKEN=br-korea-poc-ai-2026
+      - STORE_CACHE_STORE_IDS=POC_010
+    depends_on:
+      stockout-populate:
+        condition: service_completed_successfully
+      ai:
+        condition: service_started
+
+  production-mart-populate:
+    build:
+      context: .
+    container_name: br-korea-production-mart-populate
+    command:
+      [
+        "sh",
+        "-c",
+        "python scripts/populate_mart_production_status.py || echo '[WARN] populate_mart_production_status.py failed; backend startup will continue.' >&2",
+      ]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+      - STORE_CACHE_STORE_IDS=POC_010
+    depends_on:
+      production-prediction-snapshot-load:
+        condition: service_completed_successfully
+
   ai:
     build:
-      context: ./br-korea-poc-ai
+      context: ../br-korea-poc-ai
     container_name: br-korea-ai
     ports:
       - "6001:6001"
     env_file:
-      - ./br-korea-poc-ai/.env
+      - ../br-korea-poc-ai/.env
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/br_korea_poc
       - APP_PORT=6001
@@ -64,16 +150,26 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
       - AI_SERVICE_URL=http://ai:6001
+      - AI_SERVICE_TOKEN=br-korea-poc-ai-2026
       - CORS_ORIGINS=http://localhost:5173,http://localhost:6003
+      - STORE_CACHE_STORE_IDS=POC_010
     depends_on:
-      load:
+      weather-load:
+        condition: service_completed_successfully
+      stockout-populate:
+        condition: service_completed_successfully
+      poc-analytics-populate:
+        condition: service_completed_successfully
+      production-prediction-snapshot-load:
+        condition: service_completed_successfully
+      production-mart-populate:
         condition: service_completed_successfully
       ai:
         condition: service_started
 
   front:
     build:
-      context: ./br-korea-poc-front
+      context: ../br-korea-poc-front
     container_name: br-korea-front
     ports:
       - "6003:6003"

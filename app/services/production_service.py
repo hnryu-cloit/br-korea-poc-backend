@@ -87,8 +87,9 @@ class ProductionService:
         normalized = unicodedata.normalize("NFKC", value).strip().lower()
         normalized = re.sub(r"\.[a-z0-9]+$", "", normalized)
         normalized = re.sub(r"_[0-9]+$", "", normalized)
-        normalized = re.sub(r"[^0-9a-z가-힣]+", "", normalized)
-        return normalized
+        normalized = re.sub(r"^\((.*?)\)", "", normalized).strip()
+        normalized = normalized.removeprefix("던킨").strip()
+        return "".join(ch for ch in normalized if ch.isalnum())
 
     @classmethod
     def _menu_image_directories(cls) -> list[Path]:
@@ -306,7 +307,9 @@ class ProductionService:
             velocity = 1.2 if raw["status"] != "safe" else 0.9
 
         # 실데이터 수치를 포함한 알림 메시지
-        if raw["status"] == "danger":
+        if raw.get("alert_message"):
+            alert_msg = str(raw["alert_message"])
+        elif raw["status"] == "danger":
             hours = max(1, int(round(current / max(forecast / 8.0, 0.1))))
             alert_msg = f"현재 재고 {current}개, 약 {hours}시간 이내 소진 예상. 즉시 생산이 필요합니다."
         elif raw["status"] == "warning":
@@ -314,15 +317,23 @@ class ProductionService:
         else:
             alert_msg = "현재 재고가 안정적입니다."
 
+        chance_loss_amt = int(round(float(raw.get("chance_loss_amt") or 0)))
+        chance_loss_prevented_amount = (
+            chance_loss_amt
+            if chance_loss_amt > 0
+            else raw["recommended"] * 1200 if raw["recommended"] > 0 else None
+        )
+
         return ProductionSkuDecision(
             risk_level_label=risk_label,
             sales_velocity=velocity,
             tags=["속도↑"] if raw["status"] != "safe" else [],
             alert_message=alert_msg,
             can_produce=True,
-            predicted_stockout_time=raw["depletion_time"] if raw["depletion_time"] != "-" else None,
+            predicted_stockout_time=raw.get("stockout_expected_at")
+            or (raw["depletion_time"] if raw["depletion_time"] != "-" else None),
             suggested_production_qty=raw["recommended"],
-            chance_loss_prevented_amount=raw["recommended"] * 1200 if raw["recommended"] > 0 else None,
+            chance_loss_prevented_amount=chance_loss_prevented_amount,
         )
 
     @classmethod
@@ -348,9 +359,13 @@ class ProductionService:
             avg_second_production_qty_4w=p2_qty,
             avg_second_production_time_4w=p2_time,
             status=raw["status"],
-            chance_loss_saving_pct=cls._calc_chance_loss_pct(raw["current"], raw["forecast"], raw["status"]),
+            chance_loss_saving_pct=(
+                int(round(float(raw.get("chance_loss_reduction_pct") or 0)))
+                if raw.get("chance_loss_reduction_pct") is not None
+                else cls._calc_chance_loss_pct(raw["current"], raw["forecast"], raw["status"])
+            ),
             recommended_production_qty=raw["recommended"],
-            chance_loss_basis_text="1시간 후 재고 예측 및 4주(28일) 생산 발생일 평균 기준",
+            chance_loss_basis_text="1시간 후 예측 재고, 4주 평균 생산량, 최근 실매출/비용 기반 찬스로스 기준",
             decision=decision,
             depletion_eta_minutes=60 if raw["status"] != "safe" else None,
             tags=decision.tags,
@@ -362,10 +377,18 @@ class ProductionService:
             material_alert_message=None,
         )
 
-    async def _get_sku_items(self, store_id: str | None = None, business_date: str | None = None) -> list[ProductionSkuItem]:
-        raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
-        items = [self._sku_item_from_row(raw) for raw in raw_items]
-        return await self._enrich_items_with_ai(items, store_id=store_id)
+    async def _get_sku_items(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> list[ProductionSkuItem]:
+        raw_items = await self.repository.list_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
+        return [self._sku_item_from_row(raw) for raw in raw_items]
 
     async def _enrich_items_with_ai(self, items: list[ProductionSkuItem], store_id: str | None = None) -> list[ProductionSkuItem]:
         """AI 예측 결과로 각 SKU 항목을 보강합니다. ML 모델 연동 시 predicted_stock_1h → forecast_stock_1h 반영."""
@@ -420,8 +443,17 @@ class ProductionService:
 
         return enriched
 
-    async def get_overview(self, store_id: str | None = None, business_date: str | None = None) -> ProductionOverviewResponse:
-        raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
+    async def get_overview(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> ProductionOverviewResponse:
+        raw_items = await self.repository.list_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
         sku_items = [self._sku_item_from_row(raw) for raw in raw_items]
         danger_count = sum(1 for item in sku_items if item.status == "danger")
         warning_count = sum(1 for item in sku_items if item.status == "warning")
@@ -481,8 +513,13 @@ class ProductionService:
         page_size: int = 20,
         store_id: str | None = None,
         business_date: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> GetProductionSkuListResponse:
-        items = await self._get_sku_items(store_id=store_id, business_date=business_date)
+        items = await self._get_sku_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
 
         start = max(0, (page - 1) * page_size)
         end = start + page_size
@@ -497,13 +534,27 @@ class ProductionService:
 
         return GetProductionSkuListResponse(items=paged_items, pagination=pagination)
 
-    async def get_sku_detail(self, sku_id: str, store_id: str | None = None, business_date: str | None = None) -> ProductionSkuDetailResponse:
-        items = await self._get_sku_items(store_id=store_id, business_date=business_date)
+    async def get_sku_detail(
+        self,
+        sku_id: str,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> ProductionSkuDetailResponse:
+        items = await self._get_sku_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
         target = next((item for item in items if item.sku_id == sku_id), None)
         if target is None and store_id is not None:
             # store_id 필터로 매칭 결과가 없으면 전체 조회로 재시도
             logger.info("get_sku_detail: store_id=%s 로 sku_id=%s 없음, 전체 조회로 재시도", store_id, sku_id)
-            items = await self._get_sku_items(store_id=None)
+            items = await self._get_sku_items(
+                store_id=None,
+                business_date=business_date,
+                reference_datetime=reference_datetime,
+            )
             target = next((item for item in items if item.sku_id == sku_id), None)
         if target is None:
             raise ValueError(f"sku not found: {sku_id}")
