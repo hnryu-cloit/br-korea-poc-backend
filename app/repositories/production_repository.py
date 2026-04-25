@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_type
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -12,6 +12,17 @@ from app.infrastructure.db.utils import has_table
 from app.repositories.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _validate_iso_date(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return date_type.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"date 파라미터는 YYYY-MM-DD 형식이어야 합니다: {value}") from exc
 
 
 class ProductionRepository(BaseRepository):
@@ -2100,19 +2111,19 @@ class ProductionRepository(BaseRepository):
         """점포별 FIFO Lot 품목 요약 조회.
 
         품목·Lot 유형별로 생산/소진/폐기/잔여 수량을 집계한다.
+        date 파라미터는 '시점 스냅샷' 기준일로, 해당 일자 이전(포함)에 입고된 lot 중
+        해당 일자 시점에 active 상태였던 것을 잔여 수량으로 카운트한다.
         date 파라미터가 없으면 KST 오늘 날짜를 기본값으로 사용한다.
         """
         if not self.engine or not has_table(self.engine, "inventory_fifo_lots"):
             return [], 0
         try:
-            from datetime import timezone, timedelta
-            _KST = timezone(timedelta(hours=9))
-            target_date = date or datetime.now(_KST).date().isoformat()
+            target_date = _validate_iso_date(date) or datetime.now(_KST).date().isoformat()
 
             offset = max(0, (page - 1) * page_size)
             params: dict = {
                 "store_id": store_id,
-                "lot_date": target_date,
+                "target_date": target_date,
                 "limit": page_size,
                 "offset": offset,
             }
@@ -2131,7 +2142,7 @@ class ProductionRepository(BaseRepository):
                                 SELECT DISTINCT item_nm, lot_type
                                 FROM inventory_fifo_lots
                                 WHERE masked_stor_cd = :store_id
-                                  AND lot_date = :lot_date
+                                  AND lot_date <= :target_date
                                   {type_clause}
                             ) AS sub
                             """
@@ -2158,7 +2169,7 @@ class ProductionRepository(BaseRepository):
                                 COUNT(*) FILTER (WHERE status = 'expired')                    AS expired_lot_count
                             FROM inventory_fifo_lots
                             WHERE masked_stor_cd = :store_id
-                              AND lot_date = :lot_date
+                              AND lot_date <= :target_date
                               {type_clause}
                             GROUP BY item_nm, lot_type
                             ORDER BY total_wasted_qty DESC, item_nm
