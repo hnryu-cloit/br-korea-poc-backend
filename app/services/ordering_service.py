@@ -12,6 +12,7 @@ from app.schemas.ordering import (
     OrderingAlertsResponse,
     OrderingContextResponse,
     OrderingDeadlineAlert,
+    OrderingDeadlineItem,
     OrderingHistoryAnomalyItem,
     OrderingHistoryChangedItem,
     OrderingHistoryItem,
@@ -33,7 +34,7 @@ from app.services.audit_service import AuditService
 from app.services.explainability_service import create_ready_payload
 
 _KST = timezone(timedelta(hours=9))
-_DEFAULT_DEADLINE_HOUR = 14
+_DEFAULT_DEADLINE_HOUR = 12
 _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
 _DEFAULT_ORDERING_STORE_ID = "POC_010"
@@ -256,12 +257,15 @@ class OrderingService:
     def _merge_option_payloads(self, option: dict, ai_option: dict | None = None, index: int = 0) -> dict:
         fallback_id = option.get("option_id") or f"opt-{chr(97 + index)}"
         ai_reasoning = OrderingService._safe_str(ai_option.get("reasoning_text") if ai_option else None)
+        ai_metrics = ai_option.get("reasoning_metrics") if ai_option else None
+        ai_special_factors = ai_option.get("special_factors") if ai_option else None
+        option_basis = OrderingService._safe_str(option.get("basis"))
         merged = {
-            "option_id": option.get("option_id") or fallback_id,
-            "title": option.get("title") or f"추천안 {index + 1}",
-            "basis": option.get("basis") or "-",
-            "description": option.get("description") or "",
-            "recommended": bool(option.get("recommended", index == 0)),
+            "option_id": OrderingService._safe_str(ai_option.get("option_id") if ai_option else None) or fallback_id,
+            "title": OrderingService._safe_str(ai_option.get("title") if ai_option else None) or option.get("title") or f"추천안 {index + 1}",
+            "basis": option_basis or OrderingService._safe_str(ai_option.get("basis") if ai_option else None) or "-",
+            "description": OrderingService._safe_str(ai_option.get("description") if ai_option else None) or option.get("description") or "",
+            "recommended": bool((ai_option or {}).get("recommended", option.get("recommended", index == 0))),
             "reasoning_text": ai_reasoning or option.get("reasoning_text") or option.get("description") or "",
             "reasoning_metrics": option.get("reasoning_metrics") or [],
             "special_factors": option.get("special_factors") or [],
@@ -326,6 +330,11 @@ class OrderingService:
             ).strip(),
             "option_summaries": self._build_ai_option_summaries(options),
         }
+        options = await self.repository.list_options(
+            store_id=normalized_store_id,
+            reference_date=business_date,
+        )
+        use_ai_ordering = not skip_ai and not self.repository.uses_ordering_join_table(normalized_store_id)
         ai_payload = (
             None
             if skip_ai
@@ -334,6 +343,8 @@ class OrderingService:
                 current_date=business_date,
                 current_context=ai_current_context,
             )
+            if not use_ai_ordering
+            else await self._get_ai_ordering_recommendation(store_id=normalized_store_id, current_date=business_date)
         )
         ai_options = (ai_payload or {}).get("options") or []
         merged_options = [
@@ -420,7 +431,10 @@ class OrderingService:
         purpose_text = "주문 누락을 방지하고 최적 수량을 선택하세요."
         caution_text = "최종 주문 결정은 점주 권한입니다. 추천 옵션은 보조 자료로만 활용해주세요."
         weather: OrderingWeather | None = None
-        trend_summary: str | None = None
+        trend_summary = self.repository.get_ordering_trend_summary(
+            store_id=normalized_store_id,
+            reference_date=business_date,
+        )
 
         if ai_payload:
             deadline_minutes = int(ai_payload.get("deadline_minutes") or deadline_minutes)
@@ -455,6 +469,10 @@ class OrderingService:
             deadline = await self.get_deadline(store_id=normalized_store_id, reference_datetime=reference_datetime)
             deadline_at = deadline["deadline"]
             deadline_minutes = deadline["minutes_remaining"]
+        deadline_items = self.repository.get_deadline_items(
+            store_id=normalized_store_id,
+            reference_datetime=reference_datetime,
+        )
 
         return OrderingOptionsResponse(
             deadline_minutes=deadline_minutes,
@@ -465,7 +483,7 @@ class OrderingService:
             weather=weather,
             trend_summary=trend_summary,
             business_date=business_date,
-            deadline_items=deadline_items,
+            deadline_items=[OrderingDeadlineItem(**item) for item in deadline_items],
             options=[OrderOption(**o) for o in merged_options],
             explainability=create_ready_payload(
                 trace_id=f"ordering-options-{normalized_store_id}",
@@ -500,7 +518,10 @@ class OrderingService:
         store_id: str | None = None,
         reference_datetime: datetime | None = None,
     ) -> OrderingAlertsResponse:
-        options = await self.repository.list_options(store_id=store_id)
+        options = await self.repository.list_options(
+            store_id=store_id,
+            reference_date=self._today_kst(reference_datetime),
+        )
         focus_option_id = self._derive_focus_option_id(options)
         alerts: list[OrderingDeadlineAlert] = []
         ai_deadline = await self._get_ai_deadline_alert(store_id)
@@ -673,7 +694,9 @@ class OrderingService:
         self,
         *,
         store_id: str | None = None,
-        limit: int = 30,
+        limit: int | None = None,
+        page: int = 1,
+        page_size: int = 10,
         date_from: str | None = None,
         date_to: str | None = None,
         item_nm: str | None = None,
@@ -682,9 +705,11 @@ class OrderingService:
     ):
         normalized_store_id = self._require_history_store_id(store_id)
         resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
+        resolved_page_size = limit if limit is not None else page_size
         data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
-            limit=limit,
+            limit=resolved_page_size,
+            page=page,
             date_from=date_from,
             date_to=date_to,
             item_nm=item_nm,
@@ -696,6 +721,9 @@ class OrderingService:
             auto_rate=data["auto_rate"],
             manual_rate=data["manual_rate"],
             total_count=data["total_count"],
+            page=int(data.get("page", page)),
+            page_size=int(data.get("page_size", resolved_page_size)),
+            total_pages=int(data.get("total_pages", 1)),
             explainability=create_ready_payload(
                 trace_id=f"ordering-history-{normalized_store_id}",
                 actions=["자동/수동 발주 비중을 점검하고 다음 주문 기준을 조정하세요."],
@@ -844,6 +872,99 @@ class OrderingService:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _build_deterministic_history_insights(
+        *,
+        store_id: str,
+        summary_stats: dict[str, object],
+    ) -> OrderingHistoryInsightsResponse:
+        auto_rate = float(summary_stats.get("auto_rate") or 0.0)
+        manual_rate = float(summary_stats.get("manual_rate") or 0.0)
+        avg_order_qty = float(summary_stats.get("avg_order_qty") or 0.0)
+        confirm_gap_count = int(summary_stats.get("confirm_gap_count") or 0)
+        changed_items_preview = summary_stats.get("top_changed_items_preview") or []
+
+        kpis = [
+            OrderingHistoryInsightKpi(
+                key="auto_rate",
+                label="자동 발주 비율",
+                value=f"{auto_rate * 100:.1f}%",
+                tone="primary",
+            ),
+            OrderingHistoryInsightKpi(
+                key="manual_rate",
+                label="수동 발주 비율",
+                value=f"{manual_rate * 100:.1f}%",
+                tone="warning",
+            ),
+            OrderingHistoryInsightKpi(
+                key="avg_order_qty",
+                label="평균 발주 수량",
+                value=f"{avg_order_qty:.1f}개",
+                tone="default",
+            ),
+        ]
+
+        anomalies: list[OrderingHistoryAnomalyItem] = []
+        if changed_items_preview:
+            top_item = changed_items_preview[0]
+            change_ratio = float(top_item.get("change_ratio") or 0.0)
+            latest_qty = int(top_item.get("latest_ord_qty") or 0)
+            baseline_qty = float(top_item.get("avg_ord_qty") or 0.0)
+            direction = "증가" if change_ratio > 0 else "감소"
+            severity = "high" if abs(change_ratio) >= 0.5 else "medium"
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id="top-changed-item",
+                    severity=severity,
+                    kind="ordering_change",
+                    message=(
+                        f"{top_item.get('item_nm')} 발주량이 평균 {baseline_qty:.1f}개에서 "
+                        f"최근 {latest_qty}개로 {abs(change_ratio) * 100:.1f}% {direction}했습니다."
+                    ),
+                    recommended_action="해당 품목의 최근 판매 추이와 발주 기준을 함께 점검하세요.",
+                    related_items=[str(top_item.get("item_nm"))],
+                )
+            )
+        if confirm_gap_count > 0:
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id="confirm-gap",
+                    severity="medium",
+                    kind="confirm_gap",
+                    message=f"주문수량과 확정수량 차이가 큰 발주건이 {confirm_gap_count}건 있습니다.",
+                    recommended_action="확정수량 차이가 반복되는 품목은 발주 기준을 조정하세요.",
+                    related_items=[],
+                )
+            )
+
+        return OrderingHistoryInsightsResponse(
+            kpis=kpis,
+            anomalies=[
+                OrderingHistoryAnomalyItem(**anomaly)
+                for anomaly in OrderingService._sort_history_anomalies(
+                    [anomaly.model_dump() for anomaly in anomalies]
+                )
+            ][:8],
+            top_changed_items=[
+                OrderingHistoryChangedItem(**item)
+                for item in changed_items_preview
+                if isinstance(item, dict)
+            ][:5],
+            sources=["ordering_history_summary_stats"],
+            retrieved_contexts=["POC_010 전용 주문 조인 테이블 기반 결정식 인사이트"],
+            confidence=0.95,
+            explainability=create_ready_payload(
+                trace_id=f"ordering-history-insights-{store_id}",
+                actions=["변화율 상위 품목과 주문-확정 차이 건수를 기준으로 발주 이상징후를 요약했습니다."],
+                evidence=[
+                    f"평균 발주 수량: {avg_order_qty:.2f}",
+                    f"주문-확정 차이 건수: {confirm_gap_count}",
+                    f"변화율 상위 품목 수: {len(changed_items_preview)}",
+                ],
+            ),
+        )
+
     async def get_history_insights(
         self,
         *,
@@ -894,6 +1015,15 @@ class OrderingService:
             recent_date_from=date_from,
             recent_date_to=date_to,
         )
+        if self.repository.uses_ordering_join_table(normalized_store_id):
+            return self._build_deterministic_history_insights(
+                store_id=normalized_store_id,
+                summary_stats=summary_stats,
+            )
+
+        if not self.ai_client:
+            raise RuntimeError("AI service is unavailable")
+
         filters = {
             "date_from": date_from,
             "date_to": date_to,

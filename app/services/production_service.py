@@ -89,8 +89,9 @@ class ProductionService:
         normalized = unicodedata.normalize("NFKC", value).strip().lower()
         normalized = re.sub(r"\.[a-z0-9]+$", "", normalized)
         normalized = re.sub(r"_[0-9]+$", "", normalized)
-        normalized = re.sub(r"[^0-9a-z가-힣]+", "", normalized)
-        return normalized
+        normalized = re.sub(r"^\((.*?)\)", "", normalized).strip()
+        normalized = normalized.removeprefix("던킨").strip()
+        return "".join(ch for ch in normalized if ch.isalnum())
 
     @classmethod
     def _menu_image_directories(cls) -> list[Path]:
@@ -154,6 +155,32 @@ class ProductionService:
         buffer = forecast * 1.5
         buffer_deficit_ratio = max(0.0, (buffer - current) / max(buffer, 1))
         return min(10, max(3, int(round(buffer_deficit_ratio * 10))))
+
+    @staticmethod
+    def _parse_prod(raw_value: str) -> tuple[str, int]:
+        parts = str(raw_value or "").split(" / ")
+        time_text = parts[0].strip() if parts else "00:00"
+        qty_text = parts[1].replace("개", "").strip() if len(parts) > 1 else "0"
+        return time_text or "00:00", ProductionService._safe_int(qty_text)
+
+    @classmethod
+    def _recommended_qty_from_row(cls, raw: dict) -> int:
+        _, p1_qty = cls._parse_prod(str(raw.get("prod1") or ""))
+        return max(p1_qty, 0)
+
+    @classmethod
+    def _chance_loss_amount_from_row(cls, raw: dict) -> int:
+        if raw.get("chance_loss_amt") is not None:
+            return cls._safe_int(raw.get("chance_loss_amt"))
+        if raw.get("chance_loss_reduction_pct") is not None:
+            return cls._safe_int(raw.get("chance_loss_reduction_pct"))
+        current_stock = max(cls._safe_int(raw.get("current")), 0)
+        forecast = max(cls._safe_int(raw.get("forecast")), 0)
+        recommended_qty = max(cls._recommended_qty_from_row(raw), 0)
+        shortage_without = max(forecast - current_stock, 0)
+        shortage_with = max(forecast - (current_stock + recommended_qty), 0)
+        prevented_units = max(shortage_without - shortage_with, 0)
+        return prevented_units * 1200
 
     @staticmethod
     def _assumed_shelf_life_days(item_name: str) -> int:
@@ -290,8 +317,8 @@ class ProductionService:
         ]
         return merged
 
-    @staticmethod
-    def _decision_for_row(raw: dict) -> ProductionSkuDecision:
+    @classmethod
+    def _decision_for_row(cls, raw: dict) -> ProductionSkuDecision:
         risk_label = "정상"
         if raw["status"] == "danger":
             risk_label = "즉시생산"
@@ -308,7 +335,9 @@ class ProductionService:
             velocity = 1.2 if raw["status"] != "safe" else 0.9
 
         # 실데이터 수치를 포함한 알림 메시지
-        if raw["status"] == "danger":
+        if raw.get("alert_message"):
+            alert_msg = str(raw["alert_message"])
+        elif raw["status"] == "danger":
             hours = max(1, int(round(current / max(forecast / 8.0, 0.1))))
             alert_msg = f"현재 재고 {current}개, 약 {hours}시간 이내 소진 예상. 즉시 생산이 필요합니다."
         elif raw["status"] == "warning":
@@ -316,15 +345,24 @@ class ProductionService:
         else:
             alert_msg = "현재 재고가 안정적입니다."
 
+        recommended_qty = cls._recommended_qty_from_row(raw)
+        chance_loss_amt = cls._chance_loss_amount_from_row(raw)
+        chance_loss_prevented_amount = (
+            chance_loss_amt
+            if chance_loss_amt > 0
+            else recommended_qty * 1200 if recommended_qty > 0 else None
+        )
+
         return ProductionSkuDecision(
             risk_level_label=risk_label,
             sales_velocity=velocity,
             tags=["속도↑"] if raw["status"] != "safe" else [],
             alert_message=alert_msg,
             can_produce=True,
-            predicted_stockout_time=raw["depletion_time"] if raw["depletion_time"] != "-" else None,
-            suggested_production_qty=raw["recommended"],
-            chance_loss_prevented_amount=raw["recommended"] * 1200 if raw["recommended"] > 0 else None,
+            predicted_stockout_time=raw.get("stockout_expected_at")
+            or (raw["depletion_time"] if raw["depletion_time"] != "-" else None),
+            suggested_production_qty=recommended_qty,
+            chance_loss_prevented_amount=chance_loss_prevented_amount,
         )
 
     @classmethod
@@ -335,9 +373,11 @@ class ProductionService:
             qty = int(parts[1].replace("개", "")) if len(parts) > 1 else 0
             return time, qty
 
-        p1_time, p1_qty = parse_prod(raw["prod1"])
-        p2_time, p2_qty = parse_prod(raw["prod2"])
+        p1_time, p1_qty = cls._parse_prod(raw["prod1"])
+        p2_time, p2_qty = cls._parse_prod(raw["prod2"])
         decision = cls._decision_for_row(raw)
+        recommended_qty = cls._recommended_qty_from_row(raw)
+        chance_loss_amount = cls._chance_loss_amount_from_row(raw)
 
         return ProductionSkuItem(
             sku_id=raw["sku_id"],
@@ -350,9 +390,9 @@ class ProductionService:
             avg_second_production_qty_4w=p2_qty,
             avg_second_production_time_4w=p2_time,
             status=raw["status"],
-            chance_loss_saving_pct=cls._calc_chance_loss_pct(raw["current"], raw["forecast"], raw["status"]),
-            recommended_production_qty=raw["recommended"],
-            chance_loss_basis_text="1시간 후 재고 예측 및 4주(28일) 생산 발생일 평균 기준",
+            chance_loss_saving_pct=chance_loss_amount,
+            recommended_production_qty=recommended_qty,
+            chance_loss_basis_text="추천 생산 수량은 최근 4주 평균 1차 생산량이며, 찬스 로스 절감액은 현재 재고와 추천 생산 수량으로 1시간 수요 예측의 부족분을 얼마나 줄였는지 기준으로 계산했습니다.",
             decision=decision,
             depletion_eta_minutes=60 if raw["status"] != "safe" else None,
             tags=decision.tags,
@@ -364,10 +404,18 @@ class ProductionService:
             material_alert_message=None,
         )
 
-    async def _get_sku_items(self, store_id: str | None = None, business_date: str | None = None) -> list[ProductionSkuItem]:
-        raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
-        items = [self._sku_item_from_row(raw) for raw in raw_items]
-        return await self._enrich_items_with_ai(items, store_id=store_id)
+    async def _get_sku_items(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> list[ProductionSkuItem]:
+        raw_items = await self.repository.list_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
+        return [self._sku_item_from_row(raw) for raw in raw_items]
 
     async def _enrich_items_with_ai(self, items: list[ProductionSkuItem], store_id: str | None = None) -> list[ProductionSkuItem]:
         """AI 예측 결과로 각 SKU 항목을 보강합니다. ML 모델 연동 시 predicted_stock_1h → forecast_stock_1h 반영."""
@@ -415,15 +463,22 @@ class ProductionService:
                     )
             if result.get("risk_detected") is True:
                 updates["sales_velocity"] = max(float(item.sales_velocity or 1.0), 1.2)
-                confidence = float(result.get("confidence") or 0.7)
-                updates["chance_loss_saving_pct"] = max(item.chance_loss_saving_pct, int(round(confidence * 20)))
 
             enriched.append(item.model_copy(update=updates) if updates else item)
 
         return enriched
 
-    async def get_overview(self, store_id: str | None = None, business_date: str | None = None) -> ProductionOverviewResponse:
-        raw_items = await self.repository.list_items(store_id=store_id, business_date=business_date)
+    async def get_overview(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> ProductionOverviewResponse:
+        raw_items = await self.repository.list_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
         sku_items = [self._sku_item_from_row(raw) for raw in raw_items]
         danger_count = sum(1 for item in sku_items if item.status == "danger")
         warning_count = sum(1 for item in sku_items if item.status == "warning")
@@ -457,12 +512,20 @@ class ProductionService:
                 ProductionSummaryStat(key="danger_count", label="품절 위험", value=f"{danger_count}개", tone="danger"),
                 ProductionSummaryStat(key="warning_count", label="주의 필요", value=f"{warning_count}개", tone="primary"),
                 ProductionSummaryStat(key="safe_count", label="안전 재고", value=f"{safe_count}개", tone="success"),
-                ProductionSummaryStat(key="chance_loss_saving_total", label="찬스 로스 절감", value=f"{int(round(sum(item.chance_loss_saving_pct for item in sku_items) / len(sku_items)) if sku_items else 0)}%", tone="default"),
+                ProductionSummaryStat(
+                    key="chance_loss_saving_total",
+                    label="찬스 로스 절감액",
+                    value=f"{sum(item.chance_loss_saving_pct for item in sku_items):,}원",
+                    tone="default",
+                ),
             ],
             alerts=alerts,
             production_lead_time_minutes=60,
             danger_count=danger_count,
-            items=[ProductionItem(**item) for item in raw_items],
+            items=[
+                ProductionItem(**{**item, "recommended": self._recommended_qty_from_row(item)})
+                for item in raw_items
+            ],
             explainability=create_ready_payload(
                 trace_id=f"production-overview-{store_id or 'all'}",
                 actions=[
@@ -483,8 +546,13 @@ class ProductionService:
         page_size: int = 20,
         store_id: str | None = None,
         business_date: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> GetProductionSkuListResponse:
-        items = await self._get_sku_items(store_id=store_id, business_date=business_date)
+        items = await self._get_sku_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
 
         start = max(0, (page - 1) * page_size)
         end = start + page_size
@@ -499,13 +567,27 @@ class ProductionService:
 
         return GetProductionSkuListResponse(items=paged_items, pagination=pagination)
 
-    async def get_sku_detail(self, sku_id: str, store_id: str | None = None, business_date: str | None = None) -> ProductionSkuDetailResponse:
-        items = await self._get_sku_items(store_id=store_id, business_date=business_date)
+    async def get_sku_detail(
+        self,
+        sku_id: str,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> ProductionSkuDetailResponse:
+        items = await self._get_sku_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
         target = next((item for item in items if item.sku_id == sku_id), None)
         if target is None and store_id is not None:
             # store_id 필터로 매칭 결과가 없으면 전체 조회로 재시도
             logger.info("get_sku_detail: store_id=%s 로 sku_id=%s 없음, 전체 조회로 재시도", store_id, sku_id)
-            items = await self._get_sku_items(store_id=None)
+            items = await self._get_sku_items(
+                store_id=None,
+                business_date=business_date,
+                reference_datetime=reference_datetime,
+            )
             target = next((item for item in items if item.sku_id == sku_id), None)
         if target is None:
             raise ValueError(f"sku not found: {sku_id}")
@@ -555,8 +637,17 @@ class ProductionService:
             generated_at=get_now().strftime("%Y-%m-%d %H:%M"),
         )
 
-    async def get_alerts(self, store_id: str | None = None) -> ProductionAlertsResponse:
-        items = await self.repository.list_items(store_id=store_id)
+    async def get_alerts(
+        self,
+        store_id: str | None = None,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> ProductionAlertsResponse:
+        items = await self.repository.list_items(
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
         alerts = [
             ProductionAlertItem(
                 sku_id=item["sku_id"],
@@ -564,14 +655,14 @@ class ProductionService:
                 current=item["current"],
                 forecast=item["forecast"],
                 depletion_time=item["depletion_time"],
-                recommended=item["recommended"],
+                recommended=self._recommended_qty_from_row(item),
                 prod1=item["prod1"],
                 prod2=item["prod2"],
                 severity=item["status"],
                 push_title=f"{item['name']} 생산이 필요합니다",
                 push_message=(
                     f"현재고 {item['current']}개, 1시간 후 예상 {item['forecast']}개입니다. "
-                    f"{item['depletion_time']} 전 소진 가능성이 있어 {item['recommended']}개 생산을 권장합니다."
+                    f"{item['depletion_time']} 전 소진 가능성이 있어 {self._recommended_qty_from_row(item)}개 생산을 권장합니다."
                 ),
                 target_roles=["store_owner", "store_operator"],
             )
@@ -864,6 +955,8 @@ class ProductionService:
         store_id: str | None = None,
         page: int = 1,
         page_size: int = 10,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> InventoryStatusResponse:
         if not store_id:
             raise ValueError("store_id is required")
@@ -884,19 +977,28 @@ class ProductionService:
             store_id=store_id,
             page=page,
             page_size=page_size,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
         )
         rows, total_items, summary_metrics = self._normalize_inventory_status_result(raw_result)
         if not rows and total_items == 0:
             raise LookupError("해당 점포의 재고 진단 데이터가 없습니다.")
 
         items: list[InventoryStatusItem] = []
+        use_precomputed_inventory_metrics = all(
+            row.get("assumed_shelf_life_days") is not None
+            and row.get("expiry_risk_level") is not None
+            and row.get("status") is not None
+            for row in rows
+        )
         shelf_life_map: dict[str, int] = {}
-        get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
-        if callable(get_shelf_life_days_map):
-            shelf_life_map = get_shelf_life_days_map(
-                item_codes=[str(row.get("item_cd") or "").strip() for row in rows],
-                item_names=[str(row.get("item_nm") or "").strip() for row in rows],
-            )
+        if not use_precomputed_inventory_metrics:
+            get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
+            if callable(get_shelf_life_days_map):
+                shelf_life_map = get_shelf_life_days_map(
+                    item_codes=[str(row.get("item_cd") or "").strip() for row in rows],
+                    item_names=[str(row.get("item_nm") or "").strip() for row in rows],
+                )
         for row in rows:
             item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
             item_nm = str(row.get("item_nm") or item_cd)
@@ -918,6 +1020,9 @@ class ProductionService:
             else:
                 status = "적정"
 
+            if use_precomputed_inventory_metrics:
+                status = str(row.get("status") or status)
+
             shelf_life_days = self._resolve_shelf_life_days(
                 shelf_life_map=shelf_life_map,
                 item_cd=item_cd,
@@ -930,6 +1035,9 @@ class ProductionService:
                 if stock_rate > 0.15
                 else "낮음"
             )
+            if use_precomputed_inventory_metrics:
+                shelf_life_days = self._safe_int(row.get("assumed_shelf_life_days"), shelf_life_days)
+                expiry_risk_level = str(row.get("expiry_risk_level") or expiry_risk_level)
 
             items.append(
                 InventoryStatusItem(

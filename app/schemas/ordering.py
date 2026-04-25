@@ -138,6 +138,9 @@ class OrderingHistoryResponse(BaseModel):
     auto_rate: float
     manual_rate: float
     total_count: int
+    page: int = 1
+    page_size: int = 30
+    total_pages: int = 1
     explainability: ExplainabilityPayload | None = None
 
 

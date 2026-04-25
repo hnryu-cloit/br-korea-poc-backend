@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 from datetime import date, timedelta
+from pathlib import Path
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -8,12 +10,61 @@ from sqlalchemy.engine import Engine
 from app.infrastructure.db.utils import has_table
 
 
+_DASHBOARD_DOMAIN_AGENT_MAP = {
+    "production": "생산 관리",
+    "ordering": "주문 관리",
+    "sales": "매출 관리",
+}
+
+_DASHBOARD_QUESTION_PRIORITIES = {
+    "production": [
+        "오늘 재고 부족(음수 재고) 품목 상위 10개 알려줘",
+        "오늘 품절 발생 시각이 가장 빠른 품목 알려줘",
+        "오늘 시간대별 판매 속도 대비 현재 재고 부족 위험 품목",
+    ],
+    "ordering": [
+        "오늘 납품예정일 기준 확정 발주 수량 상위 품목",
+        "오늘 발주수량 대비 확정수량 차이가 큰 품목",
+        "오늘 자동발주 비율 알려줘",
+    ],
+    "sales": [
+        "오늘 총매출과 일평균 매출 알려줘",
+        "오늘 상품 매출 상위 10개 알려줘",
+        "오늘 시간대별 매출 피크 알려줘",
+    ],
+}
+
+_DASHBOARD_QUESTION_DISPLAY_MAP = {
+    "production": {
+        "오늘 재고 부족(음수 재고) 품목 상위 10개 알려줘": "오늘 재고가 부족한 품목 알려줘.",
+        "오늘 과잉 재고 품목 상위 10개 알려줘": "오늘 재고가 많이 남아 있는 품목 알려줘.",
+        "오늘 재고율 하위 10개 품목과 판매량 같이 보여줘": "오늘 재고가 적은 품목과 판매량을 함께 보여줘.",
+        "오늘 품절 발생 시각이 가장 빠른 품목 알려줘": "오늘 가장 빨리 품절되는 품목 알려줘.",
+        "오늘 시간대별 판매 속도 대비 현재 재고 부족 위험 품목": "오늘 판매 속도 대비 재고가 부족할 위험이 있는 품목 알려줘.",
+    },
+    "ordering": {
+        "오늘 납품예정일 기준 확정 발주 수량 상위 품목": "오늘 확정 발주 수량이 많은 품목 알려줘.",
+        "오늘 발주수량 대비 확정수량 차이가 큰 품목": "오늘 발주 수량과 확정 수량 차이가 큰 품목 알려줘.",
+        "오늘 자동발주 비율 알려줘": "오늘 자동발주 비율 알려줘.",
+    },
+    "sales": {
+        "오늘 총매출과 일평균 매출 알려줘": "오늘 총매출과 일평균 매출 알려줘.",
+        "오늘 상품 매출 상위 10개 알려줘": "오늘 상품 매출 상위 품목 알려줘.",
+        "오늘 시간대별 매출 피크 알려줘": "오늘 매출이 가장 높은 시간대 알려줘.",
+    },
+}
+
+
 class HomeRepository:
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
 
     async def list_schedule_events(
-        self, store_id: str | None = None, today: date | None = None, window_days: int = 90
+        self,
+        store_id: str | None = None,
+        today: date | None = None,
+        window_days: int = 90,
+        limit: int | None = 20,
     ) -> list[dict[str, str]]:
         if not self.engine:
             return []
@@ -36,7 +87,202 @@ class HomeRepository:
                         conn=conn, store_id=store_id, start=today_str, end=window_end_str
                     )
                 )
-        return sorted(events, key=lambda event: event["date"])
+        sorted_events = sorted(events, key=lambda event: (event["date"], event["category"], event["title"]))
+        if limit is None or limit <= 0:
+            return sorted_events
+        return sorted_events[:limit]
+
+    async def get_dashboard_recommended_questions(
+        self,
+        target_date: date | None = None,
+    ) -> dict[str, list[str]]:
+        effective_date = target_date or date.today()
+        year_month = effective_date.strftime("%Y%m")
+        fallback = self._build_dashboard_recommended_questions()
+
+        if not self.engine or not has_table(self.engine, "dashboard_recommended_questions"):
+            return {
+                domain: [
+                    self._to_dashboard_display_question(domain, str(entry["question"]))
+                    for entry in questions[:3]
+                ]
+                for domain, questions in fallback.items()
+            }
+
+        with self.engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT domain, rank_no, question
+                        FROM dashboard_recommended_questions
+                        WHERE year_month = :year_month
+                        ORDER BY domain, rank_no
+                        """
+                    ),
+                    {"year_month": year_month},
+                )
+                .mappings()
+                .all()
+            )
+            grouped: dict[str, list[str]] = {}
+            for row in rows:
+                domain = str(row["domain"])
+                grouped.setdefault(domain, []).append(
+                    self._to_dashboard_display_question(domain, str(row["question"]))
+                )
+
+            if all(len(grouped.get(domain, [])) >= 3 for domain in _DASHBOARD_DOMAIN_AGENT_MAP):
+                return {domain: grouped[domain][:3] for domain in _DASHBOARD_DOMAIN_AGENT_MAP}
+
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM dashboard_recommended_questions
+                    WHERE year_month = :year_month
+                    """
+                ),
+                {"year_month": year_month},
+            )
+            for domain, questions in fallback.items():
+                for rank_no, question in enumerate(questions[:3], start=1):
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO dashboard_recommended_questions (
+                                year_month,
+                                domain,
+                                rank_no,
+                                question,
+                                source_agent,
+                                source_question_no,
+                                source_count,
+                                updated_at
+                            ) VALUES (
+                                :year_month,
+                                :domain,
+                                :rank_no,
+                                :question,
+                                :source_agent,
+                                :source_question_no,
+                                :source_count,
+                                NOW()
+                            )
+                            """
+                        ),
+                        {
+                            "year_month": year_month,
+                            "domain": domain,
+                            "rank_no": rank_no,
+                            "question": self._to_dashboard_display_question(
+                                domain, str(question["question"])
+                            ),
+                            "source_agent": question["source_agent"],
+                            "source_question_no": question["source_question_no"],
+                            "source_count": question["source_count"],
+                        },
+                    )
+
+        return {
+            domain: [
+                self._to_dashboard_display_question(domain, str(entry["question"]))
+                for entry in questions[:3]
+            ]
+            for domain, questions in fallback.items()
+        }
+
+    @staticmethod
+    def _golden_queries_csv_path() -> Path:
+        return Path(__file__).resolve().parents[2] / "docs" / "golden-queries-store-owner.csv"
+
+    @classmethod
+    def _build_dashboard_recommended_questions(cls) -> dict[str, list[dict[str, str | int]]]:
+        path = cls._golden_queries_csv_path()
+        if not path.exists():
+            return cls._build_dashboard_question_fallback()
+
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames or []
+            if len(fieldnames) < 6:
+                return cls._build_dashboard_question_fallback()
+            question_no_key = fieldnames[0]
+            agent_key = fieldnames[2]
+            question_key = fieldnames[3]
+            available_key = fieldnames[5]
+
+            grouped: dict[str, dict[str, dict[str, str | int]]] = {
+                domain: {} for domain in _DASHBOARD_DOMAIN_AGENT_MAP
+            }
+            for row in reader:
+                if str(row.get(available_key) or "").strip() != "\u2705":
+                    continue
+                agent = str(row.get(agent_key) or "").strip()
+                question = str(row.get(question_key) or "").strip()
+                if not question:
+                    continue
+                domain = next(
+                    (
+                        domain_name
+                        for domain_name, agent_name in _DASHBOARD_DOMAIN_AGENT_MAP.items()
+                        if agent == agent_name
+                    ),
+                    None,
+                )
+                if not domain:
+                    continue
+                existing = grouped[domain].get(question)
+                if existing is None:
+                    grouped[domain][question] = {
+                        "question": question,
+                        "source_agent": agent,
+                        "source_question_no": str(row.get(question_no_key) or ""),
+                        "source_count": 1,
+                    }
+                else:
+                    existing["source_count"] = int(existing["source_count"]) + 1
+
+        ranked: dict[str, list[dict[str, str | int]]] = {}
+        for domain, by_question in grouped.items():
+            entries = list(by_question.values())
+            if not entries:
+                ranked[domain] = cls._build_dashboard_question_fallback()[domain]
+                continue
+            priority_order = {
+                question: index
+                for index, question in enumerate(_DASHBOARD_QUESTION_PRIORITIES.get(domain, []))
+            }
+            entries.sort(
+                key=lambda entry: (
+                    priority_order.get(str(entry["question"]), 999),
+                    -int(entry["source_count"]),
+                    str(entry["source_question_no"]),
+                )
+            )
+            ranked[domain] = entries[:3]
+        return ranked
+
+    @staticmethod
+    def _build_dashboard_question_fallback() -> dict[str, list[dict[str, str | int]]]:
+        fallback: dict[str, list[dict[str, str | int]]] = {}
+        for domain, questions in _DASHBOARD_QUESTION_PRIORITIES.items():
+            fallback[domain] = [
+                {
+                    "question": question,
+                    "source_agent": _DASHBOARD_DOMAIN_AGENT_MAP[domain],
+                    "source_question_no": "",
+                    "source_count": 0,
+                }
+                for question in questions[:3]
+            ]
+        return fallback
+
+    @staticmethod
+    def _to_dashboard_display_question(domain: str, question: str) -> str:
+        mapped = _DASHBOARD_QUESTION_DISPLAY_MAP.get(domain, {}).get(question)
+        if mapped:
+            return mapped
+        return question
 
     @staticmethod
     def _to_iso_date(value: str) -> str:
@@ -82,8 +328,7 @@ class HomeRepository:
                   AND use_yn = '1'
                   AND fnsh_dt < '99991221'
                   {campaign_store_filter}
-                ORDER BY fnsh_dt
-                LIMIT 20
+                ORDER BY fnsh_dt, cpi_nm
             """
                 ),
                 campaign_params,
@@ -141,14 +386,25 @@ class HomeRepository:
             conn.execute(
                 text(
                     f"""
+                WITH ranked AS (
+                    SELECT
+                        pay_dc_nm,
+                        start_dt,
+                        fnsh_dt,
+                        pay_dc_grp_type_nm,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY pay_dc_nm
+                            ORDER BY fnsh_dt ASC, start_dt DESC
+                        ) AS rn
+                    FROM raw_telecom_discount_policy
+                    WHERE start_dt <= :end AND fnsh_dt >= :start
+                      AND fnsh_dt < '99991221'
+                      {telecom_store_filter}
+                )
                 SELECT pay_dc_nm, start_dt, fnsh_dt, pay_dc_grp_type_nm
-                FROM raw_telecom_discount_policy
-                WHERE start_dt <= :end AND fnsh_dt >= :start
-                  AND use_yn = '1'
-                  AND fnsh_dt < '99991221'
-                  {telecom_store_filter}
-                ORDER BY fnsh_dt
-                LIMIT 10
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY fnsh_dt, pay_dc_nm
             """
                 ),
                 telecom_params,

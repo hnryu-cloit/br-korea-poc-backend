@@ -12,6 +12,9 @@ class _DummyOrderingRepository:
     def is_known_store(self, store_id: str) -> bool:
         return store_id == "POC_002"
 
+    def uses_ordering_join_table(self, store_id: str) -> bool:
+        return False
+
     def get_history_filtered(
         self,
         *,
@@ -132,6 +135,14 @@ class _DateFilteringOrderingRepository(_DummyOrderingRepository):
             "items": filtered_items[:limit],
             "total_count": len(filtered_items[:limit]),
         }
+
+
+class _JoinTableOrderingRepository(_DummyOrderingRepository):
+    def is_known_store(self, store_id: str) -> bool:
+        return store_id == "POC_010"
+
+    def uses_ordering_join_table(self, store_id: str) -> bool:
+        return store_id == "POC_010"
 
 
 class _DummyAIClient:
@@ -333,3 +344,20 @@ def test_ordering_history_insights_sorts_anomalies_by_severity() -> None:
     response = asyncio.run(service.get_history_insights(store_id="POC_002"))
 
     assert [anomaly.severity for anomaly in response.anomalies] == ["high", "medium", "low"]
+
+
+def test_ordering_history_insights_skips_ai_for_join_table_store() -> None:
+    ai_client = _DummyAIClient()
+    service = OrderingService(
+        repository=_JoinTableOrderingRepository(),
+        ai_client=ai_client,
+    )
+
+    response = asyncio.run(service.get_history_insights(store_id="POC_010"))
+
+    assert ai_client.calls == 0
+    assert response.confidence == pytest.approx(0.95)
+    assert response.sources == ["ordering_history_summary_stats"]
+    assert len(response.kpis) == 3
+    assert len(response.top_changed_items) == 1
+    assert response.top_changed_items[0].item_nm == "ChocoMuffin"

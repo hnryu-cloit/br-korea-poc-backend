@@ -77,6 +77,104 @@ def test_build_new_items_returns_safe_and_no_recommendation_when_forecast_zero()
     assert item["depletion_time"] == "-"
 
 
+def test_build_new_items_keeps_zero_current_when_inventory_row_exists_but_stock_is_negative() -> None:
+    repository = ProductionRepository(engine=None)
+
+    items = repository._build_new_items(
+        production_map={"SKU_NEG": {"item_cd": "SKU_NEG", "item_nm": "Neg", "qty": 6}},
+        secondary_map={},
+        stock_map={"SKU_NEG": {"item_cd": "SKU_NEG", "item_nm": "Neg", "qty": -4}},
+        sale_map={"SKU_NEG": {"qty": 4}},
+        order_confirm_map={},
+        hourly_sale_map={},
+    )
+
+    assert len(items) == 1
+    item = items[0]
+
+    assert item["current"] == 0
+    assert item["prod1"] == "08:00 / 6개"
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _MappingsResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _MetricMapConnection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "BETWEEN :min_date AND :max_date" in sql:
+            return _MappingsResult(
+                [
+                    {
+                        "item_name": "Blueberry",
+                        "item_code": "SKU_B",
+                        "date_val": "20260301",
+                        "metric_value": 6,
+                    },
+                    {
+                        "item_name": "Blueberry",
+                        "item_code": "SKU_B",
+                        "date_val": "20260303",
+                        "metric_value": 6,
+                    },
+                ]
+            )
+        if "ORDER BY date_value DESC" in sql:
+            return _ScalarResult("20260306")
+        raise AssertionError(f"Unexpected SQL executed: {sql}")
+
+
+class _MetricMapEngine:
+    def connect(self):
+        return _MetricMapConnection()
+
+
+def test_fetch_metric_map_window_average_uses_full_window_days() -> None:
+    repository = ProductionRepository(engine=_MetricMapEngine())
+    repository._table_columns = lambda _table_name: {  # type: ignore[method-assign]
+        "prod_dt": "prod_dt",
+        "item_nm": "item_nm",
+        "item_cd": "item_cd",
+        "prod_qty": "prod_qty",
+        "masked_stor_cd": "masked_stor_cd",
+    }
+
+    metric_map = repository._fetch_metric_map(
+        "raw_production_extract",
+        ("prod_dt",),
+        ("item_nm",),
+        ("item_cd",),
+        ("prod_qty",),
+        store_id="POC_010",
+        window_days=28,
+        reference_date="2026-03-06",
+    )
+
+    assert metric_map["SKU_B"]["qty"] == 0
+
+
 def test_infer_stockout_from_hourly_sales_marks_only_terminal_zero_sales_window() -> None:
     repository = ProductionRepository(engine=None)
 

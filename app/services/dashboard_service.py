@@ -46,12 +46,20 @@ class DashboardService:
         items = [self._build_notice_item(event) for event in events[:10]]
         return DashboardNoticesResponse(items=items)
 
-    async def get_alerts(self, payload: DashboardHomeRequest) -> DashboardAlertsResponse:
+    async def get_alerts(
+        self,
+        payload: DashboardHomeRequest,
+        reference_datetime: datetime | None = None,
+    ) -> DashboardAlertsResponse:
         production = await self.production_service.get_overview(
             store_id=payload.store_id,
             business_date=payload.business_date,
+            reference_datetime=reference_datetime,
         )
-        ordering_deadline = await self.ordering_service.get_deadline(store_id=payload.store_id)
+        ordering_deadline = await self.ordering_service.get_deadline(
+            store_id=payload.store_id,
+            reference_datetime=reference_datetime,
+        )
 
         low_stock_products = [
             DashboardLowStockProduct(
@@ -64,7 +72,10 @@ class DashboardService:
             if item.status in {"danger", "warning"}
         ][:12]
 
-        deadline_at = self._deadline_to_iso(ordering_deadline.get("deadline"))
+        deadline_at = self._deadline_to_iso(
+            ordering_deadline.get("deadline"),
+            base_datetime=reference_datetime,
+        )
         order_deadline = (
             DashboardOrderDeadline(deadline_at=deadline_at, cta_path="/ordering")
             if deadline_at
@@ -79,10 +90,17 @@ class DashboardService:
     async def get_summary_cards(
         self,
         payload: DashboardHomeRequest,
+        reference_datetime: datetime | None = None,
     ) -> DashboardSummaryCardsResponse:
         production = await self.production_service.get_overview(
             store_id=payload.store_id,
             business_date=payload.business_date,
+            reference_datetime=reference_datetime,
+        )
+        production_rows = await self.production_service.repository.list_items(
+            store_id=payload.store_id,
+            business_date=payload.business_date,
+            reference_datetime=reference_datetime,
         )
         ordering_summary = await self.ordering_service.get_selection_summary(
             store_id=payload.store_id,
@@ -93,10 +111,15 @@ class DashboardService:
             notification_entry=False,
             store_id=payload.store_id,
             skip_ai=True,
+            reference_datetime=reference_datetime,
         )
         sales = await self.sales_service.get_dashboard_overview(
             store_id=payload.store_id,
             business_date=payload.business_date,
+            reference_datetime=reference_datetime,
+        )
+        recommended_questions = await self.repository.get_dashboard_recommended_questions(
+            target_date=self._resolve_date(payload.business_date),
         )
 
         production_items = sorted(
@@ -106,6 +129,10 @@ class DashboardService:
                 int(item.current),
             ),
         )[:5]
+        hourly_sale_by_sku = {
+            str(row.get("sku_id") or ""): max(int(row.get("hourly_sale_qty") or 0), 0)
+            for row in production_rows
+        }
 
         deadline_label = self._build_deadline_label(ordering_options.deadline_at)
         top_option = next(
@@ -114,12 +141,12 @@ class DashboardService:
         )
 
         ordering_items: list[DashboardOrderingDeadlineItem] = []
-        for option in ordering_options.options[:3]:
-            first_item = option.items[0] if option.items else None
+        for deadline_item in ordering_options.deadline_items[:3]:
             ordering_items.append(
                 DashboardOrderingDeadlineItem(
-                    name=first_item.sku_name if first_item else option.title,
-                    deadline_time=deadline_label,
+                    name=deadline_item.sku_name,
+                    deadline_time=self._build_deadline_label(deadline_item.deadline_at)
+                    or deadline_label,
                 )
             )
 
@@ -127,16 +154,12 @@ class DashboardService:
             DashboardProductionSummaryCard(
                 title="생산 현황",
                 cta_path="/production",
-                recommended_questions=[
-                    "오늘 오후 피크타임 전에 어떤 상품을 더 만들어야 할까?",
-                    "대표 메뉴 중 지금 가장 빨리 소진될 상품은 뭐야?",
-                    "현재 재고 기준으로 1시간 뒤 위험한 상품만 골라줘",
-                ],
+                recommended_questions=recommended_questions.get("production", []),
                 top_products=[
                     DashboardProductionSummaryItem(
                         name=item.name,
                         current_stock=int(item.current),
-                        predicted_consumption_1h=max(int(item.forecast) - int(item.current), 0),
+                        predicted_consumption_1h=hourly_sale_by_sku.get(item.sku_id, 0),
                     )
                     for item in production_items
                 ],
@@ -144,11 +167,7 @@ class DashboardService:
             DashboardOrderingSummaryCard(
                 title="주문 관리",
                 cta_path="/ordering",
-                recommended_questions=[
-                    "오늘 발주 추천안은 어떤 기준으로 만든 거야?",
-                    "지금 바로 확인해야 할 발주 마감 상품만 알려줘",
-                    "지난주 같은 요일과 비교해서 더 주문해야 할 품목은 뭐야?",
-                ],
+                recommended_questions=recommended_questions.get("ordering", []),
                 ai_order_basis=top_option.basis if top_option else "최근 주문 이력",
                 ai_order_cta_path="/ordering",
                 deadline_products=ordering_items,
@@ -156,11 +175,7 @@ class DashboardService:
             DashboardSalesSummaryCard(
                 title="손익분석",
                 cta_path="/sales",
-                recommended_questions=[
-                    "오늘 매출은 지난달 같은 요일 평균보다 얼마나 높아?",
-                    "현재 시간대 매출 흐름이 좋은 편인지 알려줘",
-                    "이번달 누적 매출 기준으로 목표 달성 가능성을 보여줘",
-                ],
+                recommended_questions=recommended_questions.get("sales", []),
                 sales_overview=DashboardSalesOverview(**sales),
             ),
         ]
@@ -199,13 +214,16 @@ class DashboardService:
         )
 
     @staticmethod
-    def _deadline_to_iso(deadline: str | None) -> str | None:
+    def _deadline_to_iso(
+        deadline: str | None,
+        base_datetime: datetime | None = None,
+    ) -> str | None:
         if not deadline:
             return None
         try:
             hour_str, minute_str = deadline.split(":")
-            now = get_now()
-            target = now.replace(
+            base = base_datetime or get_now()
+            target = base.replace(
                 hour=int(hour_str),
                 minute=int(minute_str),
                 second=0,

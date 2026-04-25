@@ -116,7 +116,9 @@ def get_ordering_history(
     date_to: str | None = Query(default=None),
     item_nm: str | None = Query(default=None),
     is_auto: bool | None = Query(default=None),
-    limit: int = Query(default=30, ge=1, le=200),
+    limit: int | None = Query(default=None, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: OrderingService = Depends(get_ordering_service),
 ) -> OrderingHistoryResponse:
@@ -124,6 +126,8 @@ def get_ordering_history(
         return service.get_history(
             store_id=store_id,
             limit=limit,
+            page=page,
+            page_size=page_size,
             date_from=date_from,
             date_to=date_to,
             item_nm=item_nm,
