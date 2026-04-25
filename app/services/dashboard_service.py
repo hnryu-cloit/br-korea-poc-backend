@@ -59,7 +59,6 @@ class DashboardService:
         ordering_deadline = await self.ordering_service.get_deadline(
             store_id=payload.store_id,
             reference_datetime=reference_datetime,
-            allow_ai=False,
         )
 
         low_stock_products = [
@@ -113,7 +112,6 @@ class DashboardService:
             store_id=payload.store_id,
             skip_ai=True,
             reference_datetime=reference_datetime,
-            allow_ai_deadline=False,
         )
         sales = await self.sales_service.get_dashboard_overview(
             store_id=payload.store_id,
