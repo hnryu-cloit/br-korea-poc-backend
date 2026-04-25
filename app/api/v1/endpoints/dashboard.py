@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 
 from app.core.deps import get_dashboard_service
+from app.core.reference_datetime import parse_reference_datetime
 from app.schemas.dashboard import (
     DashboardAlertsResponse,
     DashboardHomeRequest,
@@ -27,10 +28,12 @@ async def get_dashboard_notices(
 async def get_dashboard_alerts(
     store_id: str | None = Query(default=None),
     business_date: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: DashboardService = Depends(get_dashboard_service),
 ) -> DashboardAlertsResponse:
     return await service.get_alerts(
-        DashboardHomeRequest(store_id=store_id, business_date=business_date)
+        DashboardHomeRequest(store_id=store_id, business_date=business_date),
+        reference_datetime=parse_reference_datetime(x_reference_datetime),
     )
 
 
@@ -38,8 +41,10 @@ async def get_dashboard_alerts(
 async def get_dashboard_summary_cards(
     store_id: str | None = Query(default=None),
     business_date: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: DashboardService = Depends(get_dashboard_service),
 ) -> DashboardSummaryCardsResponse:
     return await service.get_summary_cards(
-        DashboardHomeRequest(store_id=store_id, business_date=business_date)
+        DashboardHomeRequest(store_id=store_id, business_date=business_date),
+        reference_datetime=parse_reference_datetime(x_reference_datetime),
     )
