@@ -72,6 +72,11 @@ class AIServiceClient:
         business_date: str | None = None,
         business_time: str | None = None,
         system_instruction: str | None = None,
+        page_context: str | None = None,
+        card_context_key: str | None = None,
+        store_name: str | None = None,
+        user_role: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> dict | None:
         """AI 서비스에 매출 분석 쿼리를 요청합니다. 실패 시 None을 반환합니다."""
         normalized_store_id = store_id.strip() if isinstance(store_id, str) else ""
@@ -87,6 +92,16 @@ class AIServiceClient:
             body["business_time"] = business_time
         if system_instruction:
             body["system_instruction"] = system_instruction
+        if page_context:
+            body["page_context"] = page_context
+        if card_context_key:
+            body["card_context_key"] = card_context_key
+        if store_name:
+            body["store_name"] = store_name
+        if user_role:
+            body["user_role"] = user_role
+        if conversation_history:
+            body["conversation_history"] = conversation_history
         result = await self._post("/sales/query", body, timeout=90.0)
         if result is None:
             return None
@@ -166,6 +181,38 @@ class AIServiceClient:
             },
             "data_lineage": result.get("data_lineage", []),
         }
+
+    async def summarize_sales_insights(
+        self,
+        store_id: str,
+        sections: dict,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict | None:
+        """인사이트 섹션 요약을 구조화 JSON으로 요청합니다. 실패 시 None을 반환합니다."""
+        body: dict[str, object] = {"store_id": store_id, "sections": sections}
+        if date_from:
+            body["date_from"] = date_from
+        if date_to:
+            body["date_to"] = date_to
+        return await self._post("/sales/summarize/insights", body, timeout=60.0)
+
+    async def generate_campaign_narrative(
+        self,
+        store_id: str,
+        campaign_data: dict,
+    ) -> dict | None:
+        """캠페인 효과 서술을 구조화 JSON으로 요청합니다. 실패 시 None을 반환합니다."""
+        body: dict[str, object] = {
+            "store_id": store_id,
+            "campaign_code": campaign_data.get("campaign_code"),
+            "campaign_name": campaign_data.get("campaign_name"),
+            "discount_cost": campaign_data.get("discount_cost"),
+            "uplift_revenue": campaign_data.get("uplift_revenue"),
+            "roi_pct": campaign_data.get("roi_pct"),
+            "periods": campaign_data.get("periods", []),
+        }
+        return await self._post("/sales/summarize/campaign", body, timeout=60.0)
 
     async def suggest_sales_prompts(
         self,

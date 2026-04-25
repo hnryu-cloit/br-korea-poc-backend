@@ -51,12 +51,22 @@ class SalesQueryAgentTrace(BaseModel):
     overlap_candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ChatHistoryEntry(BaseModel):
+    role: str
+    text: str
+
+
 class SalesQueryRequest(BaseModel):
     prompt: str
     store_id: str = Field(..., min_length=1)
     domain: str = Field(default="sales")
     business_date: str = Field(default_factory=lambda: date.today().isoformat())
     business_time: Optional[str] = None
+    page_context: Optional[str] = None
+    card_context_key: Optional[str] = None
+    store_name: Optional[str] = None
+    user_role: Optional[str] = None
+    conversation_history: Optional[list[ChatHistoryEntry]] = None
 
 
 class SalesQueryResponse(BaseModel):

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from textwrap import dedent
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from app.repositories.sales_repository import SalesRepository
 from app.schemas.sales import (
@@ -311,6 +314,15 @@ class SalesService:
                     business_date=payload.business_date,
                     business_time=payload.business_time,
                     system_instruction=system_instruction,
+                    page_context=payload.page_context,
+                    card_context_key=payload.card_context_key,
+                    store_name=payload.store_name,
+                    user_role=payload.user_role,
+                    conversation_history=(
+                        [e.model_dump() for e in payload.conversation_history]
+                        if payload.conversation_history
+                        else None
+                    ),
                 )
 
             if ai_result is not None:
@@ -478,12 +490,6 @@ class SalesService:
         if not store_id:
             raise ValueError("store_id is required")
         payload = await self.repository.get_insights(store_id=store_id, date_from=date_from, date_to=date_to)
-        await self._apply_ai_summaries_to_insights(
-            payload=payload,
-            store_id=store_id,
-            date_from=date_from,
-            date_to=date_to,
-        )
         for key in ("peak_hours", "channel_mix", "payment_mix", "menu_mix", "campaign_seasonality"):
             section = payload.get(key)
             if not section:
@@ -630,7 +636,11 @@ class SalesService:
         date_to: str | None,
     ) -> None:
         if not self.ai_client:
-            raise RuntimeError("매출 인사이트 요약용 AI 클라이언트가 설정되지 않았습니다.")
+            logger.warning(
+                "AI client is not configured for sales insights summary (store_id=%s). Using repository summaries.",
+                store_id,
+            )
+            return
 
         sections: list[tuple[str, dict]] = []
         for key in ("peak_hours", "channel_mix", "payment_mix", "menu_mix"):
@@ -638,65 +648,52 @@ class SalesService:
             if isinstance(section, dict):
                 sections.append((key, section))
         if not sections:
-            raise LookupError("매출 인사이트 실데이터가 부족합니다.")
-
-        section_lines: list[str] = []
-        for key, section in sections:
-            metrics = section.get("metrics") or []
-            metric_line = ", ".join(
-                f"{item.get('label')}={item.get('value')}" for item in metrics if isinstance(item, dict)
+            logger.warning(
+                "No insight sections found to summarize (store_id=%s, date_from=%s, date_to=%s).",
+                store_id,
+                date_from,
+                date_to,
             )
-            actions = section.get("actions") or []
-            action_line = "; ".join(str(item) for item in actions)
-            section_lines.append(
-                f"- {key}: title={section.get('title')} | summary={section.get('summary')} | "
-                f"metrics=[{metric_line}] | actions=[{action_line}]"
-            )
+            return
 
-        prompt = dedent(
-            f"""
-            아래 매출 인사이트 섹션을 기반으로, 각 섹션 summary를 1문장씩 다시 작성하세요.
-            출력 형식:
-            peak_hours::...
-            channel_mix::...
-            payment_mix::...
-            menu_mix::...
+        sections_payload = {
+            key: {
+                "title": section.get("title") or "",
+                "summary": section.get("summary") or "",
+                "metrics": section.get("metrics") or [],
+                "actions": section.get("actions") or [],
+            }
+            for key, section in sections
+        }
 
-            규칙:
-            1) 입력 데이터 외 새로운 수치/사실 생성 금지
-            2) 섹션당 1문장, 한국어, 실무 실행 관점
-            3) 형식이 다르면 실패로 간주
-
-            점포: {store_id}
-            기간: {date_from or "미지정"} ~ {date_to or "미지정"}
-            섹션 데이터:
-            {chr(10).join(section_lines)}
-            """
-        ).strip()
-        result = await self.ai_client.query_sales(
-            prompt=prompt,
+        result = await self.ai_client.summarize_sales_insights(
             store_id=store_id,
-            domain="sales",
-            system_instruction="입력 데이터에 근거한 요약만 작성하고 지정된 포맷을 정확히 지키세요.",
+            sections=sections_payload,
+            date_from=date_from,
+            date_to=date_to,
         )
         if not result:
-            raise RuntimeError("AI 섹션 요약 생성에 실패했습니다.")
-        text = str(result.get("text") or "").strip()
-        parsed: dict[str, str] = {}
-        for line in text.splitlines():
-            if "::" not in line:
-                continue
-            key, value = line.split("::", 1)
-            key = key.strip()
-            value = value.strip()
-            if key and value:
-                parsed[key] = value
+            logger.warning(
+                "AI returned empty sales insights summary (store_id=%s, date_from=%s, date_to=%s).",
+                store_id,
+                date_from,
+                date_to,
+            )
+            return
+
         required_keys = {"peak_hours", "channel_mix", "payment_mix", "menu_mix"}
-        if not required_keys.issubset(parsed.keys()):
-            raise RuntimeError("AI 섹션 요약 포맷이 올바르지 않습니다.")
+        missing = required_keys - set(k for k in result if result.get(k))
+        if missing:
+            logger.warning(
+                "AI summary missing required keys (store_id=%s, missing=%s). Keeping repository summaries.",
+                store_id,
+                sorted(missing),
+            )
+            return
 
         for key, section in sections:
-            section["summary"] = parsed.get(key, section.get("summary", ""))
+            if result.get(key):
+                section["summary"] = result[key]
 
     async def _generate_campaign_effect_narrative(
         self,
@@ -707,53 +704,34 @@ class SalesService:
         default_actions: list[str],
     ) -> tuple[str, list[str]]:
         if not self.ai_client:
-            raise RuntimeError("캠페인 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
-
-        prompt = dedent(
-            f"""
-            아래 캠페인 실데이터를 바탕으로 summary 1문장과 action 2개를 생성하세요.
-            출력 형식:
-            summary::...
-            action1::...
-            action2::...
-
-            규칙:
-            1) 입력 수치만 사용하고 임의 생성 금지
-            2) action은 실행형 문장
-            3) 지정된 키를 모두 포함
-
-            점포: {store_id}
-            campaign_code: {payload.get("campaign_code")}
-            campaign_name: {payload.get("campaign_name")}
-            discount_cost: {payload.get("discount_cost")}
-            uplift_revenue: {payload.get("uplift_revenue")}
-            roi_pct: {payload.get("roi_pct")}
-            periods: {payload.get("periods")}
-            """
-        ).strip()
-        result = await self.ai_client.query_sales(
-            prompt=prompt,
+            logger.warning(
+                "AI client is not configured for campaign narrative (store_id=%s). Using default narrative.",
+                store_id,
+            )
+            return default_summary, default_actions
+        result = await self.ai_client.generate_campaign_narrative(
             store_id=store_id,
-            domain="sales",
-            system_instruction="입력 실데이터 근거로만 생성하고 형식을 정확히 지키세요.",
+            campaign_data=payload,
         )
         if not result:
-            raise RuntimeError("AI 캠페인 서술 생성에 실패했습니다.")
-        text = str(result.get("text") or "").strip()
-        parsed: dict[str, str] = {}
-        for line in text.splitlines():
-            if "::" not in line:
-                continue
-            key, value = line.split("::", 1)
-            key = key.strip()
-            value = value.strip()
-            if key and value:
-                parsed[key] = value
-        summary = parsed.get("summary", "").strip()
-        action1 = parsed.get("action1", "").strip()
-        action2 = parsed.get("action2", "").strip()
+            logger.warning(
+                "AI returned empty campaign narrative (store_id=%s). Using default narrative.",
+                store_id,
+            )
+            return default_summary, default_actions
+
+        summary = str(result.get("summary") or "").strip()
+        action1 = str(result.get("action1") or "").strip()
+        action2 = str(result.get("action2") or "").strip()
         if not summary or not action1 or not action2:
-            raise RuntimeError("AI 캠페인 서술 포맷이 올바르지 않습니다.")
+            logger.warning(
+                "AI campaign narrative missing fields (store_id=%s, summary=%s, action1=%s, action2=%s). Using default narrative.",
+                store_id,
+                bool(summary),
+                bool(action1),
+                bool(action2),
+            )
+            return default_summary, default_actions
         return summary, [action1, action2]
 
     def _classify_query(self, prompt: str) -> str:
