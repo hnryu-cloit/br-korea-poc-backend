@@ -1145,7 +1145,13 @@ async def test_production_service_overview_sums_chance_loss_amount_as_currency()
 
 
 class _LegacyInventoryStatusRepository:
-    def get_inventory_status(self, store_id: str | None = None, page: int = 1, page_size: int = 10):
+    def get_inventory_status(
+        self,
+        store_id: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+        status_filters: list[str] | None = None,
+    ):
         return (
             [
                 {
@@ -1175,7 +1181,13 @@ async def test_production_service_inventory_status_handles_legacy_two_tuple_resu
 
 
 class _StringMetricInventoryStatusRepository:
-    def get_inventory_status(self, store_id: str | None = None, page: int = 1, page_size: int = 10):
+    def get_inventory_status(
+        self,
+        store_id: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+        status_filters: list[str] | None = None,
+    ):
         return (
             [
                 {
@@ -1225,7 +1237,13 @@ async def test_production_service_inventory_status_uses_shelf_life_table_when_pr
 @pytest.mark.asyncio
 async def test_production_service_inventory_status_uses_precomputed_mart_fields() -> None:
     class _Repo:
-        def get_inventory_status(self, store_id: str | None = None, page: int = 1, page_size: int = 10):
+        def get_inventory_status(
+            self,
+            store_id: str | None = None,
+            page: int = 1,
+            page_size: int = 10,
+            status_filters: list[str] | None = None,
+        ):
             return (
                 [
                     {
@@ -1257,6 +1275,59 @@ async def test_production_service_inventory_status_uses_precomputed_mart_fields(
     assert response.items[0].assumed_shelf_life_days == 4
     assert response.items[0].expiry_risk_level == "중간"
     assert response.items[0].status == "여유"
+
+
+@pytest.mark.asyncio
+async def test_production_service_inventory_status_normalizes_filter_codes() -> None:
+    class _Repo:
+        def __init__(self) -> None:
+            self.captured_status_filters: list[str] | None = None
+
+        def get_inventory_status(
+            self,
+            store_id: str | None = None,
+            page: int = 1,
+            page_size: int = 10,
+            status_filters: list[str] | None = None,
+        ):
+            self.captured_status_filters = status_filters
+            return (
+                [
+                    {
+                        "item_cd": "SKU-010",
+                        "item_nm": "테스트 도넛",
+                        "stk_avg": 2,
+                        "sal_avg": 5,
+                        "ord_avg": 7,
+                        "stk_rt": -0.2,
+                        "is_stockout": 1,
+                        "stockout_hour": 14,
+                        "status": "부족",
+                    }
+                ],
+                1,
+                {
+                    "shortage_count": 1,
+                    "excess_count": 0,
+                    "normal_count": 0,
+                    "avg_stock_rate": -0.2,
+                },
+            )
+
+    repository = _Repo()
+    service = ProductionService(repository=repository)
+
+    await service.get_inventory_status(store_id="POC_010", status_filters=["shortage", "normal"])
+
+    assert repository.captured_status_filters == ["부족", "적정"]
+
+
+@pytest.mark.asyncio
+async def test_production_service_inventory_status_rejects_invalid_filter_code() -> None:
+    service = ProductionService(repository=_StringMetricInventoryStatusRepository())
+
+    with pytest.raises(ValueError, match="status must be one of"):
+        await service.get_inventory_status(store_id="POC_010", status_filters=["invalid"])
 
 
 class _MonthlyWasteRepository:
