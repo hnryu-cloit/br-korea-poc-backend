@@ -1322,6 +1322,7 @@ class ProductionService:
         lot_type: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        date: str | None = None,
     ) -> FifoLotSummaryResponse:
         """점포별 FIFO Lot 품목 요약 조회"""
         rows, total = self.repository.get_fifo_lot_summary(
@@ -1329,6 +1330,7 @@ class ProductionService:
             lot_type=lot_type,
             page=page,
             page_size=page_size,
+            date=date,
         )
 
         items = [

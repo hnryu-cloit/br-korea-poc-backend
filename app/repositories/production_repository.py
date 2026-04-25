@@ -2095,16 +2095,27 @@ class ProductionRepository(BaseRepository):
         lot_type: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        date: str | None = None,
     ) -> tuple[list[dict], int]:
         """점포별 FIFO Lot 품목 요약 조회.
 
         품목·Lot 유형별로 생산/소진/폐기/잔여 수량을 집계한다.
+        date 파라미터가 없으면 KST 오늘 날짜를 기본값으로 사용한다.
         """
         if not self.engine or not has_table(self.engine, "inventory_fifo_lots"):
             return [], 0
         try:
+            from datetime import timezone, timedelta
+            _KST = timezone(timedelta(hours=9))
+            target_date = date or datetime.now(_KST).date().isoformat()
+
             offset = max(0, (page - 1) * page_size)
-            params: dict = {"store_id": store_id, "limit": page_size, "offset": offset}
+            params: dict = {
+                "store_id": store_id,
+                "lot_date": target_date,
+                "limit": page_size,
+                "offset": offset,
+            }
             type_clause = ""
             if lot_type:
                 type_clause = "AND lot_type = :lot_type"
@@ -2119,7 +2130,9 @@ class ProductionRepository(BaseRepository):
                             FROM (
                                 SELECT DISTINCT item_nm, lot_type
                                 FROM inventory_fifo_lots
-                                WHERE masked_stor_cd = :store_id {type_clause}
+                                WHERE masked_stor_cd = :store_id
+                                  AND lot_date = :lot_date
+                                  {type_clause}
                             ) AS sub
                             """
                         ),
@@ -2144,7 +2157,9 @@ class ProductionRepository(BaseRepository):
                                 COUNT(*) FILTER (WHERE status = 'sold_out')                   AS sold_out_lot_count,
                                 COUNT(*) FILTER (WHERE status = 'expired')                    AS expired_lot_count
                             FROM inventory_fifo_lots
-                            WHERE masked_stor_cd = :store_id {type_clause}
+                            WHERE masked_stor_cd = :store_id
+                              AND lot_date = :lot_date
+                              {type_clause}
                             GROUP BY item_nm, lot_type
                             ORDER BY total_wasted_qty DESC, item_nm
                             LIMIT :limit OFFSET :offset

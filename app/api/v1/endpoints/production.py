@@ -171,6 +171,7 @@ async def get_fifo_lot_summary(
     lot_type: str | None = Query(default=None, regex="^(production|delivery)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    date: str | None = Query(default=None, description="조회 기준일 (YYYY-MM-DD). 미입력 시 KST 오늘"),
     service: ProductionService = Depends(get_production_service),
 ) -> FifoLotSummaryResponse:
     try:
@@ -179,6 +180,7 @@ async def get_fifo_lot_summary(
             lot_type=lot_type,
             page=page,
             page_size=page_size,
+            date=date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
