@@ -344,6 +344,52 @@ def test_production_inventory_status_pagination() -> None:
     assert len(payload["items"]) <= 5
 
 
+def test_production_inventory_status_passes_csv_filters() -> None:
+    class _FakeProductionService:
+        async def get_inventory_status(
+            self,
+            store_id: str | None = None,
+            page: int = 1,
+            page_size: int = 10,
+            status_filters: list[str] | None = None,
+            business_date: str | None = None,
+            reference_datetime=None,
+        ):
+            assert store_id == "POC_001"
+            assert page == 1
+            assert page_size == 5
+            assert status_filters == ["excess", "shortage", "normal"]
+            return {
+                "summary": {"store_id": store_id, "item_count": 0},
+                "highlights": [],
+                "actions": [],
+                "evidence": {},
+                "items": [],
+                "pagination": {
+                    "page": 1,
+                    "page_size": 5,
+                    "total_items": 0,
+                    "total_pages": 0,
+                },
+                "explainability": None,
+            }
+
+    app.dependency_overrides[get_production_service] = lambda: _FakeProductionService()
+    try:
+        response = client.get(
+            "/api/production/inventory-status?page=1&page_size=5&store_id=POC_001&status=excess,shortage,normal"
+        )
+    finally:
+        app.dependency_overrides.pop(get_production_service, None)
+
+    assert response.status_code == 200
+
+
+def test_production_inventory_status_rejects_invalid_filter() -> None:
+    response = client.get("/api/production/inventory-status?store_id=POC_001&status=foo")
+    assert response.status_code == 422
+
+
 def test_production_waste_summary_pagination() -> None:
     class _FakeWasteSummaryService:
         async def get_waste_summary(

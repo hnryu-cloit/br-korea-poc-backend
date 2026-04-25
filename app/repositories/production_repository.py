@@ -700,7 +700,11 @@ class ProductionRepository(BaseRepository):
         return list(stockout_map.values())
 
     def _get_inventory_status_fallback(
-        self, store_id: str, page: int, page_size: int
+        self,
+        store_id: str,
+        page: int,
+        page_size: int,
+        status_filters: list[str] | None = None,
     ) -> tuple[list[dict], int, dict]:
         offset = max(0, (page - 1) * page_size)
         inventory_rows = [
@@ -709,11 +713,7 @@ class ProductionRepository(BaseRepository):
             if int(row.get("dr") or 0) == 1
         ]
         if not inventory_rows:
-            return self._get_inventory_status_fallback(
-                store_id=store_id,
-                page=page,
-                page_size=page_size,
-            )
+            return [], 0, {}
 
         _, hourly_rows = self._fetch_latest_hourly_sales_rows(store_id=store_id)
         operating_hours = self._fetch_store_operating_hours(store_id=store_id)
@@ -733,9 +733,28 @@ class ProductionRepository(BaseRepository):
             metric_row["stockout_hour"] = stockout_row.get("stockout_hour")
             rows.append(metric_row)
 
+        if status_filters:
+            rows = [row for row in rows if str(row.get("status")) in status_filters]
+
         rows.sort(key=lambda item: (str(item.get("item_cd") or ""), str(item.get("item_nm") or "")))
         summary_metrics = self._summarize_inventory_rows(rows)
         return rows[offset : offset + page_size], len(rows), summary_metrics
+
+    @staticmethod
+    def _build_inventory_status_filter_clause(
+        status_filters: list[str] | None,
+        column_name: str = "status",
+    ) -> tuple[str, dict[str, str]]:
+        if not status_filters:
+            return "", {}
+
+        filter_params = {
+            f"status_filter_{index}": value for index, value in enumerate(status_filters)
+        }
+        filter_clause = " AND (" + " OR ".join(
+            f"{column_name} = :status_filter_{index}" for index, _ in enumerate(status_filters)
+        ) + ")"
+        return filter_clause, filter_params
 
     @staticmethod
     def _clamp_recommended_qty(current: int, forecast: int, candidate: int) -> int:
@@ -1767,6 +1786,7 @@ class ProductionRepository(BaseRepository):
         store_id: str | None = None,
         page: int = 1,
         page_size: int = 10,
+        status_filters: list[str] | None = None,
         business_date: str | None = None,
         reference_datetime: datetime | None = None,
     ) -> tuple[list[dict], int, dict]:
@@ -1779,6 +1799,9 @@ class ProductionRepository(BaseRepository):
                 effective_business_date = reference_datetime.strftime("%Y-%m-%d")
             normalized_business_date = (
                 effective_business_date.replace("-", "") if effective_business_date else None
+            )
+            status_filter_clause, status_filter_params = self._build_inventory_status_filter_clause(
+                status_filters=status_filters
             )
             with self.engine.connect() as conn:
                 if self._use_poc_010_production_inventory_mart(store_id):
@@ -1809,19 +1832,24 @@ class ProductionRepository(BaseRepository):
                         total_items = int(
                             conn.execute(
                                 text(
-                                    """
+                                    f"""
                                     SELECT COUNT(*)
                                     FROM mart_poc_010_production_inventory_status
                                     WHERE store_id = :store_id
                                       AND business_date = :business_date
+                                      {status_filter_clause}
                                     """
                                 ),
-                                {"store_id": store_id, "business_date": latest_business_date},
+                                {
+                                    "store_id": store_id,
+                                    "business_date": latest_business_date,
+                                    **status_filter_params,
+                                },
                             ).scalar_one()
                         )
                         summary_row = conn.execute(
                             text(
-                                """
+                                f"""
                                 SELECT
                                     COUNT(*) FILTER (WHERE status = '부족') AS shortage_count,
                                     COUNT(*) FILTER (WHERE status = '여유') AS excess_count,
@@ -1830,14 +1858,19 @@ class ProductionRepository(BaseRepository):
                                 FROM mart_poc_010_production_inventory_status
                                 WHERE store_id = :store_id
                                   AND business_date = :business_date
+                                  {status_filter_clause}
                                 """
                             ),
-                            {"store_id": store_id, "business_date": latest_business_date},
+                            {
+                                "store_id": store_id,
+                                "business_date": latest_business_date,
+                                **status_filter_params,
+                            },
                         ).mappings().one()
                         rows = (
                             conn.execute(
                                 text(
-                                    """
+                                    f"""
                                     SELECT
                                         item_cd,
                                         item_nm,
@@ -1853,6 +1886,7 @@ class ProductionRepository(BaseRepository):
                                     FROM mart_poc_010_production_inventory_status
                                     WHERE store_id = :store_id
                                       AND business_date = :business_date
+                                      {status_filter_clause}
                                     ORDER BY stock_rate ASC, item_nm ASC
                                     LIMIT :page_size OFFSET :offset
                                     """
@@ -1862,68 +1896,26 @@ class ProductionRepository(BaseRepository):
                                     "business_date": latest_business_date,
                                     "page_size": page_size,
                                     "offset": offset,
+                                    **status_filter_params,
                                 },
                             )
                             .mappings()
                             .all()
                         )
                         return [dict(r) for r in rows], total_items, dict(summary_row)
-
-                total_items = int(
-                    conn.execute(
-                        text(
-                            """
-                            SELECT COUNT(DISTINCT item_cd) AS total_items
-                            FROM core_stock_rate
-                            WHERE masked_stor_cd = :store_id
-                              AND (:business_date IS NULL OR prc_dt <= :business_date)
-                            """
-                        ),
-                        {"store_id": store_id, "business_date": normalized_business_date},
-                    ).scalar_one()
-                )
                 summary_row = conn.execute(
                     text(
-                        """
+                        f"""
                         WITH latest AS (
-                            SELECT DISTINCT ON (item_cd)
-                                stk_rt, is_stockout
-                            FROM core_stock_rate
-                            WHERE masked_stor_cd = :store_id
-                              AND (:business_date IS NULL OR prc_dt <= :business_date)
-                            ORDER BY item_cd, prc_dt DESC
-                        )
-                        SELECT
-                            COUNT(*) FILTER (WHERE stk_rt < 0 OR is_stockout)  AS shortage_count,
-                            COUNT(*) FILTER (WHERE stk_rt >= 0.35 AND NOT is_stockout) AS excess_count,
-                            COUNT(*) FILTER (WHERE stk_rt >= 0 AND stk_rt < 0.35 AND NOT is_stockout) AS normal_count,
-                            AVG(stk_rt) AS avg_stock_rate
-                        FROM latest
-                        """
-                    ),
-                    {"store_id": store_id, "business_date": normalized_business_date},
-                ).mappings().one()
-                summary_metrics = dict(summary_row)
-                if total_items == 0:
-                    return self._get_inventory_status_fallback(
-                        store_id=store_id,
-                        page=page,
-                        page_size=page_size,
-                    )
-
-                rows = (
-                    conn.execute(
-                        text(
-                            """
                             SELECT DISTINCT ON (sr.item_cd)
                                 sr.item_cd,
-                                sr.item_nm,
-                                sr.stk_avg,
-                                sr.sal_avg,
-                                sr.ord_avg,
                                 sr.stk_rt,
-                                sr.is_stockout,
-                                st.stockout_hour
+                                COALESCE(st.is_stockout, FALSE) AS is_stockout,
+                                CASE
+                                    WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
+                                    WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
+                                    ELSE '적정'
+                                END AS status
                             FROM core_stock_rate sr
                             LEFT JOIN core_stockout_time st
                                 ON sr.masked_stor_cd = st.masked_stor_cd
@@ -1932,6 +1924,122 @@ class ProductionRepository(BaseRepository):
                             WHERE sr.masked_stor_cd = :store_id
                               AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
                             ORDER BY sr.item_cd, sr.prc_dt DESC
+                        ),
+                        filtered AS (
+                            SELECT *
+                            FROM latest
+                            WHERE 1 = 1
+                            {status_filter_clause}
+                        )
+                        SELECT
+                            COUNT(*) FILTER (WHERE status = '부족') AS shortage_count,
+                            COUNT(*) FILTER (WHERE status = '여유') AS excess_count,
+                            COUNT(*) FILTER (WHERE status = '적정') AS normal_count,
+                            AVG(stk_rt) AS avg_stock_rate
+                        FROM filtered
+                        """
+                    ),
+                    {
+                        "store_id": store_id,
+                        "business_date": normalized_business_date,
+                        **status_filter_params,
+                    },
+                ).mappings().one()
+                summary_metrics = dict(summary_row)
+                total_items = int(
+                    conn.execute(
+                        text(
+                            f"""
+                            WITH latest AS (
+                                SELECT DISTINCT ON (sr.item_cd)
+                                    sr.item_cd,
+                                    sr.stk_rt,
+                                    COALESCE(st.is_stockout, FALSE) AS is_stockout,
+                                    CASE
+                                        WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
+                                        WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
+                                        ELSE '적정'
+                                    END AS status
+                                FROM core_stock_rate sr
+                                LEFT JOIN core_stockout_time st
+                                    ON sr.masked_stor_cd = st.masked_stor_cd
+                                   AND sr.item_cd = st.item_cd
+                                   AND sr.prc_dt = st.prc_dt
+                                WHERE sr.masked_stor_cd = :store_id
+                                  AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
+                                ORDER BY sr.item_cd, sr.prc_dt DESC
+                            ),
+                            filtered AS (
+                                SELECT *
+                                FROM latest
+                                WHERE 1 = 1
+                                {status_filter_clause}
+                            )
+                            SELECT COUNT(*) AS total_items
+                            FROM filtered
+                            """
+                        ),
+                        {
+                            "store_id": store_id,
+                            "business_date": normalized_business_date,
+                            **status_filter_params,
+                        },
+                    ).scalar_one()
+                )
+                if total_items == 0:
+                    return self._get_inventory_status_fallback(
+                        store_id=store_id,
+                        page=page,
+                        page_size=page_size,
+                        status_filters=status_filters,
+                    )
+
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
+                            WITH latest AS (
+                                SELECT DISTINCT ON (sr.item_cd)
+                                    sr.item_cd,
+                                    sr.item_nm,
+                                    sr.stk_avg,
+                                    sr.sal_avg,
+                                    sr.ord_avg,
+                                    sr.stk_rt,
+                                    COALESCE(st.is_stockout, FALSE) AS is_stockout,
+                                    st.stockout_hour,
+                                    CASE
+                                        WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
+                                        WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
+                                        ELSE '적정'
+                                    END AS status
+                                FROM core_stock_rate sr
+                                LEFT JOIN core_stockout_time st
+                                    ON sr.masked_stor_cd = st.masked_stor_cd
+                                   AND sr.item_cd = st.item_cd
+                                   AND sr.prc_dt = st.prc_dt
+                                WHERE sr.masked_stor_cd = :store_id
+                                  AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
+                                ORDER BY sr.item_cd, sr.prc_dt DESC
+                            ),
+                            filtered AS (
+                                SELECT *
+                                FROM latest
+                                WHERE 1 = 1
+                                {status_filter_clause}
+                            )
+                            SELECT
+                                item_cd,
+                                item_nm,
+                                stk_avg,
+                                sal_avg,
+                                ord_avg,
+                                stk_rt,
+                                is_stockout,
+                                stockout_hour,
+                                status
+                            FROM filtered
+                            ORDER BY stk_rt ASC, item_nm ASC
                             LIMIT :page_size OFFSET :offset
                             """
                         ),
@@ -1940,6 +2048,7 @@ class ProductionRepository(BaseRepository):
                             "page_size": page_size,
                             "offset": offset,
                             "business_date": normalized_business_date,
+                            **status_filter_params,
                         },
                     )
                     .mappings()
@@ -1952,6 +2061,7 @@ class ProductionRepository(BaseRepository):
                 store_id=store_id,
                 page=page,
                 page_size=page_size,
+                status_filters=status_filters,
             )
 
     async def get_registration_summary(

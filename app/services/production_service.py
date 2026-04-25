@@ -53,6 +53,11 @@ logger = logging.getLogger(__name__)
 
 
 class ProductionService:
+    INVENTORY_STATUS_FILTER_CODE_TO_LABEL = {
+        "excess": "여유",
+        "shortage": "부족",
+        "normal": "적정",
+    }
     _menu_image_index: dict[str, str] | None = None
     _response_cache = TTLMemoryCache(max_size=128)
     _waste_ttl_sec = 300
@@ -73,6 +78,36 @@ class ProductionService:
     def _cache_key(prefix: str, **kwargs: object) -> str:
         ordered = "|".join(f"{key}={kwargs[key]}" for key in sorted(kwargs))
         return f"{prefix}|{ordered}"
+
+    @classmethod
+    def _normalize_inventory_status_filters(
+        cls,
+        status_filters: list[str] | None,
+    ) -> tuple[list[str] | None, str]:
+        if status_filters is None:
+            return None, "all"
+
+        normalized_codes: list[str] = []
+        normalized_labels: list[str] = []
+        seen_codes: set[str] = set()
+
+        for raw_code in status_filters:
+            code = str(raw_code).strip().lower()
+            if not code:
+                raise ValueError("status must be a comma-separated list of non-empty values")
+            if code not in cls.INVENTORY_STATUS_FILTER_CODE_TO_LABEL:
+                allowed = ",".join(cls.INVENTORY_STATUS_FILTER_CODE_TO_LABEL.keys())
+                raise ValueError(f"status must be one of: {allowed}")
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            normalized_codes.append(code)
+            normalized_labels.append(cls.INVENTORY_STATUS_FILTER_CODE_TO_LABEL[code])
+
+        if not normalized_codes:
+            raise ValueError("status must include at least one value")
+
+        return normalized_labels, ",".join(normalized_codes)
 
     def _cached_payload(self, key: str) -> dict[str, Any] | None:
         cached = self._response_cache.get(key)
@@ -955,6 +990,7 @@ class ProductionService:
         store_id: str | None = None,
         page: int = 1,
         page_size: int = 10,
+        status_filters: list[str] | None = None,
         business_date: str | None = None,
         reference_datetime: datetime | None = None,
     ) -> InventoryStatusResponse:
@@ -962,12 +998,16 @@ class ProductionService:
             raise ValueError("store_id is required")
         page = max(1, page)
         page_size = max(1, min(page_size, 100))
+        normalized_status_filters, normalized_status_filter_key = (
+            self._normalize_inventory_status_filters(status_filters)
+        )
 
         cache_key = self._cache_key(
             "inventory-status",
             store_id=store_id,
             page=page,
             page_size=page_size,
+            status=normalized_status_filter_key,
         )
         cached_payload = self._cached_payload(cache_key)
         if cached_payload:
@@ -977,6 +1017,7 @@ class ProductionService:
             store_id=store_id,
             page=page,
             page_size=page_size,
+            status_filters=normalized_status_filters,
             business_date=business_date,
             reference_datetime=reference_datetime,
         )
