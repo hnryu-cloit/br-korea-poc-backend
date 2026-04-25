@@ -49,6 +49,11 @@ class CustomerProfileResponse(BaseModel):
     telecom_discounts: list[TelecomDiscountItem]
 
 
+class MarketScopeOptionsResponse(BaseModel):
+    gu_options: list[str]
+    dong_options_by_gu: dict[str, list[str]]
+
+
 class SalesTrendPoint(BaseModel):
     day: int
     current_period: float | None = None

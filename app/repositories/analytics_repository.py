@@ -20,12 +20,60 @@ logger = logging.getLogger(__name__)
 
 _SMALLSHOP_RADIUS_URL = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius"
 _DEFAULT_CENTER = (126.9780, 37.5665)  # 서울시청 (lon, lat)
+_DEFAULT_AREA_CODE = "11"
+_SEOUL_GU_AREA_CODE: dict[str, str] = {
+    "강남구": "1168",
+    "강동구": "1174",
+    "강북구": "1130",
+    "강서구": "1150",
+    "관악구": "1162",
+    "광진구": "1121",
+    "구로구": "1153",
+    "금천구": "1154",
+    "노원구": "1135",
+    "도봉구": "1132",
+    "동대문구": "1123",
+    "동작구": "1159",
+    "마포구": "1144",
+    "서대문구": "1141",
+    "서초구": "1165",
+    "성동구": "1120",
+    "성북구": "1129",
+    "송파구": "1171",
+    "양천구": "1147",
+    "영등포구": "1156",
+    "용산구": "1117",
+    "은평구": "1138",
+    "종로구": "1111",
+    "중구": "1114",
+    "중랑구": "1126",
+}
 _GU_CENTER: dict[str, tuple[float, float]] = {
     "강남구": (127.0473, 37.5172),
+    "강동구": (127.1238, 37.5301),
+    "강북구": (127.0256, 37.6397),
+    "강서구": (126.8495, 37.5509),
+    "관악구": (126.9515, 37.4782),
     "광진구": (127.0824, 37.5385),
+    "구로구": (126.8875, 37.4954),
+    "금천구": (126.8955, 37.4569),
+    "노원구": (127.0564, 37.6542),
+    "도봉구": (127.0470, 37.6688),
+    "동대문구": (127.0390, 37.5744),
+    "동작구": (126.9394, 37.5124),
     "마포구": (126.9015, 37.5663),
+    "서대문구": (126.9368, 37.5791),
+    "서초구": (127.0324, 37.4837),
+    "성동구": (127.0369, 37.5634),
+    "성북구": (127.0168, 37.5894),
     "송파구": (127.1059, 37.5145),
+    "양천구": (126.8563, 37.5170),
     "영등포구": (126.8962, 37.5264),
+    "용산구": (126.9902, 37.5384),
+    "은평구": (126.9291, 37.6028),
+    "종로구": (126.9790, 37.5729),
+    "중구": (126.9976, 37.5638),
+    "중랑구": (127.0927, 37.6066),
 }
 _DONG_CENTER: dict[str, tuple[float, float]] = {
     "역삼동": (127.0365, 37.5006),
@@ -941,6 +989,79 @@ class AnalyticsRepository:
             logger.warning("get_customer_profile 통신사 할인 쿼리 실패: error=%s", exc)
 
         return {"customer_segments": customer_segments, "telecom_discounts": telecom_discounts}
+
+    def get_market_scope_options(self) -> dict:
+        gu_options = ["전체", *sorted(_SEOUL_GU_AREA_CODE.keys())]
+        dong_options_by_gu: dict[str, list[str]] = {"전체": ["전체"]}
+        for gu in gu_options:
+            if gu == "전체":
+                continue
+            dong_options_by_gu[gu] = ["전체"]
+
+        if not self.engine:
+            return {
+                "gu_options": gu_options,
+                "dong_options_by_gu": dong_options_by_gu,
+            }
+
+        table_names = ("raw_seoul_market_sales", "raw_seoul_market_floating_population")
+        area_names: set[str] = set()
+        try:
+            with self.engine.connect() as conn:
+                for table_name in table_names:
+                    if not has_table(self.engine, table_name):
+                        continue
+                    rows = (
+                        conn.execute(
+                            text(
+                                f"""
+                                SELECT DISTINCT area_name
+                                FROM {table_name}
+                                WHERE area_name IS NOT NULL
+                                  AND TRIM(area_name) <> ''
+                                LIMIT 20000
+                                """
+                            )
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    for row in rows:
+                        area = str(row.get("area_name") or "").strip()
+                        if area:
+                            area_names.add(area)
+        except SQLAlchemyError as exc:
+            logger.warning("market scope options 조회 실패: %s", exc)
+            return {
+                "gu_options": gu_options,
+                "dong_options_by_gu": dong_options_by_gu,
+            }
+
+        discovered_dongs: dict[str, set[str]] = {gu: set() for gu in gu_options if gu != "전체"}
+        for area_name in area_names:
+            tokens = [token for token in area_name.replace("/", " ").split() if token]
+            gu = next((token for token in tokens if token.endswith("구")), None)
+            dong = next((token for token in tokens if token.endswith("동")), None)
+            if not gu:
+                continue
+            if gu not in discovered_dongs:
+                discovered_dongs[gu] = set()
+            if dong:
+                discovered_dongs[gu].add(dong)
+
+        merged_gu_set = set(gu_options)
+        merged_gu_set.update(discovered_dongs.keys())
+        gu_options = ["전체", *sorted(gu for gu in merged_gu_set if gu != "전체")]
+        for gu in gu_options:
+            if gu == "전체":
+                continue
+            dongs = sorted(discovered_dongs.get(gu, set()))
+            dong_options_by_gu[gu] = ["전체", *dongs] if dongs else ["전체"]
+
+        return {
+            "gu_options": gu_options,
+            "dong_options_by_gu": dong_options_by_gu,
+        }
 
     def get_sales_trend(
         self,
@@ -2370,6 +2491,12 @@ class AnalyticsRepository:
         return _DEFAULT_CENTER
 
     @staticmethod
+    def _resolve_sbiz_area_code(gu: str | None) -> str:
+        if not gu:
+            return _DEFAULT_AREA_CODE
+        return _SEOUL_GU_AREA_CODE.get(gu, _DEFAULT_AREA_CODE)
+
+    @staticmethod
     def _looks_like_target_industry(item: dict, industry: str | None) -> bool:
         inds_text = " ".join(
             [
@@ -2568,17 +2695,7 @@ class AnalyticsRepository:
         if not cert_key:
             return None
 
-        area_cd = "11"
-        if gu == "광진구":
-            area_cd = "1121"
-        elif gu == "마포구":
-            area_cd = "1144"
-        elif gu == "강남구":
-            area_cd = "1168"
-        elif gu == "송파구":
-            area_cd = "1171"
-        elif gu == "영등포구":
-            area_cd = "1156"
+        area_cd = self._resolve_sbiz_area_code(gu)
 
         params = {
             "sprTypeNo": "1",
@@ -2604,17 +2721,7 @@ class AnalyticsRepository:
         if not cert_key:
             return None
 
-        area_cd = "11"
-        if gu == "광진구":
-            area_cd = "1121"
-        elif gu == "마포구":
-            area_cd = "1144"
-        elif gu == "강남구":
-            area_cd = "1168"
-        elif gu == "송파구":
-            area_cd = "1171"
-        elif gu == "영등포구":
-            area_cd = "1156"
+        area_cd = self._resolve_sbiz_area_code(gu)
 
         params = {
             "sprTypeNo": "1",
@@ -2655,17 +2762,7 @@ class AnalyticsRepository:
         if not cert_key:
             return None
 
-        area_cd = "11"
-        if gu == "광진구":
-            area_cd = "1121"
-        elif gu == "마포구":
-            area_cd = "1144"
-        elif gu == "강남구":
-            area_cd = "1168"
-        elif gu == "송파구":
-            area_cd = "1171"
-        elif gu == "영등포구":
-            area_cd = "1156"
+        area_cd = self._resolve_sbiz_area_code(gu)
 
         params = {
             "sprTypeNo": "1",
@@ -2703,17 +2800,7 @@ class AnalyticsRepository:
         if not cert_key:
             return None, None
 
-        area_cd = "11"
-        if gu == "광진구":
-            area_cd = "1121"
-        elif gu == "마포구":
-            area_cd = "1144"
-        elif gu == "강남구":
-            area_cd = "1168"
-        elif gu == "송파구":
-            area_cd = "1171"
-        elif gu == "영등포구":
-            area_cd = "1156"
+        area_cd = self._resolve_sbiz_area_code(gu)
 
         params = {
             "sprTypeNo": "1",
@@ -2809,17 +2896,7 @@ class AnalyticsRepository:
             return [], None
 
         center_lon, center_lat = self._resolve_scope_center(gu=gu, dong=dong)
-        area_cd = "11"
-        if gu == "광진구":
-            area_cd = "1121"
-        elif gu == "마포구":
-            area_cd = "1144"
-        elif gu == "강남구":
-            area_cd = "1168"
-        elif gu == "송파구":
-            area_cd = "1171"
-        elif gu == "영등포구":
-            area_cd = "1156"
+        area_cd = self._resolve_sbiz_area_code(gu)
 
         params = {
             "sprTypeNo": "1",

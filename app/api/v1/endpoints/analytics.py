@@ -7,14 +7,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
 
 from app.core.auth import require_roles
-from app.core.reference_datetime import resolve_date_range_by_reference
 from app.core.deps import get_analytics_service
+from app.core.reference_datetime import resolve_date_range_by_reference
 from app.schemas.analytics import (
     AnalyticsMetricsResponse,
     CustomerProfileResponse,
     HQMarketInsightsResponse,
-    MarketIntelligenceResponse,
     MarketInsightsResponse,
+    MarketIntelligenceResponse,
+    MarketScopeOptionsResponse,
     SalesTrendResponse,
     StoreProfileResponse,
     WeatherImpactResponse,
@@ -23,6 +24,21 @@ from app.services.analytics_service import AnalyticsService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 _HQ_ROLES = ("hq_admin", "hq_operator")
+
+
+def _resolve_reference_range_or_422(
+    x_reference_datetime: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str | None, str | None]:
+    try:
+        return resolve_date_range_by_reference(x_reference_datetime, date_from, date_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _raise_runtime_500(message: str, exc: RuntimeError) -> None:
+    raise HTTPException(status_code=500, detail=f"{message}: {str(exc)}") from exc
 
 
 @router.get("/metrics", response_model=AnalyticsMetricsResponse)
@@ -34,7 +50,7 @@ async def get_analytics_metrics(
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> AnalyticsMetricsResponse:
     try:
-        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+        resolved_date_from, resolved_date_to = _resolve_reference_range_or_422(
             x_reference_datetime, date_from, date_to
         )
         return await service.get_metrics(
@@ -42,10 +58,8 @@ async def get_analytics_metrics(
             date_from=resolved_date_from,
             date_to=resolved_date_to,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=f"매출 지표 조회 오류: {str(exc)}") from exc
+        _raise_runtime_500("매출 지표 조회 오류", exc)
 
 
 @router.get("/store-profile", response_model=StoreProfileResponse)
@@ -67,6 +81,13 @@ def get_customer_profile(
     return service.get_customer_profile(store_id=store_id)
 
 
+@router.get("/market-scope-options", response_model=MarketScopeOptionsResponse)
+def get_market_scope_options(
+    service: AnalyticsService = Depends(get_analytics_service),
+) -> MarketScopeOptionsResponse:
+    return service.get_market_scope_options()
+
+
 @router.get("/sales-trend", response_model=SalesTrendResponse)
 def get_sales_trend(
     store_id: str | None = Query(default=None),
@@ -77,7 +98,7 @@ def get_sales_trend(
     service: AnalyticsService = Depends(get_analytics_service),
 ) -> SalesTrendResponse:
     try:
-        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+        resolved_date_from, resolved_date_to = _resolve_reference_range_or_422(
             x_reference_datetime, date_from, date_to
         )
         return service.get_sales_trend(
@@ -86,10 +107,8 @@ def get_sales_trend(
             date_to=resolved_date_to,
             compare_mode=compare_mode,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=f"매출 추이 조회 오류: {str(exc)}") from exc
+        _raise_runtime_500("매출 추이 조회 오류", exc)
 
 
 @router.get("/market-intelligence", response_model=MarketIntelligenceResponse)

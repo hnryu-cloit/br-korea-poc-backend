@@ -15,6 +15,7 @@ from app.schemas.analytics import (
     CompetitorPaymentDemographic,
     CompetitorTrendPoint,
     CustomerProfileResponse,
+    MarketScopeOptionsResponse,
     CustomerSegmentItem,
     DowPoint,
     EstimatedSalesSummary,
@@ -128,6 +129,16 @@ class AnalyticsService:
         return CustomerProfileResponse(
             customer_segments=[CustomerSegmentItem(**s) for s in data["customer_segments"]],
             telecom_discounts=[TelecomDiscountItem(**t) for t in data["telecom_discounts"]],
+        )
+
+    def get_market_scope_options(self) -> MarketScopeOptionsResponse:
+        data = self.repository.get_market_scope_options()
+        return MarketScopeOptionsResponse(
+            gu_options=[str(item) for item in data.get("gu_options", [])],
+            dong_options_by_gu={
+                str(gu): [str(dong) for dong in dongs]
+                for gu, dongs in data.get("dong_options_by_gu", {}).items()
+            },
         )
 
     def get_sales_trend(
