@@ -131,6 +131,8 @@ class SalesSummaryResponse(BaseModel):
     top_products: list[SalesProductItem] = Field(default_factory=list)
     avg_margin_rate: float = 0.0
     avg_net_profit_per_item: float = 0.0
+    avg_ticket_size: float = 0.0
+    avg_ticket_index: float = 0.0
     estimated_today_profit: float = 0.0
     explainability: ExplainabilityPayload | None = None
 

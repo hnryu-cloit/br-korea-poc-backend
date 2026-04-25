@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.config.store_mart_mapping import get_store_mart_table
 from app.core.utils import get_now
 from app.infrastructure.db.utils import has_table
 from app.repositories.sales.campaign_repository import CampaignRepositoryMixin
@@ -41,6 +42,8 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "top_products": [],
             "avg_margin_rate": 0.0,
             "avg_net_profit_per_item": 0.0,
+            "avg_ticket_size": 0.0,
+            "avg_ticket_index": 0.0,
             "estimated_today_profit": 0.0,
         }
 
@@ -50,37 +53,47 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
         net_col = "net_sale_amt"
         qty_col = "sale_qty"
 
+        normalized_date_from = date_from.replace("-", "") if date_from else None
+        normalized_date_to = date_to.replace("-", "") if date_to else None
+
         store_filter = ""
         params: dict = {}
         if store_id:
             store_filter = "AND masked_stor_cd = :store_id"
             params["store_id"] = store_id
-        if date_from:
+        if normalized_date_from:
             store_filter += " AND sale_dt >= :date_from"
-            params["date_from"] = date_from.replace("-", "")
-        if date_to:
+            params["date_from"] = normalized_date_from
+        if normalized_date_to:
             store_filter += " AND sale_dt <= :date_to"
-            params["date_to"] = date_to.replace("-", "")
+            params["date_to"] = normalized_date_to
 
         try:
             with self.engine.connect() as connection:
-                # 2. 최신 데이터 날짜 조회
-                max_dt_row = (
+                # 2. 필터 내 최소/최대 날짜 조회
+                date_bounds_row = (
                     connection.execute(
                         text(
-                            f"SELECT MAX(sale_dt) AS max_dt FROM {item_relation} WHERE sale_dt IS NOT NULL {store_filter}"
+                            f"""
+                            SELECT
+                                MIN(sale_dt) AS min_dt,
+                                MAX(sale_dt) AS max_dt
+                            FROM {item_relation}
+                            WHERE sale_dt IS NOT NULL {store_filter}
+                            """
                         ),
                         params,
                     )
                     .mappings()
                     .first()
                 )
-                if not max_dt_row or not max_dt_row["max_dt"]:
+                if not date_bounds_row or not date_bounds_row["max_dt"]:
                     raise LookupError("매출 요약 데이터가 없습니다.")
-                max_dt = str(max_dt_row["max_dt"])
+                max_dt = str(date_bounds_row["max_dt"])
                 result["data_date"] = max_dt
 
                 # 3. 오늘(최신일) 매출 집계
+                analytics_daily_table = get_store_mart_table(store_id, "analytics", "daily_table")
                 today_row = (
                     connection.execute(
                         text(
@@ -100,27 +113,70 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 if today_row:
                     result["today_revenue"] = float(today_row["revenue"] or 0)
                     result["today_net_revenue"] = float(today_row["net_revenue"] or 0)
+                    bill_count = 0.0
+                    if analytics_daily_table and has_table(self.engine, analytics_daily_table):
+                        ticket_row = (
+                            connection.execute(
+                                text(
+                                    f"""
+                                    SELECT COALESCE(total_order_count, 0) AS total_order_count
+                                    FROM {analytics_daily_table}
+                                    WHERE sale_dt = :max_dt
+                                    """
+                                ),
+                                {"max_dt": max_dt},
+                            )
+                            .mappings()
+                            .first()
+                        )
+                        if ticket_row:
+                            bill_count = float(ticket_row["total_order_count"] or 0)
+                    if bill_count <= 0 and has_table(self.engine, "core_channel_sales"):
+                        channel_row = (
+                            connection.execute(
+                                text(
+                                    """
+                                    SELECT COALESCE(SUM(COALESCE(NULLIF(TRIM(CAST(ord_cnt AS TEXT)), '')::numeric, 0)), 0) AS total_order_count
+                                    FROM core_channel_sales
+                                    WHERE masked_stor_cd = :store_id
+                                      AND sale_dt = :max_dt
+                                    """
+                                ),
+                                {"store_id": store_id, "max_dt": max_dt},
+                            )
+                            .mappings()
+                            .first()
+                        )
+                        if channel_row:
+                            bill_count = float(channel_row["total_order_count"] or 0)
+                    if bill_count > 0:
+                        result["avg_ticket_size"] = round(result["today_revenue"] / bill_count, 2)
+                        ticket_distribution = self._get_avg_ticket_distribution(
+                            connection=connection,
+                            store_id=store_id,
+                            target_date=max_dt,
+                        )
+                        result["avg_ticket_index"] = round(
+                            self._normalize_index_from_distribution(
+                                current_value=result["avg_ticket_size"],
+                                values=ticket_distribution,
+                            ),
+                            1,
+                        )
 
-                # 4. 최근 7개 영업일 데이터 집계
+                # 4. 선택 기간 전체 일자별 집계
                 weekly_rows = (
                     connection.execute(
                         text(
                             f"""
-                        WITH recent_dates AS (
-                            SELECT DISTINCT sale_dt
-                            FROM {item_relation}
-                            WHERE sale_dt IS NOT NULL {store_filter}
-                            ORDER BY sale_dt DESC
-                            LIMIT 7
-                        )
                         SELECT
-                            d.sale_dt,
-                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(t.{amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
-                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(t.{net_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS net_revenue
-                        FROM recent_dates d
-                        JOIN {item_relation} t ON t.sale_dt = d.sale_dt {store_filter.replace("AND ", "AND t.")}
-                        GROUP BY d.sale_dt
-                        ORDER BY d.sale_dt ASC
+                            sale_dt,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({net_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS net_revenue
+                        FROM {item_relation}
+                        WHERE sale_dt IS NOT NULL {store_filter}
+                        GROUP BY sale_dt
+                        ORDER BY sale_dt ASC
                         """
                         ),
                         params,
@@ -151,7 +207,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                         WHERE sale_dt IS NOT NULL {store_filter}
                         GROUP BY item_nm
                         ORDER BY sales DESC, qty DESC
-                        LIMIT 5
+                        LIMIT 6
                         """
                         ),
                         params,
@@ -169,42 +225,31 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 ]
 
                 # 6. 원가 데이터 기반 평균 마진율·순이익 계산 (raw_production_extract)
-                if has_table(self.engine, "raw_production_extract"):
-                    cost_filter = ""
-                    cost_params: dict = {}
-                    if store_id:
-                        cost_filter = "AND masked_stor_cd = :store_id"
-                        cost_params["store_id"] = store_id
-                    cost_row = (
-                        connection.execute(
-                            text(
-                                f"""
-                            SELECT
-                                AVG(
-                                    (CAST(sale_prc AS NUMERIC) - CAST(item_cost AS NUMERIC))
-                                    / NULLIF(CAST(sale_prc AS NUMERIC), 0)
-                                ) AS avg_margin_rate,
-                                AVG(
-                                    CAST(sale_prc AS NUMERIC) - CAST(item_cost AS NUMERIC)
-                                ) AS avg_net_profit_per_item
-                            FROM raw_production_extract
-                            WHERE CAST(sale_prc AS NUMERIC) > 0
-                              AND CAST(item_cost AS NUMERIC) > 0
-                              {cost_filter}
-                            """
-                            ),
-                            cost_params,
-                        )
-                        .mappings()
-                        .first()
+                margin_target_dt = normalized_date_to or max_dt
+                margin_row = self._get_sales_margin_snapshot(
+                    connection=connection,
+                    store_id=store_id,
+                    target_date=margin_target_dt,
+                )
+                if margin_row and margin_row.get("avg_margin_rate") is not None:
+                    avg_margin = float(margin_row["avg_margin_rate"] or 0)
+                    avg_net = float(margin_row.get("avg_net_profit_per_item") or 0)
+                    result["avg_margin_rate"] = round(avg_margin, 4)
+                    result["avg_net_profit_per_item"] = round(avg_net, 2)
+                    result["estimated_today_profit"] = round(
+                        result["today_revenue"] * avg_margin, 2
                     )
-                    if cost_row and cost_row["avg_margin_rate"] is not None:
-                        avg_margin = float(cost_row["avg_margin_rate"] or 0)
-                        avg_net = float(cost_row["avg_net_profit_per_item"] or 0)
-                        result["avg_margin_rate"] = round(avg_margin, 4)
-                        result["avg_net_profit_per_item"] = round(avg_net, 2)
-                        result["estimated_today_profit"] = round(
-                            result["today_revenue"] * avg_margin, 2
+                elif result["today_revenue"] > 0 and result["today_net_revenue"] > 0:
+                    result["avg_margin_rate"] = round(
+                        result["today_net_revenue"] / max(result["today_revenue"], 1),
+                        4,
+                    )
+                    result["estimated_today_profit"] = round(result["today_net_revenue"], 2)
+                    total_qty = sum(float(item.get("qty") or 0) for item in result["top_products"])
+                    if total_qty > 0:
+                        result["avg_net_profit_per_item"] = round(
+                            result["today_net_revenue"] / total_qty,
+                            2,
                         )
 
         except SQLAlchemyError as exc:
@@ -219,24 +264,222 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
 
         return result
 
+    def _get_sales_margin_snapshot(
+        self,
+        *,
+        connection,
+        store_id: str | None,
+        target_date: str,
+    ) -> dict | None:
+        if not target_date or not store_id or not has_table(self.engine, "raw_production_extract"):
+            return None
+
+        if has_table(self.engine, "mart_sales_margin_daily"):
+            snapshot_row = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT avg_margin_rate, avg_net_profit_per_item, product_count
+                        FROM mart_sales_margin_daily
+                        WHERE store_id = :store_id
+                          AND target_date = :target_date
+                        """
+                    ),
+                    {"store_id": store_id, "target_date": target_date},
+                )
+                .mappings()
+                .first()
+            )
+            if snapshot_row:
+                return dict(snapshot_row)
+
+        target_day = datetime.strptime(target_date, "%Y%m%d").date()
+        window_start = (target_day - timedelta(days=27)).strftime("%Y%m%d")
+        window_end = target_day.strftime("%Y%m%d")
+        fallback_row = (
+            connection.execute(
+                text(
+                    """
+                    WITH sold_products AS (
+                        SELECT DISTINCT COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '') AS item_nm
+                        FROM raw_daily_store_item
+                        WHERE masked_stor_cd = :store_id
+                          AND sale_dt >= :window_start
+                          AND sale_dt <= :window_end
+                          AND COALESCE(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC), 0) > 0
+                    ),
+                    product_margin AS (
+                        SELECT
+                            COALESCE(NULLIF(TRIM(CAST(p.item_nm AS TEXT)), ''), '') AS item_nm,
+                            AVG(
+                                (CAST(p.sale_prc AS NUMERIC) - CAST(p.item_cost AS NUMERIC))
+                                / NULLIF(CAST(p.sale_prc AS NUMERIC), 0)
+                            ) AS margin_rate,
+                            AVG(CAST(p.sale_prc AS NUMERIC) - CAST(p.item_cost AS NUMERIC)) AS net_profit_per_item
+                        FROM raw_production_extract p
+                        JOIN sold_products s
+                          ON s.item_nm = COALESCE(NULLIF(TRIM(CAST(p.item_nm AS TEXT)), ''), '')
+                        WHERE p.masked_stor_cd = :store_id
+                          AND p.prod_dt >= :window_start
+                          AND p.prod_dt <= :window_end
+                          AND CAST(p.sale_prc AS NUMERIC) > 0
+                          AND CAST(p.item_cost AS NUMERIC) > 0
+                        GROUP BY COALESCE(NULLIF(TRIM(CAST(p.item_nm AS TEXT)), ''), '')
+                    )
+                    SELECT
+                        AVG(margin_rate) AS avg_margin_rate,
+                        AVG(net_profit_per_item) AS avg_net_profit_per_item,
+                        COUNT(*) AS product_count
+                    FROM product_margin
+                    """
+                ),
+                {
+                    "store_id": store_id,
+                    "window_start": window_start,
+                    "window_end": window_end,
+                },
+            )
+            .mappings()
+            .first()
+        )
+        return dict(fallback_row) if fallback_row else None
+
+    def _get_avg_ticket_distribution(
+        self,
+        *,
+        connection,
+        store_id: str | None,
+        target_date: str,
+    ) -> list[float]:
+        if not target_date or not store_id:
+            return []
+
+        target_day = datetime.strptime(target_date, "%Y%m%d").date()
+        window_start = (target_day - timedelta(days=27)).strftime("%Y%m%d")
+
+        analytics_daily_table = get_store_mart_table(store_id, "analytics", "daily_table")
+        if analytics_daily_table and has_table(self.engine, analytics_daily_table):
+            rows = (
+                connection.execute(
+                    text(
+                        f"""
+                        SELECT sale_dt, total_order_count
+                        FROM {analytics_daily_table}
+                        WHERE sale_dt >= :window_start
+                          AND sale_dt <= :target_date
+                          AND COALESCE(total_order_count, 0) > 0
+                        ORDER BY sale_dt
+                        """
+                    ),
+                    {"window_start": window_start, "target_date": target_date},
+                )
+                .mappings()
+                .all()
+            )
+            if rows:
+                sales_by_date = {
+                    str(row["sale_dt"]): float(row["amount"] or 0)
+                    for row in (
+                        connection.execute(
+                            text(
+                                """
+                                SELECT CAST(sale_dt AS TEXT) AS sale_dt,
+                                       COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)), 0) AS amount
+                                FROM raw_daily_store_item
+                                WHERE masked_stor_cd = :store_id
+                                  AND sale_dt >= :window_start
+                                  AND sale_dt <= :target_date
+                                GROUP BY sale_dt
+                                """
+                            ),
+                            {
+                                "store_id": store_id,
+                                "window_start": window_start,
+                                "target_date": target_date,
+                            },
+                        )
+                        .mappings()
+                        .all()
+                    )
+                }
+                analytics_values = [
+                    sales_by_date.get(str(row["sale_dt"]), 0.0) / float(row["total_order_count"])
+                    for row in rows
+                    if float(row["total_order_count"] or 0) > 0
+                ]
+                if analytics_values:
+                    return analytics_values
+
+        if has_table(self.engine, "core_channel_sales"):
+            rows = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            sale_dt,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
+                            COALESCE(SUM(COALESCE(NULLIF(TRIM(CAST(ord_cnt AS TEXT)), '')::numeric, 0)), 0) AS order_count
+                        FROM core_channel_sales
+                        WHERE masked_stor_cd = :store_id
+                          AND sale_dt >= :window_start
+                          AND sale_dt <= :target_date
+                        GROUP BY sale_dt
+                        ORDER BY sale_dt
+                        """
+                    ),
+                    {
+                        "store_id": store_id,
+                        "window_start": window_start,
+                        "target_date": target_date,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+            return [
+                float(row["revenue"] or 0) / float(row["order_count"])
+                for row in rows
+                if float(row["order_count"] or 0) > 0
+            ]
+
+        return []
+
+    @staticmethod
+    def _normalize_index_from_distribution(
+        *,
+        current_value: float,
+        values: list[float],
+    ) -> float:
+        valid_values = [float(value) for value in values if value is not None]
+        if not valid_values or current_value <= 0:
+            return 0.0
+        min_value = min(valid_values)
+        max_value = max(valid_values)
+        if max_value <= min_value:
+            return 100.0
+        score = ((current_value - min_value) / (max_value - min_value)) * 100
+        return max(0.0, min(100.0, score))
+
     async def get_dashboard_overview(
         self,
         store_id: str | None = None,
         business_date: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> dict[str, int | list[dict[str, int | str]]]:
         if not self.engine:
             raise RuntimeError("sales database engine is not configured")
 
+        effective_reference = reference_datetime or get_now()
         target_date = (
             datetime.strptime(business_date, "%Y-%m-%d").date()
             if business_date
-            else get_now().date()
+            else effective_reference.date()
         )
         target_dt = target_date.strftime("%Y%m%d")
         month_start = target_date.replace(day=1)
         last_month_end = month_start - timedelta(days=1)
         last_month_start = last_month_end.replace(day=1)
-        target_hour = get_now().hour
+        target_hour = effective_reference.hour
         weekday_dates = self._build_recent_dates(target_date, 6)
         weekday_labels = self._build_weekday_labels(target_date, 6)
         month_points = self._build_month_points(target_date, 6)
@@ -268,7 +511,8 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "today_sales_points": [
                 {"label": label, "value": 0} for label in weekday_labels
             ],
-            "current_hour_sales_points": self._build_hour_points(
+            "current_hour_sales_points": self._build_hour_points_range(
+                start_hour=max(target_hour - 5, 0),
                 target_hour=target_hour,
                 rows=[],
             ),
@@ -285,7 +529,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                                 0
                             ) AS amount
                             FROM raw_daily_store_item
-                            WHERE sale_dt >= :month_start AND sale_dt <= :target_dt
+                            WHERE sale_dt >= :month_start AND sale_dt < :target_dt
                               {store_filter}
                             """
                         ),
@@ -294,8 +538,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     .mappings()
                     .first()
                 )
-                if monthly_row:
-                    result["monthly_sales"] = int(round(float(monthly_row["amount"] or 0)))
+                monthly_amount_before_target = float(monthly_row["amount"] or 0) if monthly_row else 0.0
 
                 today_row = (
                     connection.execute(
@@ -315,8 +558,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     .mappings()
                     .first()
                 )
-                if today_row:
-                    result["today_sales"] = int(round(float(today_row["amount"] or 0)))
+                full_day_today_amount = float(today_row["amount"] or 0) if today_row else 0.0
 
                 last_month_row = (
                     connection.execute(
@@ -379,6 +621,31 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     )
 
                 if has_table(self.engine, "raw_daily_store_item_tmzon"):
+                    today_cutoff_row = (
+                        connection.execute(
+                            text(
+                                f"""
+                                SELECT COALESCE(
+                                    SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)),
+                                    0
+                                ) AS amount
+                                FROM raw_daily_store_item_tmzon
+                                WHERE sale_dt = :target_dt
+                                  AND CAST(tmzon_div AS INTEGER) <= :target_hour
+                                  {store_filter}
+                                """
+                            ),
+                            params,
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    today_cutoff_amount = (
+                        float(today_cutoff_row["amount"] or 0) if today_cutoff_row else 0.0
+                    )
+                    result["today_sales"] = int(round(today_cutoff_amount))
+                    result["monthly_sales"] = int(round(monthly_amount_before_target + today_cutoff_amount))
+
                     current_hour_row = (
                         connection.execute(
                             text(
@@ -431,6 +698,31 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                             round(sum(hour_values) / len(hour_values))
                         )
 
+                    previous_dt = (target_date - timedelta(days=1)).strftime("%Y%m%d")
+                    opening_row = (
+                        connection.execute(
+                            text(
+                                f"""
+                                SELECT MIN(CAST(tmzon_div AS INTEGER)) AS first_hour
+                                FROM raw_daily_store_item_tmzon
+                                WHERE sale_dt = :previous_dt
+                                  AND CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC) > 0
+                                  {store_filter}
+                                """
+                            ),
+                            {**params, "previous_dt": previous_dt},
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    opening_hour = (
+                        int(opening_row["first_hour"])
+                        if opening_row and opening_row.get("first_hour") is not None
+                        else max(target_hour - 5, 0)
+                    )
+                    if opening_hour > target_hour:
+                        opening_hour = max(target_hour - 5, 0)
+
                     hour_rows = (
                         connection.execute(
                             text(
@@ -450,16 +742,20 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                             ),
                             {
                                 **params,
-                                "hour_start": max(target_hour - 5, 0),
+                                "hour_start": opening_hour,
                             },
                         )
                         .mappings()
                         .all()
                     )
-                    result["current_hour_sales_points"] = self._build_hour_points(
+                    result["current_hour_sales_points"] = self._build_hour_points_range(
+                        start_hour=opening_hour,
                         target_hour=target_hour,
                         rows=hour_rows,
                     )
+                else:
+                    result["today_sales"] = int(round(full_day_today_amount))
+                    result["monthly_sales"] = int(round(monthly_amount_before_target + full_day_today_amount))
 
                 today_rows = (
                     connection.execute(
@@ -485,12 +781,15 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     .mappings()
                     .all()
                 )
-                result["today_sales_points"] = self._build_points(
+                today_points = self._build_points(
                     labels=weekday_labels,
                     keys=weekday_dates,
                     rows=today_rows,
                     row_key="sale_dt",
                 )
+                if today_points:
+                    today_points[-1]["value"] = result["today_sales"]
+                result["today_sales_points"] = today_points
 
                 month_rows = (
                     connection.execute(
@@ -516,12 +815,15 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                     .mappings()
                     .all()
                 )
-                result["monthly_sales_points"] = self._build_points(
+                monthly_points_result = self._build_points(
                     labels=[point["label"] for point in month_points],
                     keys=[point["key"] for point in month_points],
                     rows=month_rows,
                     row_key="month_key",
                 )
+                if monthly_points_result:
+                    monthly_points_result[-1]["value"] = result["monthly_sales"]
+                result["monthly_sales_points"] = monthly_points_result
         except SQLAlchemyError as exc:
             logger.exception(
                 "Failed to aggregate dashboard sales overview (store_id=%s, business_date=%s): %s",
@@ -598,4 +900,25 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 "value": values_by_hour.get((target_hour - 5 + index) % 24, 0),
             }
             for index in range(6)
+        ]
+
+    @staticmethod
+    def _build_hour_points_range(
+        start_hour: int,
+        target_hour: int,
+        rows: list[dict],
+    ) -> list[dict[str, int | str]]:
+        values_by_hour = {
+            int(row.get("hour_div")): int(round(float(row.get("amount") or 0)))
+            for row in rows
+            if row.get("hour_div") is not None
+        }
+        if start_hour > target_hour:
+            start_hour = max(target_hour - 5, 0)
+        return [
+            {
+                "label": f"{hour}시",
+                "value": values_by_hour.get(hour, 0),
+            }
+            for hour in range(start_hour, target_hour + 1)
         ]
