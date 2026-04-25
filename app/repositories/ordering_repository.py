@@ -5,11 +5,11 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import httpx
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.config.store_mart_mapping import get_store_mart_table
 from app.infrastructure.db.utils import has_table
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,8 @@ _WEATHER_CODE_LABELS: dict[int, str] = {
     96: "우박 동반 뇌우",
     99: "강한 우박 동반 뇌우",
 }
+_STORE_WEATHER_START_DT = "20250311"
+_STORE_WEATHER_END_DT = "20260310"
 
 
 class OrderingRepository:
@@ -282,6 +284,17 @@ class OrderingRepository:
         return "서울"
 
     @staticmethod
+    def _normalize_weather_reference_date(reference_date: str | None) -> str | None:
+        normalized = OrderingRepository._normalize_yyyymmdd(reference_date)
+        if not normalized:
+            return None
+        if normalized > _STORE_WEATHER_END_DT:
+            return _STORE_WEATHER_END_DT
+        if normalized < _STORE_WEATHER_START_DT:
+            return _STORE_WEATHER_START_DT
+        return normalized
+
+    @staticmethod
     def _classify_weather_type(avg_temp_c: float | int | None, precipitation_mm: float | int | None) -> str:
         temp = float(avg_temp_c or 0.0)
         precipitation = float(precipitation_mm or 0.0)
@@ -299,53 +312,75 @@ class OrderingRepository:
         store_id: str | None,
         reference_date: str | None,
     ) -> dict[str, object] | None:
-        normalized_date = self._normalize_yyyymmdd(reference_date)
-        sido = self._resolve_store_sido(store_id=store_id)
+        normalized_date = self._normalize_weather_reference_date(reference_date)
         if not self.engine or not normalized_date:
             return None
-        relation = self._resolve_ordering_relation(store_id)
-        if relation == self._POC_010_ORDERING_JOIN_TABLE and has_table(self.engine, relation):
-            try:
-                with self.engine.connect() as connection:
-                    row = (
-                        connection.execute(
-                            text(
-                                f"""
-                                SELECT weather_date, weather_region, weather_type,
-                                       weather_max_temperature_c, weather_min_temperature_c,
-                                       weather_precipitation_probability
-                                FROM {relation}
-                                WHERE store_id = :store_id
-                                  AND REPLACE(CAST(weather_date AS TEXT), '-', '') = :reference_date
-                                LIMIT 1
-                                """
-                            ),
-                            {"store_id": store_id, "reference_date": normalized_date},
-                        )
-                        .mappings()
-                        .first()
-                    )
-            except SQLAlchemyError:
-                row = None
-            if row:
-                return {
-                    "region": str(row.get("weather_region") or sido),
-                    "forecast_date": self._format_basis_date(row.get("weather_date") or normalized_date),
-                    "weather_type": str(row.get("weather_type") or "날씨"),
-                    "max_temperature_c": self._safe_int(row.get("weather_max_temperature_c")),
-                    "min_temperature_c": self._safe_int(row.get("weather_min_temperature_c")),
-                    "precipitation_probability": self._safe_int(row.get("weather_precipitation_probability")),
-                }
+        sido = self._resolve_store_sido(store_id=store_id)
 
         if not has_table(self.engine, "raw_weather_daily"):
+            relation = self._resolve_ordering_relation(store_id)
+            if relation == self._POC_010_ORDERING_JOIN_TABLE and has_table(self.engine, relation):
+                try:
+                    with self.engine.connect() as connection:
+                        row = (
+                            connection.execute(
+                                text(
+                                    f"""
+                                    SELECT weather_date, weather_region, weather_type,
+                                           weather_max_temperature_c, weather_min_temperature_c,
+                                           weather_precipitation_probability
+                                    FROM {relation}
+                                    WHERE store_id = :store_id
+                                      AND REPLACE(CAST(weather_date AS TEXT), '-', '') = :reference_date
+                                    LIMIT 1
+                                    """
+                                ),
+                                {"store_id": store_id, "reference_date": normalized_date},
+                            )
+                            .mappings()
+                            .first()
+                        )
+                except SQLAlchemyError:
+                    row = None
+                if row:
+                    return {
+                        "region": str(row.get("weather_region") or sido),
+                        "forecast_date": self._format_basis_date(
+                            row.get("weather_date") or normalized_date
+                        ),
+                        "weather_type": str(row.get("weather_type") or "날씨"),
+                        "max_temperature_c": self._safe_int(
+                            row.get("weather_max_temperature_c")
+                        ),
+                        "min_temperature_c": self._safe_int(
+                            row.get("weather_min_temperature_c")
+                        ),
+                        "precipitation_probability": self._safe_int(
+                            row.get("weather_precipitation_probability")
+                        ),
+                    }
             return None
+        weather_columns = self._table_columns("raw_weather_daily")
+        max_temp_column = self._pick_column(weather_columns, ("max_temp_c",))
+        min_temp_column = self._pick_column(weather_columns, ("min_temp_c",))
+        precipitation_probability_column = self._pick_column(
+            weather_columns, ("precipitation_probability_max",)
+        )
+
         try:
             with self.engine.connect() as connection:
                 row = (
                     connection.execute(
                         text(
-                            """
-                            SELECT weather_dt, sido, avg_temp_c, precipitation_mm
+                            f"""
+                            SELECT
+                                weather_dt,
+                                sido,
+                                avg_temp_c,
+                                precipitation_mm,
+                                {max_temp_column or 'NULL'} AS max_temp_c,
+                                {min_temp_column or 'NULL'} AS min_temp_c,
+                                {precipitation_probability_column or 'NULL'} AS precipitation_probability_max
                             FROM raw_weather_daily
                             WHERE weather_dt = :reference_date
                               AND sido = :sido
@@ -367,9 +402,80 @@ class OrderingRepository:
             "region": str(row["sido"] or sido),
             "forecast_date": f"{normalized_date[:4]}-{normalized_date[4:6]}-{normalized_date[6:8]}",
             "weather_type": self._classify_weather_type(avg_temp_c, precipitation_mm),
-            "max_temperature_c": int(round(avg_temp_c)),
-            "min_temperature_c": int(round(avg_temp_c)),
-            "precipitation_probability": int(round(precipitation_mm)),
+            "max_temperature_c": self._safe_int(row.get("max_temp_c"))
+            if row.get("max_temp_c") is not None
+            else int(round(avg_temp_c)),
+            "min_temperature_c": self._safe_int(row.get("min_temp_c"))
+            if row.get("min_temp_c") is not None
+            else int(round(avg_temp_c)),
+            "precipitation_probability": self._safe_int(
+                row.get("precipitation_probability_max")
+            )
+            if row.get("precipitation_probability_max") is not None
+            else int(round(precipitation_mm)),
+        }
+
+    def _get_weather_from_store_weather_mart(
+        self,
+        *,
+        store_id: str | None,
+        reference_date: str | None,
+    ) -> dict[str, object] | None:
+        normalized_date = self._normalize_weather_reference_date(reference_date)
+        if not self.engine or not normalized_date:
+            return None
+
+        weather_table = get_store_mart_table(store_id, "ordering", "weather_table") or "mart_store_weather_daily"
+        if not has_table(self.engine, weather_table):
+            return None
+
+        try:
+            with self.engine.connect() as connection:
+                row = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                weather_dt,
+                                sido,
+                                weather_type,
+                                avg_temp_c,
+                                max_temp_c,
+                                min_temp_c,
+                                precipitation_mm,
+                                precipitation_probability_max
+                            FROM {weather_table}
+                            WHERE weather_dt = :reference_date
+                              AND store_id = :store_id
+                            LIMIT 1
+                            """
+                        ),
+                        {"reference_date": normalized_date, "store_id": store_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+        except SQLAlchemyError:
+            return None
+
+        if not row:
+            return None
+
+        avg_temp_c = float(row.get("avg_temp_c") or 0.0)
+        precipitation_mm = float(row.get("precipitation_mm") or 0.0)
+        return {
+            "region": str(row.get("sido") or ""),
+            "forecast_date": f"{normalized_date[:4]}-{normalized_date[4:6]}-{normalized_date[6:8]}",
+            "weather_type": str(row.get("weather_type") or self._classify_weather_type(avg_temp_c, precipitation_mm)),
+            "max_temperature_c": self._safe_int(row.get("max_temp_c"))
+            if row.get("max_temp_c") is not None
+            else int(round(avg_temp_c)),
+            "min_temperature_c": self._safe_int(row.get("min_temp_c"))
+            if row.get("min_temp_c") is not None
+            else int(round(avg_temp_c)),
+            "precipitation_probability": self._safe_int(row.get("precipitation_probability_max"))
+            if row.get("precipitation_probability_max") is not None
+            else int(round(precipitation_mm)),
         }
 
     async def get_weather_forecast(
@@ -377,6 +483,16 @@ class OrderingRepository:
         store_id: str | None = None,
         reference_date: str | None = None,
     ) -> dict[str, object] | None:
+        weather_from_mart = self._get_weather_from_store_weather_mart(
+            store_id=store_id,
+            reference_date=reference_date,
+        )
+        if weather_from_mart is not None:
+            return weather_from_mart
+        return self._get_weather_for_reference_date(
+            store_id=store_id,
+            reference_date=reference_date,
+        )
         weather_for_reference = self._get_weather_for_reference_date(
             store_id=store_id,
             reference_date=reference_date,
@@ -1685,6 +1801,20 @@ class OrderingRepository:
         is_auto: bool | None = None,
         reference_datetime: datetime | None = None,
     ) -> dict:
+        cache_path = self._resolve_store_cache_db_path(store_id)
+        if cache_path is not None:
+            return self._get_history_filtered_from_store_cache(
+                cache_path=cache_path,
+                store_id=store_id,
+                limit=limit,
+                page=page,
+                date_from=date_from,
+                date_to=date_to,
+                item_nm=item_nm,
+                is_auto=is_auto,
+                reference_datetime=reference_datetime,
+            )
+
         if not self.engine:
             return {"items": [], "auto_rate": 0.0, "manual_rate": 0.0, "total_count": 0}
         relation = self._resolve_ordering_relation(store_id)
