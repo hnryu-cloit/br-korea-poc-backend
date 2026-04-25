@@ -2,6 +2,35 @@
 
 BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
+## 최근 업데이트 (2026-04-25)
+
+- `POST /api/sales/query` 요청 스키마를 실행 컨텍스트 기반으로 확장했습니다.
+  - `SalesQueryRequest`에 `business_time`, `page_context`, `card_context_key`, `store_name`, `user_role`, `conversation_history` 필드를 추가했습니다.
+  - `ChatHistoryEntry(role, text)` 모델을 신설해 직전 6턴 대화 이력을 표준화했습니다.
+  - `app/services/ai_client.py`의 `query_sales()`가 신규 컨텍스트 필드를 받아 AI 서버 `/sales/query`로 그대로 포워딩합니다.
+  - `app/services/sales_service.py`에서 payload의 `conversation_history`를 `model_dump()` 후 AI 클라이언트에 전달합니다.
+  - 기존 `prompt`, `store_id`, `domain`, `business_date` 호출 계약은 그대로 유지됩니다.
+- analytics 엔드포인트 반복 예외 처리 패턴을 공통 함수로 정리했습니다.
+  - `app/api/v1/endpoints/analytics.py`에 기준일시 해석 공통 함수(`_resolve_reference_range_or_422`)와 런타임 500 변환 함수(`_raise_runtime_500`)를 추가했습니다.
+  - `/analytics/metrics`, `/analytics/sales-trend`의 기존 오류 코드/메시지 계약은 유지됩니다.
+- AI/프론트 리팩토링 세션 연동 사항을 반영했습니다.
+  - AI `management` 라우터의 ML 예측 보조 로직이 서비스 계층으로 이동했고, 프론트 매출 차트 컴포넌트 생성 패턴이 정리되었습니다.
+  - 본 세션의 backend API/DB 스키마 변경은 없습니다.
+- 상권 필터 옵션 조회 API를 추가했습니다.
+  - `GET /api/analytics/market-scope-options`에서 `gu_options`, `dong_options_by_gu`를 반환합니다.
+  - `raw_seoul_market_sales`, `raw_seoul_market_floating_population`의 `area_name`을 기반으로 동적 구성하며, 데이터 부재 시 서울 25개 구 기본 목록을 반환합니다.
+- 소진공 연계 `areaCd` 매핑을 서울 25개 구 전체로 확장했습니다.
+  - 기존 5개 구 하드코딩 분기를 제거하고 공통 매핑(`_SEOUL_GU_AREA_CODE`)으로 통합했습니다.
+- 프론트 콘솔 `sales` 404/500 원인을 로그로 확인했습니다.
+  - `raw_daily_store_channel` 집계 쿼리에서 `SUM(text)` 타입 오류가 발생해 `insights/campaign-effect`가 500으로 실패합니다.
+  - `summary` 404는 no-fallback 정책에 따라 데이터 부재 시 반환되는 정상 분기입니다.
+- `sales` API 안정화 패치를 적용했습니다.
+  - `raw_daily_store_channel` 집계 쿼리(`insights`, `query channel`)를 숫자 안전 캐스팅으로 수정해 `SUM(text)` 500 오류를 방지했습니다.
+  - AI 서비스가 비활성/오류여도 `GET /api/sales/insights`, `GET /api/sales/campaign-effect`는 repository 실데이터 요약(기본문구)으로 응답하도록 폴백했습니다.
+  - `GET /api/sales/summary`는 데이터가 없을 때 404 대신 0값 기본 구조(weekly/top_products 빈 배열)로 응답하도록 완화했습니다.
+- 프론트 `/analytics/market` 사이드바 active 충돌 수정과 상권 인사이트 fallback 렌더링 제거 작업을 연동 기준으로 반영했습니다.
+- 이번 세션의 DB 마이그레이션 변경은 없습니다.
+
 ## 최근 업데이트 (2026-04-24)
 
 - AI grounded 입력 안정화(행 상한 + 프롬프트 예산) 반영 사항을 동기화했습니다.
@@ -799,4 +828,74 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 ## Session Update (2026-04-25, settings logo click navigation 영향도)
 
 - 프론트 `/settings` 로고 클릭 이동(`/`) 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, settings typography size alignment 영향도)
+
+- 프론트 `/settings` 타이포그래피/헤더 사이즈 정렬 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, settings sidebar design-system alignment 영향도)
+
+- 프론트 `/settings` 사이드바 디자인 시스템 정렬 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, settings sidebar rollback 영향도)
+
+- 프론트 `/settings` 사이드바 스타일 롤백이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, settings summary cards white background 영향도)
+
+- 프론트 `/settings` 요약 카드 배경 색상 통일(흰색) 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, prompts textarea width adjustment 영향도)
+
+- 프론트 `/settings/prompts` textarea 폭 조정 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, prompts card equal height 영향도)
+
+- 프론트 `/settings/prompts` 카드 높이 정렬 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, prompts card height 80 영향도)
+
+- 프론트 `/settings/prompts` 카드/입력창 높이 통일 작업이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, floating chat golden-query integration 영향도)
+
+- 프론트 플로팅 챗이 `/api/sales/query` 단일 경로 기반으로 골든쿼리 메타(`overlap_candidates`, `follow_up_questions`)를 우선 활용하도록 변경되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, floating chat source badge + reference popup 영향도)
+
+- 프론트 플로팅 챗에 출처 배지/근거 팝업 UI가 추가되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, golden query miss badge 영향도)
+
+- 프론트 플로팅 챗에 골든쿼리 미매칭 상태 배지 UI가 추가되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, dashboard recommended question handoff 영향도)
+
+- 프론트 `/dashboard` 추천 질문 클릭 동작이 플로팅 챗 자동 질의로 변경되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, market page sales-trend card removal 영향도)
+
+- 프론트 `/analytics/market` 카드 노출 조정이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, sales metrics info-popover coverage 영향도)
+
+- 프론트 `/sales/metrics` 카드 설명 팝업(UI) 보강이 반영되었습니다.
+- 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, floating chat suggested questions pinned to golden prompts 영향도)
+
+- 프론트 플로팅 챗 후보 질문 소스가 골든 프롬프트 중심으로 조정되었습니다.
 - 백엔드 API/스키마/마이그레이션 변경은 없습니다.
