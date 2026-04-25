@@ -26,6 +26,15 @@ router = APIRouter(prefix="/production", tags=["production"])
 v1_router = APIRouter(prefix="/v1/production", tags=["production"])
 
 
+def _parse_inventory_status_filters(raw_status: str | None) -> list[str] | None:
+    if raw_status is None:
+        return None
+    parts = [part.strip() for part in raw_status.split(",")]
+    if not parts or any(not part for part in parts):
+        raise ValueError("status must be a comma-separated list of non-empty values")
+    return parts
+
+
 @router.get("/overview", response_model=ProductionOverviewResponse)
 async def get_production_overview(
     store_id: str | None = Query(default=None),
@@ -199,6 +208,7 @@ async def get_inventory_status(
     store_id: str = Query(..., min_length=1),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
+    status: str | None = Query(default=None),
     service: ProductionService = Depends(get_production_service),
 ) -> InventoryStatusResponse:
     try:
@@ -206,6 +216,7 @@ async def get_inventory_status(
             store_id=store_id,
             page=page,
             page_size=page_size,
+            status_filters=_parse_inventory_status_filters(status),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
