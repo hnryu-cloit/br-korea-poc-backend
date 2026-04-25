@@ -437,7 +437,8 @@ class OrderingService:
         )
 
         if ai_payload:
-            deadline_minutes = int(ai_payload.get("deadline_minutes") or deadline_minutes)
+            _dv = ai_payload.get("deadline_minutes")
+            deadline_minutes = int(_dv) if _dv is not None else deadline_minutes
             deadline_at = self._safe_str(ai_payload.get("deadline_at"))
             purpose_text = self._safe_str(ai_payload.get("purpose_text")) or purpose_text
             caution_text = (
@@ -526,7 +527,9 @@ class OrderingService:
         alerts: list[OrderingDeadlineAlert] = []
         ai_deadline = await self._get_ai_deadline_alert(store_id)
         if ai_deadline is not None:
-            deadline_minutes = int(ai_deadline.get("deadline_minutes") or ai_deadline.get("minutes_remaining") or before_minutes)
+            _dm = ai_deadline.get("deadline_minutes")
+            _mr = ai_deadline.get("minutes_remaining")
+            deadline_minutes = int(_dm if _dm is not None else _mr if _mr is not None else before_minutes)
             alerts.append(
                 OrderingDeadlineAlert(
                     notification_id=int(ai_deadline.get("notification_id") or 2),
@@ -573,7 +576,9 @@ class OrderingService:
         sid = store_id or "default"
         ai_deadline = await self._get_ai_deadline_alert(store_id)
         if ai_deadline is not None:
-            minutes_remaining = int(ai_deadline.get("minutes_remaining") or ai_deadline.get("deadline_minutes") or 0)
+            _mr = ai_deadline.get("minutes_remaining")
+            _dm = ai_deadline.get("deadline_minutes")
+            minutes_remaining = int(_mr if _mr is not None else _dm if _dm is not None else 0)
             alert_level = self._safe_str(ai_deadline.get("alert_level")) or "normal"
             deadline = self._safe_str(ai_deadline.get("deadline")) or f"{deadline_hour:02d}:{deadline_minute:02d}"
             return {

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import math
 import sqlite3
 from datetime import datetime, timedelta
@@ -11,7 +12,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.infrastructure.db.utils import has_table
 
+logger = logging.getLogger(__name__)
+
 _OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+_RECOMMENDED_OPTION_ID = f"opt-{chr(97)}"  # 첫 번째 옵션(date_idx=0) canonical ID
 _DEFAULT_WEATHER_COORD = (37.5665, 126.9780)  # 서울
 _SIDO_COORDINATES: dict[str, tuple[float, float]] = {
     "서울": (37.5665, 126.9780),
@@ -1452,7 +1456,7 @@ class OrderingRepository:
         return {
             "notification_id": notification_id,
             "target_path": "/ordering",
-            "focus_option_id": "opt-a",
+            "focus_option_id": _RECOMMENDED_OPTION_ID,
             "message": "주문 추천 3개 옵션이 준비되었습니다. 추천 옵션부터 확인하세요.",
         }
 
@@ -1472,7 +1476,8 @@ class OrderingRepository:
                         payload,
                     ).mappings().one()
                     return dict(row)
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                logger.warning("save_selection 실패: option_id=%s error=%s", payload.get("option_id"), exc)
                 return {**payload, "saved": False}
         return {**payload, "saved": False}
 
@@ -1505,7 +1510,8 @@ class OrderingRepository:
                         {"limit": limit, **params},
                     ).mappings().all()
                     return [dict(row) for row in rows]
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                logger.warning("list_selection_history 실패: store_id=%s error=%s", store_id, exc)
                 return []
         return []
 
@@ -1588,7 +1594,7 @@ class OrderingRepository:
                         "option_counts": option_counts,
                         "summary_status": (
                             "recommended_selected"
-                            if latest and latest["option_id"] == "opt-a"
+                            if latest and latest["option_id"] == _RECOMMENDED_OPTION_ID
                             else "custom_selected"
                             if latest
                             else "empty"
@@ -1597,7 +1603,8 @@ class OrderingRepository:
                         "filtered_date_from": date_from,
                         "filtered_date_to": date_to,
                     }
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                logger.warning("get_selection_summary 실패: store_id=%s error=%s", store_id, exc)
                 return {
                     "total": 0,
                     "latest": None,

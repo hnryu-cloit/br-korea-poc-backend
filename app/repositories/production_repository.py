@@ -2115,9 +2115,12 @@ class ProductionRepository(BaseRepository):
                     conn.execute(
                         text(
                             f"""
-                            SELECT COUNT(DISTINCT item_nm)
-                            FROM inventory_fifo_lots
-                            WHERE masked_stor_cd = :store_id {type_clause}
+                            SELECT COUNT(*)
+                            FROM (
+                                SELECT DISTINCT item_nm, lot_type
+                                FROM inventory_fifo_lots
+                                WHERE masked_stor_cd = :store_id {type_clause}
+                            ) AS sub
                             """
                         ),
                         params,

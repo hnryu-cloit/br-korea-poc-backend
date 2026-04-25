@@ -822,8 +822,8 @@ class PromptRepositoryMixin:
                                 WITH daily AS (
                                     SELECT
                                         sale_dt,
-                                        SUM(ord_cnt) AS ord_cnt,
-                                        SUM(sale_amt) AS sale_amt
+                                        SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS ord_cnt,
+                                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS sale_amt
                                     FROM {source_relation}
                                     WHERE ho_chnl_div LIKE '온라인%'
                                     GROUP BY sale_dt
@@ -1086,8 +1086,8 @@ class PromptRepositoryMixin:
                         f"""
                     SELECT
                         COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
-                        SUM(sale_amt) AS sale_amt,
-                        SUM(ord_cnt) AS ord_cnt
+                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS sale_amt,
+                        SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS ord_cnt
                     FROM {source_relation}
                     GROUP BY channel_div
                     ORDER BY sale_amt DESC

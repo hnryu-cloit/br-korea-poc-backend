@@ -180,12 +180,12 @@ class InsightRepositoryMixin:
                             f"""
                         SELECT
                             COALESCE(NULLIF(ho_chnl_div, ''), '기타') AS channel_div,
-                            SUM(sale_amt) AS sale_amt,
-                            SUM(ord_cnt) AS ord_cnt
+                            SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS sale_amt,
+                            SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS ord_cnt
                         FROM raw_daily_store_channel
                         {where_clause}
                         GROUP BY COALESCE(NULLIF(ho_chnl_div, ''), '기타')
-                        ORDER BY SUM(sale_amt) DESC
+                        ORDER BY sale_amt DESC
                         """
                         ),
                         params,
@@ -234,7 +234,7 @@ class InsightRepositoryMixin:
     def _fetch_menu_mix_from_item(
         self, store_id: str | None, date_from: str | None, date_to: str | None
     ) -> dict | None:
-        """raw_daily_store_item 기반 상품 믹스 분석"""
+        """raw_daily_store_item 기반 상품 믹스 분석 — Top6, 매출비중, 객단가"""
         where_clause, params = self._build_filters(
             "masked_stor_cd", "sale_dt", store_id, date_from, date_to
         )
@@ -245,14 +245,25 @@ class InsightRepositoryMixin:
                         text(
                             f"""
                         SELECT
-                            COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타') AS item_nm,
-                            SUM(CAST(COALESCE(NULLIF(sale_qty, ''), '0') AS NUMERIC)) AS sale_qty,
-                            SUM(CAST(COALESCE(NULLIF(sale_amt, ''), '0') AS NUMERIC)) AS sale_amt
-                        FROM raw_daily_store_item
-                        {where_clause}
-                        GROUP BY COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타')
-                        ORDER BY sale_amt DESC, sale_qty DESC
-                        LIMIT 3
+                            item_nm,
+                            sale_qty,
+                            sale_amt,
+                            ROUND(sale_amt * 100.0 / NULLIF(total_sale_amt, 0), 1) AS share_pct,
+                            CASE WHEN sale_qty > 0
+                                 THEN ROUND(sale_amt / sale_qty, 0)
+                                 ELSE 0 END AS avg_price
+                        FROM (
+                            SELECT
+                                COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타') AS item_nm,
+                                SUM(CAST(COALESCE(NULLIF(sale_qty, ''), '0') AS NUMERIC)) AS sale_qty,
+                                SUM(CAST(COALESCE(NULLIF(sale_amt, ''), '0') AS NUMERIC)) AS sale_amt,
+                                SUM(SUM(CAST(COALESCE(NULLIF(sale_amt, ''), '0') AS NUMERIC))) OVER () AS total_sale_amt
+                            FROM raw_daily_store_item
+                            {where_clause}
+                            GROUP BY COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타')
+                        ) sub
+                        ORDER BY sale_amt DESC
+                        LIMIT 6
                         """
                         ),
                         params,
@@ -273,22 +284,53 @@ class InsightRepositoryMixin:
         if not top_rows:
             return None
 
+        top1_name = str(top_rows[0]["item_nm"])
+        top1_share = float(top_rows[0]["share_pct"] or 0)
+
         metric_items = [
             {
-                "label": "대표 상품" if i == 0 else "보완 후보" if i == 1 else "참고 상품",
-                "value": str(row["item_nm"]),
-                "detail": f"매출 {int(float(row['sale_amt'] or 0)):,}원 / 판매 {int(float(row['sale_qty'] or 0)):,}개",
+                "label": str(row["item_nm"]),
+                "value": f"{float(row['share_pct'] or 0):.1f}%",
+                "detail": f"객단가 {int(float(row['avg_price'] or 0)):,}원 · 판매 {int(float(row['sale_qty'] or 0)):,}개",
             }
-            for i, row in enumerate(top_rows)
+            for row in top_rows
         ]
+        concentration_label = "집중형" if top1_share > 50 else "균형형" if top1_share < 30 else "편중형"
+        metric_items.append({
+            "label": "히트상품 집중도",
+            "value": f"{top1_share:.1f}% ({concentration_label})",
+            "detail": f"1위 {top1_name} 매출 비중 기준",
+        })
+
+        top2_name = str(top_rows[1]["item_nm"]) if len(top_rows) > 1 else None
+        bottom_name = str(top_rows[-1]["item_nm"]) if len(top_rows) >= 3 else None
+
+        actions: list[str] = []
+        if top1_share > 40:
+            actions.append(
+                f"{top1_name}이 전체 매출의 {top1_share:.0f}%를 차지합니다. 2~3위 상품 세트 구성으로 의존도를 완화하세요."
+            )
+        else:
+            actions.append(
+                f"히트상품 {top1_name} 중심으로 음료·사이드 세트 구성을 추가해 객단가를 높이세요."
+            )
+        if top2_name:
+            actions.append(
+                f"{top1_name}과 {top2_name}를 세트로 구성하면 객단가 향상 효과를 기대할 수 있습니다."
+            )
+        if bottom_name:
+            actions.append(
+                f"하위 상품 {bottom_name}은 피크 외 시간대 노출 테스트 후 진열 정리를 검토하세요."
+            )
+
         return {
             "title": "메뉴 믹스 추천",
-            "summary": f"{top_rows[0]['item_nm']} 중심으로 매출이 형성되고 있어 동반 제안 상품 운영 여지가 있습니다.",
+            "summary": (
+                f"{top1_name} 중심 매출 구조 (비중 {top1_share:.0f}%). "
+                "상품별 매출 비중과 객단가를 기반으로 세트 구성과 저매출 상품 정리를 검토하세요."
+            ),
             "metrics": metric_items,
-            "actions": [
-                "대표 상품과 음료 또는 세트 상품을 함께 제안해 주세요.",
-                "저성과 상품은 피크타임보다 비피크 시간대 테스트로 노출해 주세요.",
-            ],
+            "actions": actions,
             "status": "active",
         }
 
