@@ -23,6 +23,72 @@ async def test_ordering_repository_returns_empty_options_without_engine() -> Non
     assert options == []
 
 
+@pytest.mark.asyncio
+async def test_ordering_repository_list_options_prefers_store_cache() -> None:
+    store_cache_root = Path(__file__).resolve().parents[1] / "data" / "store_cache"
+    store_cache_root.mkdir(parents=True, exist_ok=True)
+    cache_path = store_cache_root / "ordering_options_store_cache_test.db"
+    if cache_path.exists():
+        cache_path.unlink()
+
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE order_history (
+                store_id TEXT NOT NULL,
+                dlv_dt TEXT NOT NULL,
+                item_cd TEXT,
+                item_nm TEXT,
+                ord_qty REAL,
+                confrm_qty REAL
+            )
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO order_history(store_id, dlv_dt, item_cd, item_nm, ord_qty, confrm_qty)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("POC_010", "2026-02-26", "700611", "Bagel", 10, 12),
+                ("POC_010", "2026-02-19", "700611", "Bagel", 9, 10),
+                ("POC_010", "2026-02-05", "700611", "Bagel", 8, 9),
+            ],
+        )
+        connection.commit()
+
+    repository = OrderingRepository(engine=None)
+    repository._resolve_store_cache_db_path = lambda store_id: cache_path  # type: ignore[method-assign]
+    repository._build_adjusted_option_items = (  # type: ignore[method-assign]
+        lambda aggregated, store_id=None: (
+            [
+                {
+                    "sku_id": str(next(iter(aggregated.values())).get("code") or ""),
+                    "sku_name": str(next(iter(aggregated.values())).get("name") or ""),
+                    "quantity": int(next(iter(aggregated.values())).get("qty") or 0),
+                    "note": None,
+                }
+            ],
+            {
+                "total_base_qty": float(next(iter(aggregated.values())).get("qty") or 0),
+                "total_adjusted_qty": float(next(iter(aggregated.values())).get("qty") or 0),
+                "avg_trend_factor": 1.0,
+                "avg_inventory_cover": 0.0,
+                "high_expiry_risk_count": 0.0,
+                "recent_7d_sales_total": 0.0,
+                "adjustment_ratio": 1.0,
+                "top_item_name": str(next(iter(aggregated.values())).get("name") or ""),
+            },
+        )
+    )
+
+    options = await repository.list_options(store_id="POC_010", reference_date="20260305")
+
+    assert len(options) == 3
+    assert options[0]["basis"] == "2026-02-26"
+    assert options[0]["items"][0]["sku_name"] == "Bagel"
+
+
 class _FakeScalarResult:
     def __init__(self, value):
         self._value = value
@@ -330,6 +396,41 @@ async def test_ordering_service_list_options_defaults_store_id_to_poc_010() -> N
             store_id: str,
             reference_date: str | None = None,
         ) -> str | None:
+            return None
+
+        def get_deadline_items(
+            self,
+            *,
+            store_id: str,
+            reference_datetime=None,
+        ) -> list[dict]:
+            return []
+
+        def get_ordering_trend_summary(
+            self,
+            *,
+            store_id: str,
+            reference_date: str | None = None,
+        ) -> str | None:
+            return None
+
+        def get_deadline_items(
+            self,
+            *,
+            store_id: str,
+            reference_datetime=None,
+        ) -> list[dict]:
+            return []
+
+        def uses_ordering_join_table(self, store_id: str | None = None) -> bool:
+            return False
+
+        def get_ordering_trend_summary(
+            self,
+            *,
+            store_id: str,
+            reference_date: str | None = None,
+        ) -> str | None:
             return "최근 7일 주문량은 140개로, 직전 7일 100개 대비 40.0% 증가했습니다."
 
         def uses_ordering_join_table(self, store_id: str | None) -> bool:
@@ -406,9 +507,135 @@ async def test_ordering_service_skips_ai_when_join_table_is_available() -> None:
 
     service = OrderingService(repository=_Repo(), ai_client=_AI())
 
-    response = await service.list_options(store_id="POC_010", skip_ai=False)
+@pytest.mark.asyncio
+async def test_ordering_service_list_options_defaults_to_skip_ai() -> None:
+    class _Repo:
+        async def list_options(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> list[dict]:
+            return []
 
-    assert response.options[0].basis == "2026-02-26"
+        def uses_ordering_join_table(self, store_id: str | None = None) -> bool:
+            return False
+
+        async def get_weather_forecast(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> dict | None:
+            return None
+
+        def get_ordering_trend_summary(
+            self,
+            *,
+            store_id: str,
+            reference_date: str | None = None,
+        ) -> str | None:
+            return None
+
+        def get_deadline_items(
+            self,
+            *,
+            store_id: str,
+            reference_datetime=None,
+        ) -> list[dict]:
+            return []
+
+        def get_ordering_trend_summary(
+            self,
+            *,
+            store_id: str,
+            reference_date: str | None = None,
+        ) -> str | None:
+            return None
+
+    class _AI:
+        async def recommend_ordering(self, *args, **kwargs):
+            raise AssertionError("AI should not be called for default ordering options")
+
+    service = OrderingService(repository=_Repo(), ai_client=_AI())
+
+    await service.list_options(store_id="POC_010")
+
+
+@pytest.mark.asyncio
+async def test_ordering_service_list_options_falls_back_to_store_deadline_items() -> None:
+    class _Repo:
+        async def list_options(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> list[dict]:
+            return [
+                {
+                    "option_id": "opt-a",
+                    "title": "吏?쒖＜ 媛숈? ?붿씪",
+                    "basis": "2026-03-01",
+                    "description": "湲곗? ?ㅻ챸",
+                    "recommended": True,
+                    "reasoning_text": "湲곗〈 洹쇨굅",
+                    "reasoning_metrics": [],
+                    "special_factors": [],
+                    "items": [
+                        {"sku_id": "700611", "sku_name": "由щ뱶,?꾩씠???뷀삎", "quantity": 6},
+                        {"sku_id": "700612", "sku_name": "移댁뭅?ㅽ썑濡쒖뒪?곕뱶", "quantity": 4},
+                    ],
+                }
+            ]
+
+        def uses_ordering_join_table(self, store_id: str | None = None) -> bool:
+            return False
+
+        def get_order_arrival_schedule(self, store_id: str | None = None) -> dict[str, str] | None:
+            return {
+                "order_deadline_at": "12:00",
+                "arrival_day_offset": "D+1",
+                "arrival_expected_at": "12:00",
+            }
+
+        def get_order_arrival_schedule_map(
+            self,
+            *,
+            store_id: str | None = None,
+            item_codes: list[str] | None = None,
+            item_names: list[str] | None = None,
+        ) -> dict[str, dict[str, str]]:
+            return {}
+
+        def get_shelf_life_days_map(
+            self,
+            *,
+            item_codes: list[str] | None = None,
+            item_names: list[str] | None = None,
+        ) -> dict[str, int]:
+            return {}
+
+        async def get_weather_forecast(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> dict | None:
+            return None
+
+    service = OrderingService(repository=_Repo(), ai_client=None)
+
+    response = await service.list_options(
+        store_id="POC_010",
+        reference_datetime=datetime(2026, 3, 5, 9, 0, 0),
+    )
+
+    assert response.deadline_at == "12:00"
+    assert response.deadline_minutes == 180
+    assert len(response.deadline_items) == 2
+    assert all(item.deadline_at == "12:00" for item in response.deadline_items)
+
+
+def test_ordering_repository_get_order_arrival_schedule_map_uses_deterministic_ranking(monkeypatch) -> None:
+    connection = _FakeOrderArrivalScheduleConnection()
+    repository = OrderingRepository(engine=_FakeOrderArrivalScheduleEngine(connection))
+    monkeypatch.setattr(ordering_repository_module, "has_table", lambda engine, table_name: table_name == "raw_order_arrival_schedule")
 
 
 def test_ordering_repository_history_prefers_store_cache() -> None:
@@ -852,6 +1079,71 @@ async def test_production_service_overview_is_empty_when_repository_is_empty() -
     assert overview.danger_count == 0
 
 
+@pytest.mark.asyncio
+async def test_production_service_uses_avg_first_production_qty_for_recommended_qty() -> None:
+    class _Repo:
+        async def list_items(self, store_id=None, business_date=None, reference_datetime=None):
+            return [
+                {
+                    "sku_id": "SKU-100",
+                    "name": "테스트 도넛",
+                    "current": 3,
+                    "forecast": 1,
+                    "status": "warning",
+                    "depletion_time": "18:00",
+                    "recommended": 99,
+                    "prod1": "08:00 / 10개",
+                    "prod2": "14:00 / 5개",
+                    "chance_loss_amt": 12500,
+                }
+            ]
+
+    service = ProductionService(repository=_Repo())
+
+    response = await service.get_sku_list(store_id="POC_010")
+
+    assert response.items[0].recommended_production_qty == 10
+
+
+@pytest.mark.asyncio
+async def test_production_service_overview_sums_chance_loss_amount_as_currency() -> None:
+    class _Repo:
+        async def list_items(self, store_id=None, business_date=None, reference_datetime=None):
+            return [
+                {
+                    "sku_id": "SKU-101",
+                    "name": "테스트 베이글",
+                    "current": 2,
+                    "forecast": 1,
+                    "status": "danger",
+                    "depletion_time": "17:30",
+                    "recommended": 0,
+                    "prod1": "08:00 / 6개",
+                    "prod2": "14:00 / 4개",
+                    "chance_loss_amt": 5400,
+                },
+                {
+                    "sku_id": "SKU-102",
+                    "name": "테스트 머핀",
+                    "current": 1,
+                    "forecast": 1,
+                    "status": "warning",
+                    "depletion_time": "18:20",
+                    "recommended": 0,
+                    "prod1": "08:00 / 5개",
+                    "prod2": "14:00 / 3개",
+                    "chance_loss_amt": 3200,
+                },
+            ]
+
+    service = ProductionService(repository=_Repo())
+
+    overview = await service.get_overview(store_id="POC_010")
+
+    chance_loss_stat = next(stat for stat in overview.summary_stats if stat.key == "chance_loss_saving_total")
+    assert chance_loss_stat.value == "8,600원"
+
+
 class _LegacyInventoryStatusRepository:
     def get_inventory_status(self, store_id: str | None = None, page: int = 1, page_size: int = 10):
         return (
@@ -916,6 +1208,55 @@ async def test_production_service_inventory_status_handles_string_summary_metric
     assert response.summary["shortage_count"] == 1
     assert response.summary["excess_count"] == 0
     assert response.summary["normal_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_production_service_inventory_status_uses_shelf_life_table_when_present() -> None:
+    class _Repo(_StringMetricInventoryStatusRepository):
+        def get_shelf_life_days_map(self, *, item_codes: list[str] | None = None, item_names: list[str] | None = None) -> dict[str, int]:
+            return {"SKU-002": 3}
+
+    service = ProductionService(repository=_Repo())
+    response = await service.get_inventory_status(store_id="POC_004")
+
+    assert response.items[0].assumed_shelf_life_days == 3
+
+
+@pytest.mark.asyncio
+async def test_production_service_inventory_status_uses_precomputed_mart_fields() -> None:
+    class _Repo:
+        def get_inventory_status(self, store_id: str | None = None, page: int = 1, page_size: int = 10):
+            return (
+                [
+                    {
+                        "item_cd": "SKU-010",
+                        "item_nm": "프리컴퓨트 도넛",
+                        "stk_avg": 2,
+                        "sal_avg": 5,
+                        "ord_avg": 7,
+                        "stk_rt": -0.2,
+                        "is_stockout": 1,
+                        "stockout_hour": 14,
+                        "assumed_shelf_life_days": 4,
+                        "expiry_risk_level": "중간",
+                        "status": "여유",
+                    }
+                ],
+                1,
+                {
+                    "shortage_count": 0,
+                    "excess_count": 1,
+                    "normal_count": 0,
+                    "avg_stock_rate": -0.2,
+                },
+            )
+
+    service = ProductionService(repository=_Repo())
+    response = await service.get_inventory_status(store_id="POC_010")
+
+    assert response.items[0].assumed_shelf_life_days == 4
+    assert response.items[0].expiry_risk_level == "중간"
+    assert response.items[0].status == "여유"
 
 
 class _MonthlyWasteRepository:
@@ -994,3 +1335,26 @@ async def test_production_service_waste_summary_supports_pagination(monkeypatch)
     assert response.summary["monthly_total_disuse_amount"] == 33000
     assert response.monthly_top_items[0].item_nm == "월간 글레이즈드"
     assert response.monthly_top_items[0].confirmed_disuse_qty == 7
+
+
+def test_production_service_recommended_qty_uses_avg_first_production_qty_only() -> None:
+    raw = {
+        "current": 0,
+        "prod1": "08:00 / 6개",
+        "prod2": "14:00 / 3개",
+        "recommended": 4,
+    }
+
+    assert ProductionService._recommended_qty_from_row(raw) == 6
+
+
+def test_production_service_chance_loss_amount_falls_back_to_shortage_prevention_amount() -> None:
+    raw = {
+        "current": 0,
+        "forecast": 4,
+        "prod1": "08:00 / 6개",
+        "prod2": "14:00 / 0개",
+        "recommended": 0,
+    }
+
+    assert ProductionService._chance_loss_amount_from_row(raw) == 4800

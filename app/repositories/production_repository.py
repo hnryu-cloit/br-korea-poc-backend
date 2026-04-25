@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class ProductionRepository(BaseRepository):
     _BUSINESS_HOURS: tuple[int, ...] = tuple(range(8, 22))
     _STOCKOUT_ZERO_SALES_WINDOW = 3
+    _POC_010_STORE_ID = "POC_010"
 
     @staticmethod
     def _build_history_filters(
@@ -38,6 +39,13 @@ class ProductionRepository(BaseRepository):
 
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
+
+    def _use_poc_010_production_inventory_mart(self, store_id: str | None) -> bool:
+        return bool(
+            self.engine
+            and store_id == self._POC_010_STORE_ID
+            and has_table(self.engine, "mart_poc_010_production_inventory_status")
+        )
 
     def get_shelf_life_days_map(
         self,
@@ -921,7 +929,7 @@ class ProductionRepository(BaseRepository):
 
             # 2. 발생일 기준 일평균
             for key, bucket in daily_sums.items():
-                n_days = max(1, len(bucket["dates"]))  # type: ignore[arg-type]
+                n_days = max(1, window_days)
                 metric_map[key] = {
                     "item_cd": bucket["item_cd"],
                     "item_nm": bucket["item_nm"],
@@ -1026,7 +1034,7 @@ class ProductionRepository(BaseRepository):
         hourly_sale_qty = self._scale_down_poc_qty(hourly_sale_qty)
 
         current = stock_qty if stock else production_qty
-        if current <= 0 and production_qty > 0:
+        if not stock and current <= 0 and production_qty > 0:
             current = production_qty
 
         demand_baseline = max(sale_qty, order_confirm_qty, hourly_sale_qty)
@@ -1056,14 +1064,10 @@ class ProductionRepository(BaseRepository):
             buffer_qty = max(4, int(round(forecast * 0.2)))
             recommended = self._clamp_recommended_qty(current, forecast, gap + buffer_qty)
 
-        prod1_qty = production_qty if production else max(8, current + 8)
-        if prod1_qty <= 0:
-            prod1_qty = max(8, current + 8)
-        prod2_qty = secondary_qty if secondary else max(recommended, current)
-        if prod2_qty <= 0:
-            prod2_qty = max(recommended, current)
-        if status != "safe":
-            prod2_qty = max(prod2_qty, recommended)
+        # 화면의 1차/2차 생산량은 최근 4주 평균 실적을 그대로 보여준다.
+        # 추천 생산수량은 별도 recommended 필드에서 계산한다.
+        prod1_qty = max(production_qty, 0)
+        prod2_qty = max(secondary_qty, 0)
 
         risk_score = max(forecast - current, 0)
         return {
@@ -1146,10 +1150,135 @@ class ProductionRepository(BaseRepository):
 
         return self._finalize_ranked_rows(ranked_rows)
 
+    @staticmethod
+    def _normalize_reference_date(value: str | None) -> str:
+        if value:
+            return value.replace("-", "")
+        return datetime.now().strftime("%Y%m%d")
+
+    def _fetch_recent_sales_item_keys(
+        self,
+        *,
+        store_id: str | None,
+        reference_date: str | None,
+        window_days: int = 7,
+    ) -> set[str]:
+        if not self.engine or not has_table(self.engine, "raw_daily_store_item"):
+            return set()
+        target_dt = datetime.strptime(self._normalize_reference_date(reference_date), "%Y%m%d").date()
+        date_from = (target_dt - timedelta(days=window_days - 1)).strftime("%Y%m%d")
+        store_filter_sql = "AND CAST(masked_stor_cd AS TEXT) = :store_id" if store_id else ""
+        try:
+            with self.engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT DISTINCT
+                                COALESCE(
+                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
+                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
+                                ) AS item_key
+                            FROM raw_daily_store_item
+                            WHERE 1=1
+                              {store_filter_sql}
+                              AND REPLACE(CAST(sale_dt AS TEXT), '-', '') BETWEEN :date_from AND :reference_date
+                              AND COALESCE(NULLIF(TRIM(CAST(sale_qty AS TEXT)), '')::numeric, 0) > 0
+                            """
+                        ),
+                        {
+                            "store_id": store_id,
+                            "date_from": date_from,
+                            "reference_date": target_dt.strftime("%Y%m%d"),
+                        },
+                    )
+                    .scalars()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return set()
+        return {str(row).strip() for row in rows if str(row or "").strip()}
+
+    def _fetch_recent_production_item_keys(
+        self,
+        *,
+        store_id: str | None,
+        reference_date: str | None,
+        window_days: int = 7,
+    ) -> set[str]:
+        if not self.engine or not has_table(self.engine, "raw_production_extract"):
+            return set()
+        target_dt = datetime.strptime(self._normalize_reference_date(reference_date), "%Y%m%d").date()
+        date_from = (target_dt - timedelta(days=window_days - 1)).strftime("%Y%m%d")
+        store_filter_sql = "AND CAST(masked_stor_cd AS TEXT) = :store_id" if store_id else ""
+        try:
+            with self.engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT DISTINCT
+                                COALESCE(
+                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
+                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
+                                ) AS item_key
+                            FROM raw_production_extract
+                            WHERE 1=1
+                              {store_filter_sql}
+                              AND REPLACE(CAST(prod_dt AS TEXT), '-', '') BETWEEN :date_from AND :reference_date
+                              AND (
+                                COALESCE(NULLIF(TRIM(CAST(prod_qty AS TEXT)), '')::numeric, 0) > 0
+                                OR COALESCE(NULLIF(TRIM(CAST(prod_qty_2 AS TEXT)), '')::numeric, 0) > 0
+                                OR COALESCE(NULLIF(TRIM(CAST(prod_qty_3 AS TEXT)), '')::numeric, 0) > 0
+                                OR COALESCE(NULLIF(TRIM(CAST(reprod_qty AS TEXT)), '')::numeric, 0) > 0
+                              )
+                            """
+                        ),
+                        {
+                            "store_id": store_id,
+                            "date_from": date_from,
+                            "reference_date": target_dt.strftime("%Y%m%d"),
+                        },
+                    )
+                    .scalars()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return set()
+        return {str(row).strip() for row in rows if str(row or "").strip()}
+
+    def _fetch_direct_production_item_keys(self, *, store_id: str | None) -> set[str]:
+        if not self.engine or not store_id or not has_table(self.engine, "raw_store_production_item"):
+            return set()
+        try:
+            with self.engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        text(
+                            """
+                            SELECT DISTINCT
+                                COALESCE(
+                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
+                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
+                                ) AS item_key
+                            FROM raw_store_production_item
+                            WHERE CAST(masked_stor_cd AS TEXT) = :store_id
+                            """
+                        ),
+                        {"store_id": store_id},
+                    )
+                    .scalars()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return set()
+        return {str(row).strip() for row in rows if str(row or "").strip()}
+
     async def list_items(
         self,
         store_id: str | None = None,
         business_date: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> list[dict]:
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
@@ -1245,7 +1374,17 @@ class ProductionRepository(BaseRepository):
                 reference_date=business_date,
             )
 
-        active_keys = set(sale_map)
+        recent_production_keys = self._fetch_recent_production_item_keys(
+            store_id=store_id,
+            reference_date=business_date,
+        )
+        recent_sales_keys = self._fetch_recent_sales_item_keys(
+            store_id=store_id,
+            reference_date=business_date,
+        )
+        direct_production_keys = self._fetch_direct_production_item_keys(store_id=store_id)
+
+        active_keys = recent_production_keys | (recent_sales_keys & direct_production_keys)
         if not active_keys:
             active_keys = set(stock_map)
         if not active_keys:
@@ -1624,13 +1763,112 @@ class ProductionRepository(BaseRepository):
             return []
 
     def get_inventory_status(
-        self, store_id: str | None = None, page: int = 1, page_size: int = 10
+        self,
+        store_id: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+        business_date: str | None = None,
+        reference_datetime: datetime | None = None,
     ) -> tuple[list[dict], int, dict]:
         if not self.engine or not store_id:
             return [], 0, {}
         try:
             offset = max(0, (page - 1) * page_size)
+            effective_business_date = business_date
+            if effective_business_date is None and reference_datetime is not None:
+                effective_business_date = reference_datetime.strftime("%Y-%m-%d")
+            normalized_business_date = (
+                effective_business_date.replace("-", "") if effective_business_date else None
+            )
             with self.engine.connect() as conn:
+                if self._use_poc_010_production_inventory_mart(store_id):
+                    if normalized_business_date:
+                        latest_business_date = conn.execute(
+                            text(
+                                """
+                                SELECT MAX(business_date)
+                                FROM mart_poc_010_production_inventory_status
+                                WHERE store_id = :store_id
+                                  AND business_date <= :business_date
+                                """
+                            ),
+                            {"store_id": store_id, "business_date": normalized_business_date},
+                        ).scalar_one_or_none()
+                    else:
+                        latest_business_date = conn.execute(
+                            text(
+                                """
+                                SELECT MAX(business_date)
+                                FROM mart_poc_010_production_inventory_status
+                                WHERE store_id = :store_id
+                                """
+                            ),
+                            {"store_id": store_id},
+                        ).scalar_one_or_none()
+                    if latest_business_date:
+                        total_items = int(
+                            conn.execute(
+                                text(
+                                    """
+                                    SELECT COUNT(*)
+                                    FROM mart_poc_010_production_inventory_status
+                                    WHERE store_id = :store_id
+                                      AND business_date = :business_date
+                                    """
+                                ),
+                                {"store_id": store_id, "business_date": latest_business_date},
+                            ).scalar_one()
+                        )
+                        summary_row = conn.execute(
+                            text(
+                                """
+                                SELECT
+                                    COUNT(*) FILTER (WHERE status = '부족') AS shortage_count,
+                                    COUNT(*) FILTER (WHERE status = '여유') AS excess_count,
+                                    COUNT(*) FILTER (WHERE status = '적정') AS normal_count,
+                                    AVG(stock_rate) AS avg_stock_rate
+                                FROM mart_poc_010_production_inventory_status
+                                WHERE store_id = :store_id
+                                  AND business_date = :business_date
+                                """
+                            ),
+                            {"store_id": store_id, "business_date": latest_business_date},
+                        ).mappings().one()
+                        rows = (
+                            conn.execute(
+                                text(
+                                    """
+                                    SELECT
+                                        item_cd,
+                                        item_nm,
+                                        total_stock AS stk_avg,
+                                        total_sold AS sal_avg,
+                                        total_orderable AS ord_avg,
+                                        stock_rate AS stk_rt,
+                                        is_stockout,
+                                        stockout_hour,
+                                        assumed_shelf_life_days,
+                                        expiry_risk_level,
+                                        status
+                                    FROM mart_poc_010_production_inventory_status
+                                    WHERE store_id = :store_id
+                                      AND business_date = :business_date
+                                    ORDER BY stock_rate ASC, item_nm ASC
+                                    LIMIT :page_size OFFSET :offset
+                                    """
+                                ),
+                                {
+                                    "store_id": store_id,
+                                    "business_date": latest_business_date,
+                                    "page_size": page_size,
+                                    "offset": offset,
+                                },
+                            )
+                            .mappings()
+                            .all()
+                        )
+                        return [dict(r) for r in rows], total_items, dict(summary_row)
+
                 total_items = int(
                     conn.execute(
                         text(
@@ -1638,9 +1876,10 @@ class ProductionRepository(BaseRepository):
                             SELECT COUNT(DISTINCT item_cd) AS total_items
                             FROM core_stock_rate
                             WHERE masked_stor_cd = :store_id
+                              AND (:business_date IS NULL OR prc_dt <= :business_date)
                             """
                         ),
-                        {"store_id": store_id},
+                        {"store_id": store_id, "business_date": normalized_business_date},
                     ).scalar_one()
                 )
                 summary_row = conn.execute(
@@ -1651,6 +1890,7 @@ class ProductionRepository(BaseRepository):
                                 stk_rt, is_stockout
                             FROM core_stock_rate
                             WHERE masked_stor_cd = :store_id
+                              AND (:business_date IS NULL OR prc_dt <= :business_date)
                             ORDER BY item_cd, prc_dt DESC
                         )
                         SELECT
@@ -1661,7 +1901,7 @@ class ProductionRepository(BaseRepository):
                         FROM latest
                         """
                     ),
-                    {"store_id": store_id},
+                    {"store_id": store_id, "business_date": normalized_business_date},
                 ).mappings().one()
                 summary_metrics = dict(summary_row)
                 if total_items == 0:
@@ -1690,11 +1930,17 @@ class ProductionRepository(BaseRepository):
                                AND sr.item_cd = st.item_cd
                                AND sr.prc_dt = st.prc_dt
                             WHERE sr.masked_stor_cd = :store_id
+                              AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
                             ORDER BY sr.item_cd, sr.prc_dt DESC
                             LIMIT :page_size OFFSET :offset
                             """
                         ),
-                        {"store_id": store_id, "page_size": page_size, "offset": offset},
+                        {
+                            "store_id": store_id,
+                            "page_size": page_size,
+                            "offset": offset,
+                            "business_date": normalized_business_date,
+                        },
                     )
                     .mappings()
                     .all()
