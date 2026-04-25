@@ -121,6 +121,14 @@ class SalesInsightsResponse(BaseModel):
     explainability: ExplainabilityPayload | None = None
 
 
+class MenuInsightsResponse(BaseModel):
+    cards: list[SalesInsightSection] = Field(default_factory=list)
+    filtered_store_id: Optional[str] = None
+    filtered_date_from: Optional[str] = None
+    filtered_date_to: Optional[str] = None
+    explainability: ExplainabilityPayload | None = None
+
+
 class SalesWeeklyItem(BaseModel):
     day: str
     revenue: float

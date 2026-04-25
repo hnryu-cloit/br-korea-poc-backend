@@ -5,6 +5,7 @@ from app.core.exceptions import service_error_handler
 from app.core.reference_datetime import resolve_date_range_by_reference
 from app.core.deps import get_sales_service
 from app.schemas.sales import (
+    MenuInsightsResponse,
     SalesCampaignEffectResponse,
     SalesInsightsResponse,
     SalesPrompt,
@@ -78,6 +79,25 @@ async def get_sales_insights(
             x_reference_datetime, date_from, date_to
         )
         return await service.get_insights(
+            store_id=store_id,
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+        )
+
+
+@router.get("/menu-insights", response_model=MenuInsightsResponse)
+async def get_sales_menu_insights(
+    store_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
+    service: SalesService = Depends(get_sales_service),
+) -> MenuInsightsResponse:
+    async with service_error_handler("메뉴 인사이트 조회"):
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
+        return await service.get_menu_insights(
             store_id=store_id,
             date_from=resolved_date_from,
             date_to=resolved_date_to,

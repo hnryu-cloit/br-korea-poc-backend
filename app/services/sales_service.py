@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 
 from app.repositories.sales_repository import SalesRepository
 from app.schemas.sales import (
+    MenuInsightsResponse,
     SalesCampaignEffectResponse,
+    SalesInsightMetric,
+    SalesInsightSection,
     SalesInsightsResponse,
     SalesAnswer,
     SalesQueryAgentTrace,
@@ -516,6 +519,205 @@ class SalesService:
             evidence=insight_evidence,
         )
         return response
+
+    @staticmethod
+    def _derive_menu_insight_inputs(
+        summary_payload: dict,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> tuple[dict, dict, dict]:
+        today_revenue = float(summary_payload.get("today_revenue") or 0.0)
+        today_net = float(summary_payload.get("today_net_revenue") or 0.0)
+        today_profit = float(summary_payload.get("estimated_today_profit") or 0.0)
+        avg_margin_rate = float(summary_payload.get("avg_margin_rate") or 0.0)
+        avg_net_per_item = float(summary_payload.get("avg_net_profit_per_item") or 0.0)
+        weekly = summary_payload.get("weekly_data") or []
+        weekly_trend = [
+            {
+                "day": str(item.get("day") or ""),
+                "revenue": float(item.get("revenue") or 0.0),
+                "net_revenue": float(item.get("net_revenue") or 0.0),
+            }
+            for item in weekly
+        ]
+        weekly_revenue_total = sum(item["revenue"] for item in weekly_trend)
+        weekly_net_total = sum(item["net_revenue"] for item in weekly_trend)
+        discount_burden_pct = (
+            round((1 - today_net / today_revenue) * 100, 1) if today_revenue > 0 else 0.0
+        )
+
+        profitability_data = {
+            "today_revenue": today_revenue,
+            "today_net_revenue": today_net,
+            "estimated_today_profit": today_profit,
+            "avg_margin_rate": avg_margin_rate,
+            "avg_net_profit_per_item": avg_net_per_item,
+            "weekly_trend": weekly_trend,
+            "weekly_revenue_total": weekly_revenue_total,
+            "weekly_net_total": weekly_net_total,
+            "discount_burden_pct": discount_burden_pct,
+            "period": {"date_from": date_from, "date_to": date_to},
+        }
+
+        top_products = summary_payload.get("top_products") or []
+        normalized_products: list[dict] = []
+        for product in top_products:
+            sales = float(product.get("sales") or 0.0)
+            qty = float(product.get("qty") or 0.0)
+            normalized_products.append(
+                {
+                    "name": str(product.get("name") or ""),
+                    "sales": sales,
+                    "qty": qty,
+                }
+            )
+        total_sales = sum(item["sales"] for item in normalized_products) or 1.0
+        enriched_products = [
+            {
+                **item,
+                "share_pct": round(item["sales"] / total_sales * 100, 1),
+                "unit_price": round(item["sales"] / max(item["qty"], 1.0), 0),
+            }
+            for item in normalized_products
+        ]
+        top3_share = round(sum(p["share_pct"] for p in enriched_products[:3]), 1)
+        top1_share = enriched_products[0]["share_pct"] if enriched_products else 0.0
+        if top3_share >= 70:
+            concentration_label = "편중형"
+        elif top3_share >= 50:
+            concentration_label = "집중형"
+        else:
+            concentration_label = "균형형"
+        product_mix_data = {
+            "top_products": enriched_products[:10],
+            "top3_share_pct": top3_share,
+            "product_count": len(enriched_products),
+            "concentration_label": concentration_label,
+            "avg_unit_price": round(
+                sum(p["sales"] for p in enriched_products)
+                / max(sum(p["qty"] for p in enriched_products), 1.0),
+                0,
+            ),
+        }
+
+        hhi_proxy = round(sum((p["share_pct"]) ** 2 for p in enriched_products[:10]), 1)
+        if top1_share >= 25:
+            risk_level = "high"
+        elif top1_share >= 15:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+        concentration_data = {
+            "top1_share_pct": top1_share,
+            "top1_product_name": enriched_products[0]["name"] if enriched_products else "",
+            "top3_share_pct": top3_share,
+            "top3_products": [
+                {"name": p["name"], "share_pct": p["share_pct"]}
+                for p in enriched_products[:3]
+            ],
+            "hhi_proxy": hhi_proxy,
+            "risk_level": risk_level,
+            "product_count": len(enriched_products),
+        }
+
+        return profitability_data, product_mix_data, concentration_data
+
+    async def get_menu_insights(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> MenuInsightsResponse:
+        if not store_id:
+            raise ValueError("store_id is required")
+
+        summary_payload = await self.repository.get_summary(
+            store_id=store_id, date_from=date_from, date_to=date_to
+        )
+        if isinstance(summary_payload.get("weekly_data"), list):
+            summary_payload["weekly_data"] = [
+                {
+                    "day": self._sale_dt_to_day_label(item["sale_dt"])
+                    if "sale_dt" in item
+                    else item.get("day", ""),
+                    "revenue": item.get("revenue", 0.0),
+                    "net_revenue": item.get("net_revenue", 0.0),
+                }
+                for item in summary_payload["weekly_data"]
+            ]
+
+        profitability_data, product_mix_data, concentration_data = (
+            self._derive_menu_insight_inputs(summary_payload, date_from, date_to)
+        )
+
+        empty_summary = (
+            float(summary_payload.get("today_revenue") or 0.0) == 0.0
+            and not (summary_payload.get("top_products") or [])
+        )
+        if empty_summary:
+            return MenuInsightsResponse(
+                cards=[],
+                filtered_store_id=store_id,
+                filtered_date_from=date_from,
+                filtered_date_to=date_to,
+            )
+
+        if not self.ai_client:
+            raise RuntimeError("AI client is not configured for menu insights")
+
+        result = await self.ai_client.generate_menu_insights(
+            store_id=store_id,
+            profitability_data=profitability_data,
+            product_mix_data=product_mix_data,
+            concentration_data=concentration_data,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not result or not result.get("cards"):
+            raise RuntimeError("AI failed to generate menu insights")
+
+        cards: list[SalesInsightSection] = []
+        for card in result["cards"]:
+            if not isinstance(card, dict):
+                continue
+            metrics = [
+                SalesInsightMetric(
+                    label=str(metric.get("label") or ""),
+                    value=str(metric.get("value") or ""),
+                    detail=metric.get("detail"),
+                )
+                for metric in (card.get("metrics") or [])
+                if isinstance(metric, dict)
+            ]
+            cards.append(
+                SalesInsightSection(
+                    title=str(card.get("title") or ""),
+                    summary=str(card.get("summary") or ""),
+                    metrics=metrics,
+                    actions=[str(action) for action in (card.get("actions") or [])],
+                    status="active",
+                )
+            )
+
+        actions = [action for card in cards for action in card.actions]
+        evidence = [
+            f"{card.title} - {metric.label}: {metric.value}"
+            for card in cards
+            for metric in card.metrics
+        ]
+        explainability = create_ready_payload(
+            trace_id=f"sales-menu-insights-{store_id}",
+            actions=actions,
+            evidence=evidence,
+        )
+
+        return MenuInsightsResponse(
+            cards=cards,
+            filtered_store_id=store_id,
+            filtered_date_from=date_from,
+            filtered_date_to=date_to,
+            explainability=explainability,
+        )
 
     async def get_summary(
         self,

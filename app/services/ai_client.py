@@ -197,6 +197,28 @@ class AIServiceClient:
             body["date_to"] = date_to
         return await self._post("/sales/summarize/insights", body, timeout=60.0)
 
+    async def generate_menu_insights(
+        self,
+        store_id: str,
+        profitability_data: dict,
+        product_mix_data: dict,
+        concentration_data: dict,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict | None:
+        """메뉴 인사이트 카드 3개를 AI 서비스에 요청합니다. 실패 시 None을 반환합니다."""
+        body: dict[str, object] = {
+            "store_id": store_id,
+            "profitability_data": profitability_data,
+            "product_mix_data": product_mix_data,
+            "concentration_data": concentration_data,
+        }
+        if date_from:
+            body["date_from"] = date_from
+        if date_to:
+            body["date_to"] = date_to
+        return await self._post("/sales/summarize/menu-insights", body, timeout=60.0)
+
     async def generate_campaign_narrative(
         self,
         store_id: str,
