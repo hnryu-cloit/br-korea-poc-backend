@@ -74,6 +74,7 @@ endpoint → service → repository → schema
 * endpoint는 `request` 파싱과 DI 연결만 담당한다.
 * 비즈니스 로직은 반드시 service로 위임한다.
 * 예외는 endpoint에서 `HTTPException`으로 감싸 반환한다.
+* 동일한 예외 매핑이 반복되면 endpoint 파일 내 private helper 함수로 공통화한다.
 
 ```python
 @router.post("/query", response_model=SalesQueryResponse)

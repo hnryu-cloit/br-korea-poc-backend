@@ -39,6 +39,20 @@
   - 운영: 3개
 - 이번 세션의 DB 마이그레이션/테이블 정의 변경은 없습니다.
 
+## Session Update (2026-04-25)
+
+- 프론트 `/analytics/market` 사이드바 active 충돌 수정과 상권 인사이트 fallback 렌더링 제거 작업을 연동 기준으로 반영했습니다.
+- 본 세션의 DB 마이그레이션/테이블 구조 변경은 없습니다.
+- 추가로 `/api/analytics/market-scope-options`가 `raw_seoul_market_sales`, `raw_seoul_market_floating_population`의 `area_name`을 읽어 `구/동` 필터 옵션을 동적으로 구성하도록 연동했습니다.
+- DB 마이그레이션 추가 없이 기존 raw 테이블 컬럼(`area_name`)만 사용합니다.
+- `sales` 도메인 안정화 패치(`SUM(text)` 캐스팅 보정, summary no-data 200, AI 미연결 기본응답)는 서비스/쿼리 레이어 변경이며 DB 스키마 변경은 없습니다.
+- AI 관리 라우터 리팩토링(ML 예측 로직 서비스 분리) 및 프론트 매출 차트 렌더러 분리 세션을 반영했습니다.
+- 위 리팩토링은 애플리케이션 계층 변경이며 DB 스키마/마이그레이션 변경은 없습니다.
+- 추가로 backend `analytics` 엔드포인트의 예외 처리 공통화(헬퍼 함수 도입)를 반영했습니다.
+- 해당 변경 역시 애플리케이션 계층 리팩토링이며 DB 스키마/마이그레이션 변경은 없습니다.
+- `ordering_repository` 로거 임포트 누락, `sales_repository` 미정의 변수 참조 버그를 수정했습니다.
+- 위 수정은 코드 안정화 목적이며 DB 스키마/마이그레이션 변경은 없습니다.
+
 ---
 
 ## 원본 테이블 분류
@@ -1243,4 +1257,74 @@ POC_030         20260101  두바이 스타일 초콜릿도넛  303      15      
 ## Session Update (2026-04-25, settings logo click navigation 영향도)
 
 - 본 세션의 추가 작업은 프론트 내비게이션 변경이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, settings typography size alignment 영향도)
+
+- 본 세션의 추가 작업은 프론트 스타일 조정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, settings sidebar design-system alignment 영향도)
+
+- 본 세션의 추가 작업은 프론트 스타일 정렬이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, settings sidebar rollback 영향도)
+
+- 본 세션의 추가 작업은 프론트 스타일 롤백이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, settings summary cards white background 영향도)
+
+- 본 세션의 추가 작업은 프론트 UI 스타일 조정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, prompts textarea width adjustment 영향도)
+
+- 본 세션의 추가 작업은 프론트 레이아웃 스타일 조정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, prompts card equal height 영향도)
+
+- 본 세션의 추가 작업은 프론트 UI 정렬이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, prompts card height 80 영향도)
+
+- 본 세션의 추가 작업은 프론트 UI 높이 정렬이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, floating chat golden-query integration 영향도)
+
+- 본 세션의 추가 작업은 프론트 플로팅 챗 연동 로직 변경이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, floating chat source badge + reference popup 영향도)
+
+- 본 세션의 추가 작업은 프론트 플로팅 챗 UI/타입 매핑이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, golden query miss badge 영향도)
+
+- 본 세션의 추가 작업은 프론트 UI 상태 표기이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, dashboard recommended question handoff 영향도)
+
+- 본 세션의 추가 작업은 프론트 라우팅/UX 연결이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, market page sales-trend card removal 영향도)
+
+- 본 세션의 추가 작업은 프론트 화면 노출 조정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, sales metrics info-popover coverage 영향도)
+
+- 본 세션의 추가 작업은 프론트 카드 캡션 UI 보강이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, floating chat suggested questions pinned to golden prompts 영향도)
+
+- 본 세션의 추가 작업은 프론트 후보질문 구성 로직 변경이며, 백엔드 DB 스키마 변경은 없습니다.
 - `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
