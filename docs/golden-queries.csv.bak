@@ -12,7 +12,7 @@
       AND sale_dt = '20260305'
       AND tmzon_div < '09'
    GROUP BY sale_dt, tmzon_div
-   ORDER BY tmzon_div;",매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.,sales_get_today_hourly_sales_report,오늘 시간대별 매출 보여줘 | 지금까지 시간대별 판매 현황 알려줘 | 오늘 [날짜] 시간대별 매출액 확인해줘 | 현재 시간 기준 오늘 매출 추이 말해줘 | 오늘 [상품] 시간대별 판매량 얼마야? | 오늘 시간대별로 매출 데이터 뽑아줘
+   ORDER BY tmzon_div;",매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.,,
 006-001-,2026-03-05 09:00 (KST),매출 관리,지난달 대비 객단가 변화 뭐부터 보면 돼?,✅,"core_channel_sales, core_hourly_item_sales, core_daily_item_sales",-,"SELECT
     sale_dt,
     SUM(sale_amt) AS total_sale_amt,
@@ -31,7 +31,7 @@ FROM core_channel_sales
 WHERE masked_stor_cd = 'POC_010'
   AND sale_dt BETWEEN '20260201' AND '20260305'
 GROUP BY sale_dt
-ORDER BY sale_dt;",매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.,sales_analyze_atv_change_previous_month,전월 대비 객단가 변동 추이 알려줘 | [상품명]의 지난달 대비 객단가 변화 확인해줘 | 지난달이랑 비교해서 객단가 어떻게 변했어? | 객단가 변화 분석할 때 뭐부터 확인해야 해? | 전월이랑 이번 달 객단가 차이 좀 보여줘 | [날짜] 기준 객단가 변화 원인이 뭐야?
+ORDER BY sale_dt;",매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.,,
 015-001-,2026-03-05 09:00 (KST),생산 관리,지난주 대비 품절 자주 나는 품목 바로 볼 포인트 뭐야?,✅,"core_stock_rate, core_stockout_time, core_hourly_item_sales, production_registrations",-,"SELECT
     csr.item_cd,
     chis.item_nm,
@@ -62,7 +62,7 @@ WHERE csr.masked_stor_cd = 'POC_010'
           AND TO_DATE('20260305', 'YYYYMMDD')
 GROUP BY csr.item_cd, chis.item_nm
 ORDER BY avg_stk_rt ASC, total_sale_qty DESC
-LIMIT 12;","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",production_compare_weekly_stockout_frequency_items,지난주랑 비교해서 품절 잦은 상품들 확인하는 방법 알려줘 | 전주 대비 품절 빈도가 높은 품목 리스트 보여줘 | [날짜] 기준으로 지난주보다 품절 많이 된 거 뭐야? | [상품명] 중에서 지난주 대비 품절 잦은 거 있어? | 저번 주보다 품절 심해진 품목들 뭐야? | 전주 대비 품절 발생 빈도가 급증한 품목의 주요 지표를 조회해줘
+LIMIT 12;","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",,
 016-001-,2026-03-05 09:00 (KST),주문 관리,지난주 대비 수동 발주 많은 품목 핵심만 짚어줘,✅,"raw_order_extract, ordering_selections",-,"SELECT
     item_cd,
     item_nm,
@@ -109,7 +109,7 @@ LIMIT 12;","  SELECT
     - SUM(COALESCE(NULLIF(confrm_qty,
   '')::numeric, 0))
   ) DESC
-  LIMIT 12;","기준일시(2026-03-05 09:00, KST) 기준으로 발주-확정 괴리와 수동발주 비중을 함께 분석해 다음 발주 조정안을 제시합니다.",ordering_compare_manual_order_volume_by_item,어제보다 수동 발주가 급증한 상품 알려줘 | [상품명]의 지난달 대비 수동 발주 건수 비교해줘 | 수동 발주 수량이 전주 대비 [수량] 이상 늘어난 품목 뭐야? | 최근 수동 발주가 눈에 띄게 많은 품목 리스트 뽑아줘 | 지난주랑 비교해서 수동 발주 비중이 높아진 품목 확인해줘 | [날짜] 기준으로 수동 발주가 가장 많은 품목 핵심 요약해줘
+  LIMIT 12;","기준일시(2026-03-05 09:00, KST) 기준으로 발주-확정 괴리와 수동발주 비중을 함께 분석해 다음 발주 조정안을 제시합니다.",,
 017-001-,2026-03-05 09:00 (KST),생산 관리,지난달 대비 재고 부족 품목 바로 조치할 것부터 알려줘,✅,"core_stock_rate, core_stockout_time, core_hourly_item_sales, production_registrations",-,"SELECT item_cd, item_nm, AVG(stk_rt) AS avg_stk_rt, SUM(sale_qty) AS total_sale_qty FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd WHERE csr.masked_stor_cd = :store_id AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY item_cd, item_nm ORDER BY avg_stk_rt ASC, total_sale_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */","  SELECT
     csr.item_cd,
     csr.item_nm,
@@ -127,8 +127,8 @@ LIMIT 12;","  SELECT
   ORDER BY avg_stk_rt ASC, total_sale_qty DESC
   LIMIT 12;
 
-","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",production_get_stock_shortage_priority_comparison,전월 대비 품절 위험 품목 우선순위대로 보여줘 | [상품명] 재고 부족한 거 지난달이랑 비교해서 급한 순으로 알려줘 | 지금 당장 발주 필요한 재고 부족 리스트 지난달 기준으로 뽑아줘 | 지난달보다 재고 상황 안 좋은 품목들 조치 필요한 순서로 나열해줘 | [날짜] 대비 재고 부족한 [상품명] 중 조치 시급한 것 확인해줘 | 재고 부족 품목 중 우선 조치 대상 알려줘
-018-001-,2026-03-05 09:00 (KST),매출 관리,이번 주 요일별 매출 바로 조치할 것부터 알려줘,✅,"core_channel_sales, core_hourly_item_sales, core_daily_item_sales",-,"SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = :store_id AND to_date(sale_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = 'POC_010' AND to_date(sale_dt,'YYYYMMDD') BETWEEN '20260201' AND '20260305' GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","기준일시(2026-03-05 09:00, KST) 기준으로 매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.",sales_get_weekly_daily_sales_action_priority,이번 주 요일별 매출 바로 조치할 것부터 알려줘 | 금주 요일별 매출 현황 중 긴급한 것부터 보여줘 | 이번 주 일자별 판매 실적 보고 조치가 필요한 품목 알려줘 | 이번 주 요일별 매출 데이터에서 우선순위 높은 조치 사항 확인해줘 | 이번 주 일별 매출액 확인하고 문제 있는 부분부터 리스트업해줘 | 이번 주 요일별 실적 중 급한 것부터 정렬해줘
+","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",,
+018-001-,2026-03-05 09:00 (KST),매출 관리,이번 주 요일별 매출 바로 조치할 것부터 알려줘,✅,"core_channel_sales, core_hourly_item_sales, core_daily_item_sales",-,"SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = :store_id AND to_date(sale_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = 'POC_010' AND to_date(sale_dt,'YYYYMMDD') BETWEEN '20260201' AND '20260305' GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","기준일시(2026-03-05 09:00, KST) 기준으로 매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.",,
 019-001-,2026-03-05 09:00 (KST),생산 관리,요즘 폐기 많은 품목 지금 확인할 것만 말해줘,✅,"core_stock_rate, core_stockout_time, core_hourly_item_sales, production_registrations",-,"SELECT item_cd, item_nm, AVG(stk_rt) AS avg_stk_rt, SUM(sale_qty) AS total_sale_qty FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd WHERE csr.masked_stor_cd = :store_id AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY item_cd, item_nm ORDER BY avg_stk_rt ASC, total_sale_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */"," SELECT
     csr.item_cd,
     csr.item_nm,
@@ -145,7 +145,7 @@ LIMIT 12;","  SELECT
   GROUP BY csr.item_cd, csr.item_nm
   ORDER BY avg_stk_rt ASC, total_sale_qty DESC
   LIMIT 12;
-","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",production_check_high_disposal_items_recently,최근 폐기율 높은 품목 알려줘 | 요즘 폐기 많이 나오는 상품 뭐야? | 지금 바로 확인해야 할 폐기 품목 리스트 | 최근 {date} 동안 폐기량 많은 품목 확인해줘 | 폐기 수량 {quantity}개 이상인 품목 리스트 | 생산 등록 대비 폐기 많은 품목 조회
+","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",,
 020-001-,2026-03-05 09:00 (KST),생산 관리,요즘 생산 늦는 품목 지금 확인할 것만 말해줘,✅,"core_stock_rate, core_stockout_time, core_hourly_item_sales, production_registrations",-,"SELECT item_cd, item_nm, AVG(stk_rt) AS avg_stk_rt, SUM(sale_qty) AS total_sale_qty FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd WHERE csr.masked_stor_cd = :store_id AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY item_cd, item_nm ORDER BY avg_stk_rt ASC, total_sale_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */"," SELECT
     csr.item_cd,
     csr.item_nm,
@@ -162,7 +162,7 @@ LIMIT 12;","  SELECT
   GROUP BY csr.item_cd, csr.item_nm
   ORDER BY avg_stk_rt ASC, total_sale_qty DESC
   LIMIT 12;
-","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",production_check_current_delayed_production_items,현재 생산 지연되고 있는 품목 리스트 보여줘 | 지금 바로 확인해야 할 생산 지연 품목 뭐야? | 최근 [상품명] 생산 늦어지는 거 있는지 확인해줘 | 생산 일정 늦어지는 품목들 지금 체크해줘 | 지연 중인 생산 품목 알려줘 | [날짜] 기준으로 생산 지연 발생한 품목 뭐야?
+","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",,
 021-001-,2026-03-05 09:00 (KST),생산 관리,이번 주 재고 부족 품목 지금 확인할 것만 말해줘,✅,"core_stock_rate, core_stockout_time, core_hourly_item_sales, production_registrations",-,"SELECT item_cd, item_nm, AVG(stk_rt) AS avg_stk_rt, SUM(sale_qty) AS total_sale_qty FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd WHERE csr.masked_stor_cd = :store_id AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY item_cd, item_nm ORDER BY avg_stk_rt ASC, total_sale_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */"," SELECT
     csr.item_cd,
     csr.item_nm,
@@ -179,8 +179,8 @@ LIMIT 12;","  SELECT
   GROUP BY csr.item_cd, csr.item_nm
   ORDER BY avg_stk_rt ASC, total_sale_qty DESC
   LIMIT 12;
-","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",production_check_weekly_stock_shortage_items,이번 주 재고 부족한 거 뭐 있어? | 금주 품절 위험 품목 리스트 보여줘 | 지금 바로 확인해야 할 재고 부족 상품 알려줘 | 이번 주에 수량 부족한 품목들만 골라줘 | 현재 재고가 모자란 아이템 확인해줘 | 이번 주 재고 부족 품목 현황 보고해줘
-022-001-,2026-03-05 15:00 (KST),매출 관리,오늘 저마진 상품 핵심만 짚어줘,✅,"core_channel_sales, core_hourly_item_sales, core_daily_item_sales",-,"SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = :store_id AND to_date(sale_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = 'POC_010' AND to_date(sale_dt,'YYYYMMDD') BETWEEN '20260201' AND '20260305' GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","기준일시(2026-03-05 09:00, KST) 기준으로 매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.",sales_summarize_daily_low_margin_product_performance,오늘 저마진 상품 핵심만 짚어줘 | 금일 마진 낮은 품목 요약해줘 | 오늘 수익성 낮은 상품들 주요 현황 알려줘 | 이번 달 저마진 제품 리스트 요약 보고서 보여줘 | 현재 마진율 낮은 상품들 핵심 요약 | 오늘 판매된 저마진 상품들 요점 정리해줘
+","기준일시(2026-03-05 09:00, KST) 기준으로 생산·재고·품절 위험을 묶어 즉시 실행 우선순위를 제공합니다.",,
+022-001-,2026-03-05 15:00 (KST),매출 관리,오늘 저마진 상품 핵심만 짚어줘,✅,"core_channel_sales, core_hourly_item_sales, core_daily_item_sales",-,"SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = :store_id AND to_date(sale_dt,'YYYYMMDD') BETWEEN :date_from AND :date_to GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","SELECT sale_dt, SUM(sale_amt) AS total_sale_amt, SUM(ord_cnt) AS total_ord_cnt, SUM(sale_amt)/NULLIF(SUM(ord_cnt),0) AS avg_ticket FROM core_channel_sales WHERE masked_stor_cd = 'POC_010' AND to_date(sale_dt,'YYYYMMDD') BETWEEN '20260201' AND '20260305' GROUP BY sale_dt ORDER BY sale_dt /* 기준일시: 2026-03-05 09:00 KST */","기준일시(2026-03-05 09:00, KST) 기준으로 매출·주문·객단가 변화를 함께 보고 실행 가능한 매출 개선 포인트를 제공합니다.",,
 001-001-,2026-03-05 15:00 (KST),생산 관리,오늘 품목별 폐기 수량을 판매 수량으로 나눈 폐기율 높은 품목 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",폐기 수량은 stk_rt 음수 변화량으로 추정; 정확한 폐기 컬럼 없음,"SELECT
     item_cd,
     item_nm,
@@ -200,7 +200,7 @@ HAVING
     SUM(disuse_qty::NUMERIC) > 0 -- 폐기가 1건 이상 발생한 품목만 필터링
 ORDER BY
     discard_rate_pct DESC NULLS LAST
-LIMIT 10;","SELECT csr.item_cd, csr.item_nm, SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) AS est_waste_qty, SUM(COALESCE(chis.sale_qty,0)) AS total_sale_qty, ROUND(SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) / NULLIF(SUM(COALESCE(chis.sale_qty,0)),0), 4) AS waste_rate FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd AND to_date(chis.sale_dt,'YYYYMMDD') = to_date(csr.prc_dt,'YYYYMMDD') WHERE csr.masked_stor_cd = 'POC_010' AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN '20260305' AND '20260305' GROUP BY csr.item_cd, csr.item_nm ORDER BY waste_rate DESC NULLS LAST, est_waste_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */","폐기율(폐기수량÷판매수량) 기준 상위 품목을 나열하고, 폐기율이 높은 원인(과잉 생산·낮은 판매속도)을 품목별로 추정하여 제시",production_get_high_disposal_rate_items,오늘 폐기율이 가장 높은 품목은 뭐야? | [날짜] 기준 판매량 대비 폐기 수량 비율이 높은 상품 알려줘 | 품목별로 폐기 수량을 판매 수량으로 나눈 비율 높은 순서대로 보여줘 | 어제 폐기율 높은 품목 리스트 확인해줘 | [상품명]의 오늘자 폐기율 순위가 어떻게 돼? | 금일 판매 대비 폐기 비중이 큰 항목 조회해줘
+LIMIT 10;","SELECT csr.item_cd, csr.item_nm, SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) AS est_waste_qty, SUM(COALESCE(chis.sale_qty,0)) AS total_sale_qty, ROUND(SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) / NULLIF(SUM(COALESCE(chis.sale_qty,0)),0), 4) AS waste_rate FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd AND to_date(chis.sale_dt,'YYYYMMDD') = to_date(csr.prc_dt,'YYYYMMDD') WHERE csr.masked_stor_cd = 'POC_010' AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN '20260305' AND '20260305' GROUP BY csr.item_cd, csr.item_nm ORDER BY waste_rate DESC NULLS LAST, est_waste_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */","폐기율(폐기수량÷판매수량) 기준 상위 품목을 나열하고, 폐기율이 높은 원인(과잉 생산·낮은 판매속도)을 품목별로 추정하여 제시",,
 002-001-,2026-03-05 15:00 (KST),생산 관리,어제 폐기율이 가장 높았던 품목 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",폐기 수량은 stk_rt 음수 변화량으로 추정; 정확한 폐기 컬럼 없음,"SELECT
     item_cd,
     item_nm,
@@ -220,7 +220,7 @@ HAVING
     SUM(disuse_qty::NUMERIC) > 0 -- 폐기가 1건 이상 발생한 품목만 필터링
 ORDER BY
     discard_rate_pct DESC NULLS LAST
-LIMIT 10;","SELECT csr.item_cd, csr.item_nm, SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) AS est_waste_qty, SUM(COALESCE(chis.sale_qty,0)) AS total_sale_qty, ROUND(SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) / NULLIF(SUM(COALESCE(chis.sale_qty,0)),0), 4) AS waste_rate FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd AND to_date(chis.sale_dt,'YYYYMMDD') = to_date(csr.prc_dt,'YYYYMMDD') WHERE csr.masked_stor_cd = 'POC_010' AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN '20260305' AND '20260305' GROUP BY csr.item_cd, csr.item_nm ORDER BY waste_rate DESC NULLS LAST, est_waste_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */","어제 폐기율 상위 품목과 해당 품목의 판매수량·폐기수량 수치를 병기하고, 전일 대비 악화 여부를 함께 설명",production_get_highest_disposal_rate_item,어제 폐기율이 가장 높았던 품목 알려줘 | [날짜]에 폐기율이 제일 높았던 품목이 뭐야? | 지난달 폐기율 1위 품목 조회해줘 | 어제 어떤 품목의 폐기율이 가장 높았니? | [날짜] 기준으로 폐기율이 가장 높은 상품 알려줘 | 폐기율이 가장 높게 나타난 품목 확인해줘
+LIMIT 10;","SELECT csr.item_cd, csr.item_nm, SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) AS est_waste_qty, SUM(COALESCE(chis.sale_qty,0)) AS total_sale_qty, ROUND(SUM(CASE WHEN csr.stk_rt < 0 THEN ABS(csr.stk_rt) ELSE 0 END) / NULLIF(SUM(COALESCE(chis.sale_qty,0)),0), 4) AS waste_rate FROM core_stock_rate csr LEFT JOIN core_hourly_item_sales chis ON csr.masked_stor_cd = chis.masked_stor_cd AND csr.item_cd = chis.item_cd AND to_date(chis.sale_dt,'YYYYMMDD') = to_date(csr.prc_dt,'YYYYMMDD') WHERE csr.masked_stor_cd = 'POC_010' AND to_date(csr.prc_dt,'YYYYMMDD') BETWEEN '20260305' AND '20260305' GROUP BY csr.item_cd, csr.item_nm ORDER BY waste_rate DESC NULLS LAST, est_waste_qty DESC LIMIT 12 /* 기준일시: 2026-03-05 09:00 KST */","어제 폐기율 상위 품목과 해당 품목의 판매수량·폐기수량 수치를 병기하고, 전일 대비 악화 여부를 함께 설명",,
 008-001-,2026-03-05 15:00 (KST),생산 관리,"오늘 재고율 구간별(0~20%, 20~50%, 50~80%, 80~100%) 품목 수 알려줘",✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",재고율 구간 분류는 avg_stk_rt 기준; 일중 실시간 변화 반영 불가,"SELECT
     CASE
         WHEN stk_rt::NUMERIC >= 0 AND stk_rt::NUMERIC < 0.20 THEN '1_0~20%'
@@ -255,7 +255,7 @@ WHERE
 GROUP BY
     stock_rate_range
 ORDER BY
-    stock_rate_range;","재고율 구간별 품목 수와 각 구간 대표 품목 1~2개를 나열하고, 재고 부족 구간(0~20%)에 속한 품목 수에 대한 즉시 조치 안내를 포함",production_get_item_count_by_stock_rate_range,오늘 재고율 구간별로 품목이 몇 개씩 있는지 보여줘 | 현재 재고율 범위에 따른 상품 수 집계해줘 | 재고율 0%에서 100% 사이 구간별 품목 현황 알려줘 | 금일 재고율 구간별 품목 수량 확인해줘 | 재고율 구간별로 아이템 개수 알려줄래? | 오늘 재고율 분포에 따른 품목 수 조회해줘
+    stock_rate_range;","재고율 구간별 품목 수와 각 구간 대표 품목 1~2개를 나열하고, 재고 부족 구간(0~20%)에 속한 품목 수에 대한 즉시 조치 안내를 포함",,
 009-001-,2026-03-05 15:00 (KST),생산 관리,어제 기준 재고율이 50% 미만인 품목 몇 개야?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",재고율 구간 분류는 avg_stk_rt 기준; 일중 실시간 변화 반영 불가,"SELECT
     COUNT(item_cd) AS low_stock_item_count
 FROM
@@ -268,7 +268,7 @@ FROM
     raw_stock_rate
 WHERE
     prc_dt = TO_CHAR(CURRENT_DATE - INTERVAL '1 day', '20260304')
-    AND stk_rt::NUMERIC < 0.50;","재고율 50% 미만 품목 수와 그 중 판매 속도가 빠른 상위 품목을 수치와 함께 제시하고, 재고 보충 우선순위를 안내",production_count_items_below_stock_rate_threshold,어제 기준 재고율이 50% 미만인 품목 몇 개야? | 지난주 재고율 30% 이하인 상품 수 알려줘 | 재고율이 40%보다 낮은 품목은 총 몇 건인가요? | 특정 날짜에 재고율 20% 미만인 제품 개수 확인해줘 | 50% 미만 재고율 품목 수 | 어제 날짜로 재고율이 10% 미만인 품목의 수량을 조회해줘
+    AND stk_rt::NUMERIC < 0.50;","재고율 50% 미만 품목 수와 그 중 판매 속도가 빠른 상위 품목을 수치와 함께 제시하고, 재고 보충 우선순위를 안내",,
 010-001-,2026-03-05 15:00 (KST),생산 관리,이번 주 재고율 80% 이상으로 유지된 품목은 뭐야?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",재고율 구간 분류는 avg_stk_rt 기준; 일중 실시간 변화 반영 불가,"SELECT
     item_cd,
     item_nm,
@@ -305,7 +305,7 @@ HAVING
     -- 해당 기간 내내 최저 재고율이 80%(0.80) 이상으로 유지된 품목만 필터링
     MIN(stk_rt::NUMERIC) >= 0.80
 ORDER BY
-    avg_stock_rate DESC NULLS LAST;",이번 주 기간 내 재고율 80% 이상을 안정적으로 유지한 품목 목록과 해당 품목의 평균 재고율 수치를 제시,production_get_items_maintaining_high_stock_rate,이번 주 재고율 80% 이상으로 유지된 품목은 뭐야? | 지난달 재고율이 90% 넘게 유지된 제품 알려줘. | 재고율 70% 이상인 품목 리스트 뽑아봐. | 이번 주에 재고율 85% 이상을 기록한 품목을 확인하고 싶어. | {날짜} 동안 {수치}% 이상의 재고율을 보인 품목은? | 재고율이 {수치}% 밑으로 안 떨어진 품목이 뭐야?
+    avg_stock_rate DESC NULLS LAST;",이번 주 기간 내 재고율 80% 이상을 안정적으로 유지한 품목 목록과 해당 품목의 평균 재고율 수치를 제시,,
 012-001-,2026-03-05 15:00 (KST),생산 관리,최근 30일 동안 재고율 분포가 어떻게 변했어?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",재고율 구간 분류는 avg_stk_rt 기준; 일중 실시간 변화 반영 불가,"SELECT 
     prc_dt AS stock_date,
     -- 각 재고율 구간별 품목 수 집계
@@ -340,7 +340,7 @@ WHERE
 GROUP BY 
     prc_dt
 ORDER BY 
-    prc_dt ASC; -- 날짜순(과거 -> 최신) 정렬하여 추이 확인","최근 30일간 재고율 구간별 품목 수 변화 추이를 제시하고, 재고 부족 구간 품목이 증가 또는 감소하는 방향을 분석",production_analyze_stock_rate_distribution_trend,지난 한 달간 재고율 분포 추이를 보여줘 | 최근 30일간 재고율이 어떤 분포로 변화했는지 알려줘 | {date_range} 동안의 재고율 분포 변화를 확인하고 싶어 | {item_name}의 최근 30일 재고율 분포 변동 내역은? | 최근 30일 재고율 분포 변화 그래프 보여줘 | 지난 30일 사이 재고율 분포가 어떻게 달라졌니?
+    prc_dt ASC; -- 날짜순(과거 -> 최신) 정렬하여 추이 확인","최근 30일간 재고율 구간별 품목 수 변화 추이를 제시하고, 재고 부족 구간 품목이 증가 또는 감소하는 방향을 분석",,
 013-001-,2026-03-05 15:00 (KST),생산 관리,오늘 재고 회전이 가장 빠른 품목 10개 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",회전율 = 판매수량 / (평균재고율 × 기준수량); 기준수량은 가정 필요,"SELECT 
     item_cd,
     item_nm,
@@ -375,7 +375,7 @@ WHERE
 ORDER BY 
     turnover_rate DESC,
     stk_rt ASC
-LIMIT 10;","오늘 기준 재고율 대비 판매수량 비율(회전율)이 높은 품목 상위 10개를 수치와 함께 나열하고, 빠른 회전 품목에 대한 재고 보충 필요성을 안내",production_get_top_fastest_stock_rotation_items,오늘 재고 회전이 가장 빠른 품목 10개 알려줘 | 금일 재고 회전율 높은 상품 10개 보여줘 | 오늘 회전이 제일 빠른 품목 5개 리스트업해줘 | 현재 재고가 가장 빨리 도는 아이템 10개 뭐야? | 오늘자 재고 회전율 우수 품목 10종을 조회해줘 | 재고 회전 빠른 순으로 10개 알려줘
+LIMIT 10;","오늘 기준 재고율 대비 판매수량 비율(회전율)이 높은 품목 상위 10개를 수치와 함께 나열하고, 빠른 회전 품목에 대한 재고 보충 필요성을 안내",,
 015-001-,2026-03-05 15:00 (KST),생산 관리,이번 달 재고 회전율 상위 품목과 하위 품목 비교해줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",회전율 = 판매수량 / (평균재고율 × 기준수량); 기준수량은 가정 필요,"WITH monthly_inventory AS (
     -- 1. 이번 달 기준 품목별 총 판매량과 일평균 재고량 집계
     SELECT 
@@ -482,7 +482,7 @@ WHERE
     high_rank <= 5 OR low_rank <= 5
 ORDER BY 
     CASE WHEN high_rank <= 5 THEN 1 ELSE 2 END ASC,
-    turnover_rate DESC;","월간 재고 회전율 상위 5개 품목과 하위 5개 품목을 대비 테이블로 제시하고, 하위 품목의 과잉 생산 여부를 분석",production_compare_top_bottom_inventory_turnover_rate,이번 달 재고 회전율 상위 품목과 하위 품목 비교해줘 | 금월 재고 회전율 높은 품목이랑 낮은 품목 비교해줘 | 이번 달의 재고 회전율 상하위 품목 리스트를 대조해줘 | 지난달 재고 회전율 베스트와 워스트 품목 비교해줄래? | 이달의 재고 회전율이 가장 좋은 것과 나쁜 것 비교해줘 | 특정 기간 재고 회전율 상위권과 하위권 품목 차이 보여줘
+    turnover_rate DESC;","월간 재고 회전율 상위 5개 품목과 하위 5개 품목을 대비 테이블로 제시하고, 하위 품목의 과잉 생산 여부를 분석",,
 017-001-,2026-03-05 15:00 (KST),생산 관리,오늘 점심 피크(12~14시) 직전 재고율이 낮았던 품목 알려줘,⚠️,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",피크 시간대 직전 재고율은 시간대별 데이터에서 추정; 정확한 시각 단위 측정 제한,"SELECT 
     item_cd,
     item_nm,
@@ -705,7 +705,7 @@ WHERE
     AND is_stockout = TRUE
 ORDER BY 
     stockout_hour ASC
-LIMIT 10;","오늘 시간대별 재고율 최대값과 최소값의 차이가 가장 큰 품목 상위 10개를 수치와 함께 제시하고, 변동 원인(생산 등록 집중 또는 수요 급증)을 추정",production_find_item_max_stock_rate_fluctuation,오늘 재고율 변동폭이 제일 큰 거 뭐야? | 금일 재고율 변화가 가장 심한 품목 확인해줘 | 하루 동안 재고율 수치 차이가 가장 많이 나는 상품 알려줘 | 오늘 중 재고율 등락이 가장 컸던 품목은? | 재고율 변동이 가장 다이나믹한 제품 보여줘 | 오늘 재고율 변동성 1위 품목이 뭐야?
+LIMIT 10;","오늘 시간대별 재고율 최대값과 최소값의 차이가 가장 큰 품목 상위 10개를 수치와 함께 제시하고, 변동 원인(생산 등록 집중 또는 수요 급증)을 추정",,
 022-001-,2026-03-05 15:00 (KST),생산 관리,이번 주 재고율이 안정적으로 유지된 품목은?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",변동성은 시간대별 stk_rt 표준편차로 추정; 정확한 분 단위 측정 제한,"SELECT 
     item_cd,
     item_nm,
@@ -750,7 +750,7 @@ GROUP BY
 ORDER BY
     turnover_rate ASC,
     avg_stock_rate DESC
-LIMIT 10;","이번 주 기간 내 재고율 변동폭이 작은 품목(안정성 높음)을 나열하고, 안정적 재고 운영의 특징을 분석하여 다른 품목에 적용 가능한 패턴을 제시",production_find_items_with_stable_stock_rate,{date} 재고율이 안정적인 품목 알려줘 | {date} 동안 재고율 변동이 적은 상품은 뭐야? | {item}의 이번 주 재고율 추이가 안정적이야? | 재고율이 일정하게 유지되고 있는 품목 리스트 보여줘 | {date}에 재고율이 안정적으로 관리된 품목 확인해줘 | 이번 주에 재고율 수치가 안정적인 품목은?
+LIMIT 10;","이번 주 기간 내 재고율 변동폭이 작은 품목(안정성 높음)을 나열하고, 안정적 재고 운영의 특징을 분석하여 다른 품목에 적용 가능한 패턴을 제시",,
 023-001-,2026-03-05 15:00 (KST),생산 관리,이번 달 재고 안정성이 가장 높은 품목과 낮은 품목 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",변동성은 시간대별 stk_rt 표준편차로 추정; 정확한 분 단위 측정 제한,"WITH item_stock_stats AS (
     -- 1. 지정된 기간(:start_date ~ :end_date) 품목별 일자별 재고율(stk_rt)의 평균과 표준편차 집계
     SELECT 
@@ -844,7 +844,7 @@ FROM
 WHERE
     most_stable_rank <= 5 OR least_stable_rank <= 5
 ORDER BY
-    stability_group DESC, stock_volatility_pct ASC;","월간 재고율 표준편차 기준 안정성 상위·하위 각 5개 품목을 수치와 함께 대비 제시하고, 불안정 품목에 대한 생산 일정 조정 방향을 안내",production_get_highest_lowest_stock_stability_items,이번 달 재고 안정성이 가장 높은 품목과 낮은 품목 알려줘 | 지난달 재고 안정성 상위 품목이랑 하위 품목 뭐야? | 재고 안정성 수치가 제일 좋은 거랑 안 좋은 거 리스트 보여줘 | {date} 기준 재고 안정성 최고 및 최저 품목 확인해줘 | 재고 안정성이 가장 우수한 품목과 취약한 품목은? | 이번 달 재고 안정성 베스트랑 워스트 품목은?
+    stability_group DESC, stock_volatility_pct ASC;","월간 재고율 표준편차 기준 안정성 상위·하위 각 5개 품목을 수치와 함께 대비 제시하고, 불안정 품목에 대한 생산 일정 조정 방향을 안내",,
 024-001-,2026-03-05 15:00 (KST),생산 관리,지난달 재고 불안정했던 품목이 이번 달 개선됐어?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",변동성은 시간대별 stk_rt 표준편차로 추정; 정확한 분 단위 측정 제한,"SELECT 
     item_cd,
     item_nm,
@@ -900,7 +900,7 @@ WHERE
     AND this_m_avg_rate_pct IS NOT NULL
 ORDER BY 
     rate_improvement_pct DESC
-LIMIT 10;","전월 재고 불안정 품목의 이번 달 재고율 변동폭 변화를 비교하고, 개선된 품목과 여전히 불안정한 품목을 구분하여 지속 모니터링 대상을 안내",production_check_monthly_stock_stability_improvement,지난달 재고 불안정했던 품목이 이번 달 개선됐어? | 전월 재고율 낮았던 상품들 이번 달에 수급 괜찮아졌니? | 지난달에 품절 위험 있었던 품목들 이번 달 재고 현황 알려줘. | 지난달 재고 불안정 품목의 이번 달 재고율 개선 여부 확인해줘. | 전월 대비 이번 달 재고 안정화된 품목 리스트 보여줘. | 지난달에 수급 불안정했던 제품들 이번 달에는 재고율 올라갔어?
+LIMIT 10;","전월 재고 불안정 품목의 이번 달 재고율 변동폭 변화를 비교하고, 개선된 품목과 여전히 불안정한 품목을 구분하여 지속 모니터링 대상을 안내",,
 026-001-,2026-03-05 15:00 (KST),생산 관리,어제 생산 후 판매 전환율이 낮은 품목 있어?,⚠️,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",생산 수량 컬럼 직접 없음; 시간대별 판매수량으로 추정 필요,"WITH daily_production AS (
     -- 1. 지정된 날짜(:target_date)의 품목별 총 생산 수량(1~3차 합산) 집계
     SELECT 
@@ -1365,7 +1365,7 @@ FROM
 WHERE 
     prc_dt = TO_CHAR(CURRENT_DATE, '20260304')
     AND stk_rt >= 0.30 
-    AND stk_rt <= 0.70;","오늘 재고율 30~70% 구간에 있는 적정 재고 품목 수와 대표 품목을 제시하고, 적정 구간 비율이 전체의 몇 %인지 수치로 안내",production_count_items_within_stock_rate_range,금일 재고율 30%에서 70% 사이인 상품 수 알려줘 | 현재 재고율이 40%에서 60% 구간에 있는 품목 개수 확인해줘 | 오늘 자 재고율이 30% 이상 70% 이하인 품목은 총 몇 건인가요? | 재고율 30~70% 수준인 품목 수 조회해줘 | 오늘 적정 재고율인 30%~70% 범위의 상품이 몇 개인지 궁금해 | 금일 기준으로 재고율이 30%에서 70% 사이인 품목 개수
+    AND stk_rt <= 0.70;","오늘 재고율 30~70% 구간에 있는 적정 재고 품목 수와 대표 품목을 제시하고, 적정 구간 비율이 전체의 몇 %인지 수치로 안내",,
 033-001-002,2026-03-05 15:00 (KST),생산 관리,오늘 재고율이 30~70% 사이로 적정한 품목에 대해서 나열해줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",적정 재고 범위(30~70%)는 가정; 품목별 실제 기준 다를 수 있음,"SELECT
     item_cd,
     item_nm,
@@ -1390,7 +1390,7 @@ WHERE
     AND stk_rt >= 0.30
     AND stk_rt <= 0.70
 ORDER BY
-    stk_rt DESC;","오늘 적정 재고율을 기록한 품목들이 구체적으로 무엇인지, 실제 재고율과 재고량은 얼마인지 목록 형태로 확인",production_list_items_by_stock_rate_range,금일 재고율이 {min}%에서 {max}% 사이인 상품들 보여줘 | 재고율 {min}~{max}% 수준으로 적정하게 유지 중인 품목 리스트 | {date} 기준 재고율 {min}%에서 {max}% 사이의 품목 확인해줘 | 재고 비중이 {min}% 이상 {max}% 이하인 제품 목록 | 현재 재고율이 {min}에서 {max} 범위에 있는 품목들 알려줘 | {date} 재고율 {min}~{max}% 품목 조회
+    stk_rt DESC;","오늘 적정 재고율을 기록한 품목들이 구체적으로 무엇인지, 실제 재고율과 재고량은 얼마인지 목록 형태로 확인",,
 034-001-,2026-03-05 15:00 (KST),생산 관리,이번 주 매일 적정 재고(30~70%)를 유지한 품목 비율이 얼마야?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",적정 재고 범위(30~70%)는 가정; 품목별 실제 기준 다를 수 있음,"WITH target_days AS (
     -- 1. 이번 주('20260304' 기준 월~수)에 해당하는 실제 날짜 목록 및 총 일수 추출
     SELECT DISTINCT prc_dt 
@@ -1453,7 +1453,7 @@ SELECT
     , 2) AS optimal_maintenance_ratio_pct
 FROM 
     item_stock_summary;
-","이번 주 일별 적정 재고 구간 품목 수와 비율 변화를 제시하고, 적정 구간 유지 비율이 개선·악화되는 추세를 분석",production_calculate_daily_appropriate_stock_ratio,이번 주 매일 적정 재고(30~70%)를 유지한 품목 비율이 얼마야? | 지난주 내내 적정 재고 수준을 지킨 상품 비중 알려줘. | 특정 기간 동안 재고율 20%에서 80% 사이를 유지한 품목의 비율은? | 금주 매일 적정 재고 범위를 충족한 품목의 백분율을 계산해줘. | 이번 달 재고 적정 수준 유지 품목 비율 확인해줘. | 최근 7일간 재고율이 30~70% 이내였던 제품들의 비율이 어떻게 돼?
+","이번 주 일별 적정 재고 구간 품목 수와 비율 변화를 제시하고, 적정 구간 유지 비율이 개선·악화되는 추세를 분석",,
 035-001-,2026-03-05 15:00 (KST),생산 관리,이번 달 재고율 30~70% 구간을 가장 오래 유지한 품목 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",적정 재고 범위(30~70%)는 가정; 품목별 실제 기준 다를 수 있음,"SELECT 
     item_cd,
     item_nm,
@@ -1488,7 +1488,7 @@ GROUP BY
 ORDER BY 
     maintained_days DESC,
     avg_stock_rate_pct DESC
-LIMIT 10;","월간 기준 적정 재고 유지 일수가 가장 많은 품목과 해당 기간 수치를 제시하고, 안정적인 재고 운영 사례로 참고할 품목을 안내",production_find_item_longest_stock_rate_duration,이번 달 재고율 30~70% 구간을 가장 오래 유지한 품목 알려줘 | 올해 재고율 20%에서 50% 사이를 가장 길게 유지한 제품 뭐야? | 특정 기간 동안 재고율 40~60% 범위를 가장 오래 지속한 품목 리스트 | 이번 분기 재고율이 30%에서 80% 구간에 가장 오래 머무른 품목을 확인해줘 | 재고율 50~70% 유지 시간이 가장 긴 품목 | 지난달 재고율 10~40% 구간 유지 시간 1위 품목 알려줘
+LIMIT 10;","월간 기준 적정 재고 유지 일수가 가장 많은 품목과 해당 기간 수치를 제시하고, 안정적인 재고 운영 사례로 참고할 품목을 안내",,
 036-001-,2026-03-05 15:00 (KST),생산 관리,오늘 생산 등록 없이 재고만 소진되는 품목 있어?,⚠️,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",생산 등록 이력 컬럼 직접 없음; 판매수량 대비 재고율 변화로 추정,"SELECT 
     Sales.item_cd,
     Sales.item_nm,
@@ -1954,7 +1954,7 @@ SELECT
     ROUND(bakery_avg_rate * 100, 2) AS bakery_avg_stock_rate_pct,
     ROUND(ABS(donut_avg_rate - bakery_avg_rate) * 100, 2) AS diff_stock_rate_pct
 FROM
-    category_avg;","이번 달 도넛류와 베이커리류의 평균 재고율을 비교하고, 군별 재고 수준 차이와 생산량 조정이 더 필요한 군을 수치와 함께 제시",production_compare_category_stock_rate_difference,금월 도넛과 베이커리 품목의 재고율 차이가 어떻게 돼? | [카테고리A]와 [카테고리B]의 이번 달 재고율 편차 확인해줘 | 이번 달 도넛류 대비 베이커리류 재고율이 얼마나 차이나? | 당월 기준 도넛 및 베이커리 카테고리별 재고율 격차를 알려주세요 | [기간] 동안 [상품군1]과 [상품군2]의 재고율 차이 비교해줘 | 도넛이랑 베이커리 재고율 차이 이번 달 거 보여줘
+    category_avg;","이번 달 도넛류와 베이커리류의 평균 재고율을 비교하고, 군별 재고 수준 차이와 생산량 조정이 더 필요한 군을 수치와 함께 제시",,
 040-001-,2026-03-05 15:00 (KST),생산 관리,최근 30일 품목 카테고리별 폐기 수량 순위 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",품목군 분류는 item_nm 키워드 기반 가정; 공식 카테고리 컬럼 없음,"SELECT 
     item_category,                                 -- 분류된 품목 카테고리
     SUM(disuse_qty) AS total_disuse_qty            -- 카테고리별 총 폐기 수량
@@ -2002,7 +2002,7 @@ FROM (
 GROUP BY
     item_category
 ORDER BY
-    total_disuse_qty DESC;","최근 30일 카테고리별 폐기 수량 순위와 각 카테고리의 폐기율을 나열하고, 폐기 집중 카테고리에 대한 생산량 감축 검토 의견을 제시",production_rank_item_category_disposal_quantity,지난 한 달간 카테고리별 폐기량 순위 보여줘 | 품목 분류별로 폐기 수량 높은 순서대로 나열해줘 | 최근 {기간} 동안 카테고리별 폐기 수량 순위는? | 최근 30일간의 품목 카테고리별 폐기 수량 랭킹을 확인하고 싶어 | 카테고리별 폐기 수량 순위 (최근 30일) | 어떤 카테고리에서 폐기가 가장 많이 발생했는지 순위 알려줘
+    total_disuse_qty DESC;","최근 30일 카테고리별 폐기 수량 순위와 각 카테고리의 폐기율을 나열하고, 폐기 집중 카테고리에 대한 생산량 감축 검토 의견을 제시",,
 041-001-,2026-03-05 15:00 (KST),생산 관리,이번 달 판매수량은 많은데 재고율이 계속 낮은 품목 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",품목군 분류는 item_nm 키워드 기반 가정; 공식 카테고리 컬럼 없음,"WITH item_monthly_stats AS (
     -- 1. 지정된 기간(:start_date ~ :end_date) 품목별 총 판매수량 및 평균 재고율 집계
     SELECT
@@ -2063,7 +2063,7 @@ WHERE
     avg_stock_rate < 0.30
 ORDER BY
     total_sale_qty DESC
-LIMIT 10;","이번 달 판매수량 상위이면서 평균 재고율 하위인 품목을 나열하고, 공급 부족 위험과 생산 증량 필요성을 수치 기반으로 설명",production_find_high_sales_low_stock_items,이번 달 판매수량은 많은데 재고율이 계속 낮은 품목 알려줘 | 금월 판매량은 높은데 재고율이 낮은 상품 리스트 보여줘 | 판매는 잘 되는데 재고율이 계속 떨어지는 품목 뭐야? | 최근 한 달간 판매량 대비 재고율이 부족한 제품 알려줘 | 이번 달 판매 실적은 우수하나 재고율이 저조한 품목을 조회해줘 | 판매량 높고 재고율 낮은 품목 확인
+LIMIT 10;","이번 달 판매수량 상위이면서 평균 재고율 하위인 품목을 나열하고, 공급 부족 위험과 생산 증량 필요성을 수치 기반으로 설명",,
 042-001-,2026-03-05 15:00 (KST),생산 관리,지난달 재고율이 높았는데 판매는 저조한 품목 알려줘,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",품목군 분류는 item_nm 키워드 기반 가정; 공식 카테고리 컬럼 없음,"SELECT 
     item_cd,
     item_nm,
@@ -2102,7 +2102,7 @@ GROUP BY
 ORDER BY
     avg_stock_rate DESC,
     total_sales_qty ASC
-LIMIT 10;","전월 평균 재고율 상위이면서 판매수량 하위인 품목을 나열하고, 과잉 생산 패턴과 이번 달 생산 조정 가능 여부를 분석",production_find_high_stock_low_sales_items,지난달에 재고는 많은데 안 팔린 물건 뭐야? | 전월 기준 재고율은 높으나 판매량이 낮은 품목 리스트 보여줘 | {date} 재고율 {rate} 이상이면서 판매량 {qty} 이하인 품목 조회 | 재고만 쌓이고 판매 실적 안 좋은 품목 알려줘 | 지난달 재고율 대비 판매 저조 품목 확인해줘 | 지난달에 재고는 쌓여있는데 판매가 안 된 제품은?
+LIMIT 10;","전월 평균 재고율 상위이면서 판매수량 하위인 품목을 나열하고, 과잉 생산 패턴과 이번 달 생산 조정 가능 여부를 분석",,
 044-001-,2026-03-05 15:00 (KST),주문 관리,최근 30일 납품이 가장 많이 몰린 요일은?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",요일은 dlv_dt에서 추출; 실시간 납품 상태 변경 반영 불가,"SELECT 
     TRIM(TO_CHAR(TO_DATE(dlv_dt, 'YYYYMMDD'), 'Day')) AS day_of_week, -- 배송 일자에서 요일 추출
     SUM(confrm_qty::NUMERIC) AS total_confirmed_qty,                  -- 실제 출하(납품) 확정 수량 합계

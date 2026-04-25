@@ -574,3 +574,34 @@ CREATE TABLE user_bookmarks (
     label      TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ──────────────────────────────────────────────
+-- FIFO Inventory
+-- ──────────────────────────────────────────────
+
+CREATE TABLE inventory_fifo_lots (
+    id              BIGSERIAL    PRIMARY KEY,
+    masked_stor_cd  TEXT         NOT NULL,
+    item_cd         TEXT,
+    item_nm         TEXT         NOT NULL,
+    lot_type        TEXT         NOT NULL
+                    CHECK (lot_type IN ('production', 'delivery')),
+    lot_date        DATE         NOT NULL,
+    expiry_date     DATE,
+    shelf_life_days INT,
+    initial_qty     NUMERIC      NOT NULL DEFAULT 0,
+    consumed_qty    NUMERIC      NOT NULL DEFAULT 0,
+    wasted_qty      NUMERIC      NOT NULL DEFAULT 0,
+    unit_cost       NUMERIC      NOT NULL DEFAULT 0,
+    status          TEXT         NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'sold_out', 'expired')),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_fifo_lots_store_item_date
+    ON inventory_fifo_lots (masked_stor_cd, item_nm, lot_date);
+
+CREATE INDEX idx_fifo_lots_active
+    ON inventory_fifo_lots (masked_stor_cd, item_nm, status, expiry_date)
+    WHERE status = 'active';

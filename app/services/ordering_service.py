@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -116,6 +117,38 @@ class OrderingService:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _parse_deadline_time(value: str | None) -> tuple[int, int] | None:
+        if not value:
+            return None
+        text = value.strip()
+        if ":" not in text:
+            return None
+        hour_str, minute_str = text.split(":", 1)
+        if not hour_str.isdigit() or not minute_str.isdigit():
+            return None
+        hour = int(hour_str)
+        minute = int(minute_str)
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            return None
+        return hour, minute
+
+    @classmethod
+    def _extract_deadline_label(cls, *, note: str | None, arrival: dict[str, str] | None) -> str | None:
+        arrival_deadline = cls._safe_str((arrival or {}).get("order_deadline_at"))
+        if cls._parse_deadline_time(arrival_deadline):
+            return str(arrival_deadline).strip()
+
+        if not note:
+            return None
+        matched = re.search(r"마감\s*([0-2]?\d:[0-5]\d)", note)
+        if not matched:
+            return None
+        parsed = cls._parse_deadline_time(matched.group(1))
+        if parsed is None:
+            return None
+        return f"{parsed[0]:02d}:{parsed[1]:02d}"
+
     @classmethod
     def _normalize_weather_payload(cls, payload: object | None) -> OrderingWeather | None:
         if not isinstance(payload, dict):
@@ -140,6 +173,31 @@ class OrderingService:
         )
 
     @staticmethod
+    def _build_option_item_note(
+        *,
+        base_note: str | None,
+        arrival: dict[str, str] | None,
+        shelf_life_days: int | None,
+    ) -> str | None:
+        segments: list[str] = []
+        if base_note:
+            segments.append(base_note)
+        if arrival:
+            deadline = str(arrival.get("order_deadline_at") or "").strip()
+            day_offset = str(arrival.get("arrival_day_offset") or "").strip()
+            expected_at = str(arrival.get("arrival_expected_at") or "").strip()
+            if deadline:
+                segments.append(f"마감 {deadline}")
+            if day_offset or expected_at:
+                arrival_label = f"{day_offset} {expected_at}".strip()
+                segments.append(f"도착 {arrival_label}")
+        if shelf_life_days is not None:
+            segments.append(f"유통기한 {shelf_life_days}일")
+        if not segments:
+            return None
+        return " · ".join(segments)
+
+    @staticmethod
     def _matches_business_date(weather: OrderingWeather | None, business_date: str | None) -> bool:
         if weather is None or not business_date:
             return False
@@ -157,12 +215,14 @@ class OrderingService:
         self,
         store_id: str,
         current_date: str,
+        current_context: dict[str, object] | None = None,
     ) -> dict | None:
         if not self.ai_client:
             return None
         return await self.ai_client.recommend_ordering(
             store_id=store_id,
             current_date=current_date,
+            current_context=current_context,
         )
 
     async def _get_ai_deadline_alert(self, store_id: str) -> dict | None:
@@ -207,9 +267,9 @@ class OrderingService:
             "description": OrderingService._safe_str(ai_option.get("description") if ai_option else None) or option.get("description") or "",
             "recommended": bool((ai_option or {}).get("recommended", option.get("recommended", index == 0))),
             "reasoning_text": ai_reasoning or option.get("reasoning_text") or option.get("description") or "",
-            "reasoning_metrics": ai_metrics or option.get("reasoning_metrics") or [],
-            "special_factors": ai_special_factors or option.get("special_factors") or [],
-            "items": option.get("items") or (ai_option or {}).get("items") or [],
+            "reasoning_metrics": option.get("reasoning_metrics") or [],
+            "special_factors": option.get("special_factors") or [],
+            "items": option.get("items") or [],
         }
         if not merged["reasoning_metrics"]:
             total_qty = sum(item.get("quantity", 0) for item in merged["items"])
@@ -227,6 +287,27 @@ class OrderingService:
         focus = next((option for option in options if option.get("recommended")), options[0])
         return OrderingService._safe_str(focus.get("option_id"))
 
+    @staticmethod
+    def _build_ai_option_summaries(options: list[dict]) -> list[dict[str, object]]:
+        summaries: list[dict[str, object]] = []
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            items = [item for item in (option.get("items") or []) if isinstance(item, dict)]
+            total_qty = sum(int(item.get("quantity") or 0) for item in items)
+            summaries.append(
+                {
+                    "option_id": str(option.get("option_id") or ""),
+                    "title": str(option.get("title") or ""),
+                    "basis": str(option.get("basis") or ""),
+                    "total_qty": total_qty,
+                    "line_count": len(items),
+                    "reasoning_metrics": option.get("reasoning_metrics") or [],
+                    "special_factors": option.get("special_factors") or [],
+                }
+            )
+        return summaries
+
     async def list_options(
         self,
         notification_entry: bool = False,
@@ -236,6 +317,19 @@ class OrderingService:
     ) -> OrderingOptionsResponse:
         normalized_store_id = (store_id or _DEFAULT_ORDERING_STORE_ID).strip() or _DEFAULT_ORDERING_STORE_ID
         business_date = self._today_kst(reference_datetime)
+        options = await self.repository.list_options(store_id=normalized_store_id)
+        arrival_schedule = None
+        get_order_arrival_schedule = getattr(self.repository, "get_order_arrival_schedule", None)
+        if callable(get_order_arrival_schedule):
+            arrival_schedule = get_order_arrival_schedule(store_id=normalized_store_id)
+        ai_current_context = {
+            "trend_summary": (
+                f"납품 기준: 주문 마감 {self._safe_str((arrival_schedule or {}).get('order_deadline_at')) or '-'}, "
+                f"도착 {self._safe_str((arrival_schedule or {}).get('arrival_day_offset')) or '-'} "
+                f"{self._safe_str((arrival_schedule or {}).get('arrival_expected_at')) or '-'}"
+            ).strip(),
+            "option_summaries": self._build_ai_option_summaries(options),
+        }
         options = await self.repository.list_options(
             store_id=normalized_store_id,
             reference_date=business_date,
@@ -243,6 +337,12 @@ class OrderingService:
         use_ai_ordering = not skip_ai and not self.repository.uses_ordering_join_table(normalized_store_id)
         ai_payload = (
             None
+            if skip_ai
+            else await self._get_ai_ordering_recommendation(
+                store_id=normalized_store_id,
+                current_date=business_date,
+                current_context=ai_current_context,
+            )
             if not use_ai_ordering
             else await self._get_ai_ordering_recommendation(store_id=normalized_store_id, current_date=business_date)
         )
@@ -251,6 +351,80 @@ class OrderingService:
             self._merge_option_payloads(option, ai_options[index] if index < len(ai_options) else None, index=index)
             for index, option in enumerate(options)
         ]
+        sku_ids = [
+            str(item.get("sku_id") or "").strip()
+            for option in merged_options
+            for item in (option.get("items") or [])
+            if isinstance(item, dict)
+        ]
+        sku_names = [
+            str(item.get("sku_name") or "").strip()
+            for option in merged_options
+            for item in (option.get("items") or [])
+            if isinstance(item, dict)
+        ]
+        schedule_map: dict[str, dict[str, str]] = {}
+        shelf_life_map: dict[str, int] = {}
+        get_order_arrival_schedule_map = getattr(self.repository, "get_order_arrival_schedule_map", None)
+        if callable(get_order_arrival_schedule_map):
+            schedule_map = get_order_arrival_schedule_map(
+                store_id=normalized_store_id,
+                item_codes=sku_ids,
+                item_names=sku_names,
+            )
+        get_shelf_life_days_map = getattr(self.repository, "get_shelf_life_days_map", None)
+        if callable(get_shelf_life_days_map):
+            shelf_life_map = get_shelf_life_days_map(
+                item_codes=sku_ids,
+                item_names=sku_names,
+            )
+
+        for option in merged_options:
+            items = option.get("items") or []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                sku_id = str(item.get("sku_id") or "").strip()
+                sku_name = str(item.get("sku_name") or "").strip()
+                arrival = schedule_map.get(sku_id) or schedule_map.get(sku_name)
+                shelf_life_days = shelf_life_map.get(sku_id)
+                if shelf_life_days is None:
+                    shelf_life_days = shelf_life_map.get(sku_name)
+                item["note"] = self._build_option_item_note(
+                    base_note=self._safe_str(item.get("note")),
+                    arrival=arrival,
+                    shelf_life_days=shelf_life_days,
+                )
+
+        deadline_items: list[dict[str, object]] = []
+        seen_deadline_keys: set[str] = set()
+        for option in merged_options:
+            for item in option.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                sku_id = str(item.get("sku_id") or "").strip()
+                sku_name = str(item.get("sku_name") or "").strip()
+                if not sku_name:
+                    continue
+                arrival = schedule_map.get(sku_id) or schedule_map.get(sku_name)
+                deadline_label = self._extract_deadline_label(
+                    note=self._safe_str(item.get("note")),
+                    arrival=arrival,
+                )
+                if not deadline_label:
+                    continue
+                dedupe_key = sku_id or sku_name
+                if dedupe_key in seen_deadline_keys:
+                    continue
+                seen_deadline_keys.add(dedupe_key)
+                deadline_items.append(
+                    {
+                        "id": dedupe_key,
+                        "sku_name": sku_name,
+                        "deadline_at": deadline_label,
+                        "is_ordered": False,
+                    }
+                )
 
         deadline_minutes = 20
         deadline_at: str | None = None
@@ -271,8 +445,18 @@ class OrderingService:
                 or caution_text
             )
             weather = self._normalize_weather_payload(ai_payload.get("weather"))
+            trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
             if weather is not None and not self._matches_business_date(weather, business_date):
                 weather = None
+
+        if trend_summary is None:
+            if arrival_schedule:
+                deadline_label = self._safe_str(arrival_schedule.get("order_deadline_at")) or "-"
+                day_offset_label = self._safe_str(arrival_schedule.get("arrival_day_offset")) or "-"
+                arrival_time_label = self._safe_str(arrival_schedule.get("arrival_expected_at")) or "-"
+                trend_summary = (
+                    f"납품 기준: 주문 마감 {deadline_label}, 도착 {day_offset_label} {arrival_time_label}".strip()
+                )
 
         if weather is None:
             weather_payload = await self.repository.get_weather_forecast(
@@ -399,6 +583,17 @@ class OrderingService:
                 "is_urgent": alert_level == "urgent",
                 "is_passed": alert_level == "passed",
             }
+
+        arrival_schedule: dict[str, object] | None = None
+        get_order_arrival_schedule = getattr(self.repository, "get_order_arrival_schedule", None)
+        if callable(get_order_arrival_schedule):
+            arrival_schedule = get_order_arrival_schedule(store_id=store_id)
+        schedule_deadline = self._parse_deadline_time(
+            self._safe_str((arrival_schedule or {}).get("order_deadline_at"))
+        )
+        if schedule_deadline is not None:
+            deadline_hour, deadline_minute = schedule_deadline
+
         now = reference_datetime or _now_kst()
         delta = _minutes_to_deadline(now, deadline_hour, deadline_minute)
         deadline_str = f"{deadline_hour:02d}:{deadline_minute:02d}"
@@ -536,6 +731,8 @@ class OrderingService:
                     f"자동 비율: {data['auto_rate']:.2f}",
                     f"수동 비율: {data['manual_rate']:.2f}",
                     f"조회 건수: {data['total_count']}",
+                    "주문/납품 기준 데이터: raw_order_arrival_schedule",
+                    "SKU 유통기한 기준 데이터: raw_product_shelf_life",
                 ],
             ),
         )
@@ -780,6 +977,8 @@ class OrderingService:
         reference_datetime: datetime | None = None,
     ) -> OrderingHistoryInsightsResponse:
         normalized_store_id = self._require_history_store_id(store_id)
+        if not self.ai_client:
+            raise RuntimeError("AI service is unavailable")
         resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
 
         data = self.repository.get_history_filtered(

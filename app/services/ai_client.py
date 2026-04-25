@@ -96,7 +96,14 @@ class AIServiceClient:
                 "text": result.get("text", ""),
                 "evidence": result.get("evidence", []),
                 "actions": result.get("actions", []),
+                "follow_up_questions": result.get("follow_up_questions", []),
             }
+        follow_up_questions = answer.get("follow_up_questions", [])
+        if not isinstance(follow_up_questions, list):
+            follow_up_questions = []
+        answer["follow_up_questions"] = [
+            str(item).strip() for item in follow_up_questions if str(item).strip()
+        ][:3]
 
         grounding = result.get("grounding") if isinstance(result.get("grounding"), dict) else {}
         if not grounding:
@@ -106,7 +113,14 @@ class AIServiceClient:
                 "relevant_tables": result.get("relevant_tables", []),
                 "sql": result.get("sql"),
                 "row_count": result.get("row_count", 0),
+                "matched_query_id": result.get("matched_query_id"),
+                "match_score": result.get("match_score"),
+                "overlap_candidates": result.get("overlap_candidates", []),
             }
+        matched_query_id = result.get("matched_query_id") or grounding.get("matched_query_id")
+        match_score = result.get("match_score")
+        if match_score is None:
+            match_score = grounding.get("match_score")
 
         request_context = result.get("request_context")
         if not isinstance(request_context, dict):
@@ -122,6 +136,7 @@ class AIServiceClient:
             "text": answer.get("text", ""),
             "evidence": answer.get("evidence", []),
             "actions": answer.get("actions", []),
+            "follow_up_questions": answer.get("follow_up_questions", []),
             "answer": answer,
             "request_context": request_context,
             "agent_trace": {
@@ -131,6 +146,9 @@ class AIServiceClient:
                 "sql": grounding.get("sql"),
                 "queried_period": result.get("queried_period"),
                 "row_count": grounding.get("row_count", 0),
+                "matched_query_id": matched_query_id,
+                "match_score": match_score,
+                "overlap_candidates": grounding.get("overlap_candidates", []),
             },
             "store_context": "",
             "data_source": "ai",
@@ -196,17 +214,18 @@ class AIServiceClient:
         current_date: str,
         is_campaign: bool = False,
         is_holiday: bool = False,
+        current_context: dict[str, object] | None = None,
     ) -> dict | None:
         """AI 서비스에 주문 추천을 요청합니다. 실패 시 None을 반환합니다."""
-        return await self._post(
-            "/management/ordering/recommend",
-            {
-                "store_id": store_id,
-                "current_date": current_date,
-                "is_campaign": is_campaign,
-                "is_holiday": is_holiday,
-            },
-        )
+        body: dict[str, object] = {
+            "store_id": store_id,
+            "current_date": current_date,
+            "is_campaign": is_campaign,
+            "is_holiday": is_holiday,
+        }
+        if current_context:
+            body["current_context"] = current_context
+        return await self._post("/management/ordering/recommend", body)
 
     async def _get(self, path: str, params: dict | None = None) -> dict | None:
         url = f"{self._base_url}{path}"

@@ -28,6 +28,7 @@ class SalesAnswer(BaseModel):
     text: str
     evidence: list[str] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
+    follow_up_questions: list[str] = Field(default_factory=list)
 
 
 class SalesQueryRequestContext(BaseModel):
@@ -45,6 +46,9 @@ class SalesQueryAgentTrace(BaseModel):
     sql: Optional[str] = None
     queried_period: Optional[dict[str, Any]] = None
     row_count: int = 0
+    matched_query_id: Optional[str] = None
+    match_score: Optional[float] = None
+    overlap_candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SalesQueryRequest(BaseModel):
@@ -59,6 +63,7 @@ class SalesQueryResponse(BaseModel):
     text: str
     evidence: list[str]
     actions: list[str]
+    follow_up_questions: list[str] = Field(default_factory=list)
     answer: Optional[SalesAnswer] = None
     request_context: Optional[SalesQueryRequestContext] = None
     agent_trace: Optional[SalesQueryAgentTrace] = None

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from app.core.reference_datetime import resolve_reference_date
 from app.core.deps import get_production_service
 from app.schemas.production import (
+    FifoLotSummaryResponse,
     GetProductionSkuListResponse,
     InventoryStatusResponse,
     ProductionAlertsResponse,
@@ -162,6 +163,27 @@ async def get_waste_summary(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"폐기 요약 조회 오류: {str(exc)}") from exc
+
+
+@router.get("/fifo-lots", response_model=FifoLotSummaryResponse)
+async def get_fifo_lot_summary(
+    store_id: str = Query(..., min_length=1),
+    lot_type: str | None = Query(default=None, regex="^(production|delivery)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    service: ProductionService = Depends(get_production_service),
+) -> FifoLotSummaryResponse:
+    try:
+        return await service.get_fifo_lot_summary(
+            store_id=store_id,
+            lot_type=lot_type,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"FIFO Lot 조회 오류: {str(exc)}") from exc
 
 
 @router.get("/alerts/push", response_model=ProductionAlertsResponse)

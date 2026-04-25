@@ -25,6 +25,19 @@
   - 마이그레이션: `0019_create_order_arrival_schedule.sql`, `0020_create_product_shelf_life.sql`
   - 신규 raw 테이블: `raw_order_arrival_schedule`, `raw_order_arrival_reference`, `raw_product_shelf_life`, `raw_product_shelf_life_group_reference`
   - manifest dataset: direct load 4건 + workbook 보존 2건
+- 주문 추천 수량 산식이 raw 테이블 기반 가중치 로직으로 보강되었습니다.
+  - 판매 추세 소스: `raw_daily_store_item`
+  - 재고 커버리지 소스: `raw_inventory_extract`
+  - 유통기한 리스크 소스: `raw_product_shelf_life`
+  - 납품 스케줄/마감 근거 소스: `raw_order_arrival_schedule`
+
+## Session Update (2026-04-24, settings/connectors DB 기준 표시 정합)
+
+- 프론트 `settings/connectors` 페이지에 현재 시스템 DB 계층 요약(raw/core/운영)을 반영하기 위해 문서 기준 수치를 재확인했습니다.
+  - Raw: 23개 (`raw_workbook_rows` 포함)
+  - Core: 4개
+  - 운영: 3개
+- 이번 세션의 DB 마이그레이션/테이블 정의 변경은 없습니다.
 
 ---
 
@@ -1158,3 +1171,76 @@ POC_030         20260101  두바이 스타일 초콜릿도넛  303      15      
 - 본 문서와 `db/POC_TABLE_DDL.sql` 기준으로 질문/파생질문용 SQL 템플릿을 구성했습니다.
 - 구성 범위: 전 에이전트 공통조건 + 매출/생산/주문 에이전트 필수 시나리오 및 파생 질문.
 - `예상 답변`은 모든 행에 `즉시 실행 액션`과 `근거` 문구를 포함하도록 작성했습니다.
+
+## Session Update (2026-04-24, golden-query-trace)
+
+- 스키마 DDL 변경은 없습니다.
+- 운영 로그(audit metadata)와 API 응답 추적 필드에서 골든쿼리 매칭 메타를 사용합니다.
+  - `matched_query_id`
+  - `match_score`
+
+## Session Update (2026-04-24, floating-chat response contract)
+
+- DB 스키마/DDL 변경은 없습니다.
+- API 응답 계약 확장으로 `follow_up_questions`(후속 예상질문 3개) 필드를 사용합니다.
+- 감사 로그 metadata에는 기존 골든쿼리 매칭 메타(`matched_query_id`, `match_score`)를 계속 기록합니다.
+
+## Session Update (2026-04-24, golden-query-pattern-matching)
+
+- DB 스키마 변경은 없습니다.
+- 골든쿼리 패턴 매칭 강화는 AI 레이어 로직 변경이며, backend DB 구조 영향은 없습니다.
+
+## Session Update (2026-04-24, inventory-fifo-lots)
+
+- `inventory_fifo_lots` 테이블을 신규 추가했습니다.
+- 생산(production) 및 납품(delivery) 입고분을 Lot 단위로 추적하며, 판매 FIFO 소진 후 유통기한 초과 수량을 폐기(wasted_qty)로 확정합니다.
+- 데이터 적재 위치: `scripts/load_resource_to_db.py → populate_fifo_lots()` (raw 테이블 적재 후 실행)
+
+### inventory_fifo_lots
+
+| DB 컬럼명 | 타입 | 설명 |
+|---|---|---|
+| `id` | BIGSERIAL | PK |
+| `masked_stor_cd` | TEXT | 비식별 점포코드 |
+| `item_cd` | TEXT | SKU 코드 (nullable) |
+| `item_nm` | TEXT | SKU 명 |
+| `lot_type` | TEXT | `production` (완제품) / `delivery` (납품 원재료) |
+| `lot_date` | DATE | 생산일 또는 납품일 |
+| `expiry_date` | DATE | 유통기한 (`lot_date + shelf_life_days`) |
+| `shelf_life_days` | INT | 유통기한 일수 (production 기본 1일, delivery 기본 90일) |
+| `initial_qty` | NUMERIC | 최초 입고 수량 |
+| `consumed_qty` | NUMERIC | FIFO 판매로 소진된 수량 |
+| `wasted_qty` | NUMERIC | 유통기한 초과 폐기 수량 |
+| `unit_cost` | NUMERIC | 단위 원가 |
+| `status` | TEXT | `active` / `sold_out` / `expired` |
+| `created_at` | TIMESTAMPTZ | 행 생성 시각 |
+| `updated_at` | TIMESTAMPTZ | 최근 갱신 시각 |
+
+**인덱스**
+- `idx_fifo_lots_store_item_date`: `(masked_stor_cd, item_nm, lot_date)` — 점포·품목별 Lot 조회
+- `idx_fifo_lots_active`: `(masked_stor_cd, item_nm, status, expiry_date) WHERE status = 'active'` — 잔여 활성 Lot 조회
+
+**소스 매핑**
+- `production` lot ← `raw_production_extract` (prod_qty 합산), 유통기한 ← `raw_product_shelf_life.shelf_life_days`
+- `delivery` lot ← `raw_order_extract.confrm_qty`, 단가 ← `confrm_prc`
+- FIFO 소진 기준 ← `core_daily_item_sales.sale_qty` (날짜 오름차순, production lot만 소진)
+
+## Session Update (2026-04-25)
+
+- 본 세션은 프론트 `/settings` 로고 정렬 작업으로, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, production table JSX tag fix 영향도)
+
+- 본 세션의 추가 작업은 프론트 JSX 태그 정합성 수정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, dashboard alert summary prop type fix 영향도)
+
+- 본 세션의 추가 작업은 프론트 타입 정합성 수정이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-25, settings logo click navigation 영향도)
+
+- 본 세션의 추가 작업은 프론트 내비게이션 변경이며, 백엔드 DB 스키마 변경은 없습니다.
+- `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.

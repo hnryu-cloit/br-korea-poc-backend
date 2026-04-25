@@ -278,6 +278,176 @@ def populate_store_clusters(connection: Any) -> int:
     return result.rowcount or 0
 
 
+def get_fifo_store_codes(engine: Any) -> list[str]:
+    """FIFO 적재 대상 점포코드 목록 조회"""
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT DISTINCT masked_stor_cd FROM raw_production_extract
+                WHERE NULLIF(TRIM(COALESCE(masked_stor_cd, '')), '') IS NOT NULL
+                UNION
+                SELECT DISTINCT masked_stor_cd FROM raw_order_extract
+                WHERE NULLIF(TRIM(COALESCE(masked_stor_cd, '')), '') IS NOT NULL
+                ORDER BY 1
+                """
+            )
+        )
+        return [row[0] for row in result]
+
+
+def populate_fifo_lots_for_store(connection: Any, store_cd: str) -> tuple[int, int]:
+    """단일 점포의 FIFO Lot 적재
+
+    반환값: (production_rows, delivery_rows)
+    """
+    # 해당 점포 기존 데이터 초기화
+    connection.execute(
+        text("DELETE FROM inventory_fifo_lots WHERE masked_stor_cd = :s"),
+        {"s": store_cd},
+    )
+
+    # 1. 생산 Lot 적재 — 유통기한 기본 1일(당일 소진 원칙)
+    prod_result = connection.execute(
+        text(
+            """
+            INSERT INTO inventory_fifo_lots
+                (masked_stor_cd, item_cd, item_nm, lot_type,
+                 lot_date, expiry_date, shelf_life_days,
+                 initial_qty, unit_cost)
+            SELECT
+                p.masked_stor_cd,
+                p.item_cd,
+                p.item_nm,
+                'production',
+                TO_DATE(p.prod_dt, 'YYYYMMDD'),
+                TO_DATE(p.prod_dt, 'YYYYMMDD')
+                    + COALESCE(NULLIF(TRIM(s.shelf_life_days), '')::INT, 1),
+                COALESCE(NULLIF(TRIM(s.shelf_life_days), '')::INT, 1),
+                COALESCE(NULLIF(TRIM(p.prod_qty),   '')::NUMERIC, 0)
+                + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::NUMERIC, 0)
+                + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::NUMERIC, 0)
+                + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::NUMERIC, 0),
+                COALESCE(NULLIF(TRIM(p.item_cost), '')::NUMERIC, 0)
+            FROM raw_production_extract p
+            LEFT JOIN raw_product_shelf_life s ON p.item_nm = s.item_nm
+            WHERE p.masked_stor_cd = :s
+              AND (
+                COALESCE(NULLIF(TRIM(p.prod_qty),   '')::NUMERIC, 0)
+                + COALESCE(NULLIF(TRIM(p.prod_qty_2), '')::NUMERIC, 0)
+                + COALESCE(NULLIF(TRIM(p.prod_qty_3), '')::NUMERIC, 0)
+                + COALESCE(NULLIF(TRIM(p.reprod_qty), '')::NUMERIC, 0)
+              ) > 0
+            """
+        ),
+        {"s": store_cd},
+    )
+
+    # 2. 납품 Lot 적재 — 유통기한 기본 90일(원재료 기준)
+    deliv_result = connection.execute(
+        text(
+            """
+            INSERT INTO inventory_fifo_lots
+                (masked_stor_cd, item_cd, item_nm, lot_type,
+                 lot_date, expiry_date, shelf_life_days,
+                 initial_qty, unit_cost)
+            SELECT
+                o.masked_stor_cd,
+                o.item_cd,
+                o.item_nm,
+                'delivery',
+                TO_DATE(o.dlv_dt, 'YYYYMMDD'),
+                TO_DATE(o.dlv_dt, 'YYYYMMDD')
+                    + COALESCE(NULLIF(TRIM(s.shelf_life_days), '')::INT, 90),
+                COALESCE(NULLIF(TRIM(s.shelf_life_days), '')::INT, 90),
+                COALESCE(NULLIF(TRIM(o.confrm_qty), '')::NUMERIC, 0),
+                COALESCE(NULLIF(TRIM(o.confrm_prc), '')::NUMERIC, 0)
+            FROM raw_order_extract o
+            LEFT JOIN raw_product_shelf_life s ON o.item_nm = s.item_nm
+            WHERE o.masked_stor_cd = :s
+              AND COALESCE(NULLIF(TRIM(o.confrm_qty), '')::NUMERIC, 0) > 0
+            """
+        ),
+        {"s": store_cd},
+    )
+
+    # 3. FIFO 소진 — 해당 점포 판매(core_daily_item_sales) 기준 production Lot 차감
+    # store_cd를 DO 블록 안에 리터럴로 삽입 (DB에서 가져온 값이므로 안전)
+    safe_store_cd = store_cd.replace("'", "''")
+    connection.execute(
+        text(
+            f"""
+            DO $$
+            DECLARE
+                r         RECORD;
+                lot       RECORD;
+                remaining NUMERIC;
+                deduct    NUMERIC;
+            BEGIN
+                FOR r IN
+                    SELECT sale_dt, item_nm, sale_qty
+                    FROM   core_daily_item_sales
+                    WHERE  sale_qty > 0
+                      AND  masked_stor_cd = '{safe_store_cd}'
+                    ORDER  BY item_nm, sale_dt
+                LOOP
+                    remaining := r.sale_qty;
+
+                    FOR lot IN
+                        SELECT id, initial_qty, consumed_qty
+                        FROM   inventory_fifo_lots
+                        WHERE  masked_stor_cd = '{safe_store_cd}'
+                          AND  item_nm        = r.item_nm
+                          AND  lot_type       = 'production'
+                          AND  lot_date       <= TO_DATE(r.sale_dt, 'YYYYMMDD')
+                          AND  status         = 'active'
+                        ORDER  BY lot_date ASC
+                    LOOP
+                        EXIT WHEN remaining <= 0;
+
+                        deduct := LEAST(remaining, lot.initial_qty - lot.consumed_qty);
+                        CONTINUE WHEN deduct <= 0;
+
+                        UPDATE inventory_fifo_lots
+                        SET    consumed_qty = consumed_qty + deduct,
+                               status       = CASE
+                                                WHEN consumed_qty + deduct >= initial_qty
+                                                THEN 'sold_out'
+                                                ELSE 'active'
+                                              END,
+                               updated_at   = NOW()
+                        WHERE  id = lot.id;
+
+                        remaining := remaining - deduct;
+                    END LOOP;
+                END LOOP;
+            END;
+            $$
+            """
+        )
+    )
+
+    # 4. 유통기한 초과 Lot 확정 — 잔여 수량을 wasted_qty에 기록
+    connection.execute(
+        text(
+            """
+            UPDATE inventory_fifo_lots
+            SET    wasted_qty  = initial_qty - consumed_qty,
+                   status      = 'expired',
+                   updated_at  = NOW()
+            WHERE  masked_stor_cd = :s
+              AND  status         = 'active'
+              AND  expiry_date    IS NOT NULL
+              AND  expiry_date    < CURRENT_DATE
+              AND  (initial_qty - consumed_qty) > 0
+            """
+        ),
+        {"s": store_cd},
+    )
+
+    return (prod_result.rowcount or 0, deliv_result.rowcount or 0)
+
+
 def main() -> None:
     print("Starting main...")
     manifest = json.loads(settings.manifest_path.read_text(encoding="utf-8"))
@@ -366,6 +536,19 @@ def main() -> None:
             raise
 
     print(f"Loaded resource data into {get_safe_database_url()}")
+
+    # Phase 2: FIFO Lot 적재 — 점포별 별도 트랜잭션
+    print("Phase 2: FIFO lot population per store...")
+    store_codes = get_fifo_store_codes(engine)
+    total_prod = total_deliv = 0
+    for idx, store_cd in enumerate(store_codes, 1):
+        with engine.begin() as conn:
+            prod_cnt, deliv_cnt = populate_fifo_lots_for_store(conn, store_cd)
+        total_prod += prod_cnt
+        total_deliv += deliv_cnt
+        print(f"  [{idx}/{len(store_codes)}] {store_cd}: prod={prod_cnt}, deliv={deliv_cnt}")
+
+    print(f"FIFO lots complete — stores={len(store_codes)}, production={total_prod}, delivery={total_deliv}")
 
 
 if __name__ == "__main__":

@@ -81,6 +81,12 @@ _WEATHER_CODE_LABELS: dict[int, str] = {
 
 class OrderingRepository:
     _DEFAULT_HISTORY_ORDER_HOUR = 12
+    _TREND_FACTOR_MIN = 0.85
+    _TREND_FACTOR_MAX = 1.25
+    _FINAL_FACTOR_MIN = 0.70
+    _FINAL_FACTOR_MAX = 1.35
+    _NO_BASE_TREND_FACTOR_MIN = 0.85
+    _NO_BASE_TREND_FACTOR_MAX = 1.15
     _DEFAULT_DEADLINE_TIME = "12:00"
     _POC_010_ORDERING_JOIN_TABLE = "mart_ordering_join_poc_010"
 
@@ -763,13 +769,427 @@ class OrderingRepository:
             "total_pages": max(1, math.ceil(int(response_total_count) / max(int(page_size_value), 1))),
         }
 
-
     @staticmethod
     def _format_basis_date(value: object) -> str:
         basis = str(value).strip()
         if len(basis) == 8 and basis.isdigit():
             return f"{basis[:4]}-{basis[4:6]}-{basis[6:8]}"
         return basis.replace("/", "-")[:10]
+
+    @staticmethod
+    def _clamp(value: float, min_value: float, max_value: float) -> float:
+        return max(min_value, min(max_value, value))
+
+    @staticmethod
+    def _build_metric_filter_clauses(
+        *,
+        store_id: str | None,
+        store_column: str | None,
+        item_codes: list[str],
+        item_code_column: str | None,
+        item_names: list[str],
+        item_name_column: str | None,
+        date_column: str,
+    ) -> tuple[list[str], dict[str, object]]:
+        filter_clauses: list[str] = [f"NULLIF(TRIM(CAST({date_column} AS TEXT)), '') IS NOT NULL"]
+        params: dict[str, object] = {}
+        if store_id and store_column:
+            filter_clauses.append(f"CAST({store_column} AS TEXT) = :store_id")
+            params["store_id"] = store_id
+
+        item_filters: list[str] = []
+        if item_codes and item_code_column:
+            item_filters.append(f"NULLIF(TRIM(CAST({item_code_column} AS TEXT)), '') = ANY(:item_codes)")
+            params["item_codes"] = item_codes
+        if item_names and item_name_column:
+            item_filters.append(f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '') = ANY(:item_names)")
+            params["item_names"] = item_names
+        if item_filters:
+            filter_clauses.append(f"({' OR '.join(item_filters)})")
+        return filter_clauses, params
+
+    def _load_recent_sales_features(
+        self,
+        *,
+        store_id: str | None,
+        item_codes: list[str],
+        item_names: list[str],
+    ) -> dict[str, dict[str, float]]:
+        if not self.engine or not has_table(self.engine, "raw_daily_store_item"):
+            return {}
+
+        columns = self._table_columns("raw_daily_store_item")
+        store_column = self._pick_column(columns, ("masked_stor_cd", "store_id", "stor_cd"))
+        date_column = self._pick_column(columns, ("sale_dt", "date", "biz_dt"))
+        item_code_column = self._pick_column(columns, ("item_cd", "item_code", "sku_id"))
+        item_name_column = self._pick_column(columns, ("item_nm", "item_name", "product_nm"))
+        qty_column = self._pick_column(columns, ("sale_qty", "qty", "ord_qty"))
+        if not date_column or not qty_column or (not item_code_column and not item_name_column):
+            return {}
+
+        filter_clauses, params = self._build_metric_filter_clauses(
+            store_id=store_id,
+            store_column=store_column,
+            item_codes=item_codes,
+            item_code_column=item_code_column,
+            item_names=item_names,
+            item_name_column=item_name_column,
+            date_column=date_column,
+        )
+
+        normalized_date_expr = f"REPLACE(CAST({date_column} AS TEXT), '-', '')"
+        date_expr = f"TO_DATE({normalized_date_expr}, 'YYYYMMDD')"
+        item_code_expr = (
+            f"NULLIF(TRIM(CAST({item_code_column} AS TEXT)), '')" if item_code_column else "NULL"
+        )
+        item_name_expr = (
+            f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')" if item_name_column else "NULL"
+        )
+        qty_expr = f"COALESCE(NULLIF(TRIM(CAST({qty_column} AS TEXT)), '')::numeric, 0)"
+
+        try:
+            with self.engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            WITH daily AS (
+                                SELECT
+                                    {item_code_expr} AS item_code,
+                                    {item_name_expr} AS item_name,
+                                    {date_expr} AS sale_date,
+                                    SUM({qty_expr}) AS sale_qty
+                                FROM raw_daily_store_item
+                                WHERE {' AND '.join(filter_clauses)}
+                                GROUP BY
+                                    {item_code_expr},
+                                    {item_name_expr},
+                                    {date_expr}
+                            ),
+                            windowed AS (
+                                SELECT
+                                    item_code,
+                                    item_name,
+                                    sale_date,
+                                    sale_qty,
+                                    MAX(sale_date) OVER () AS max_sale_date
+                                FROM daily
+                            )
+                            SELECT
+                                item_code,
+                                item_name,
+                                SUM(CASE WHEN sale_date > max_sale_date - INTERVAL '6 day' THEN sale_qty ELSE 0 END) AS qty_7d,
+                                SUM(
+                                    CASE
+                                        WHEN sale_date <= max_sale_date - INTERVAL '7 day'
+                                         AND sale_date > max_sale_date - INTERVAL '28 day'
+                                        THEN sale_qty
+                                        ELSE 0
+                                    END
+                                ) AS qty_prev_21d
+                            FROM windowed
+                            GROUP BY item_code, item_name
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return {}
+
+        feature_map: dict[str, dict[str, float]] = {}
+        for row in rows:
+            qty_7d = float(row.get("qty_7d") or 0.0)
+            qty_prev_21d = float(row.get("qty_prev_21d") or 0.0)
+            recent_daily = qty_7d / 7.0
+            prev_daily = qty_prev_21d / 21.0
+            if prev_daily > 0:
+                trend_factor = self._clamp(
+                    recent_daily / prev_daily,
+                    self._TREND_FACTOR_MIN,
+                    self._TREND_FACTOR_MAX,
+                )
+            else:
+                trend_factor = 1.08 if recent_daily > 0 else 1.0
+            payload = {
+                "recent_daily_sales": recent_daily,
+                "prev_daily_sales": prev_daily,
+                "trend_factor": trend_factor,
+                "qty_7d": qty_7d,
+            }
+            item_code = str(row.get("item_code") or "").strip()
+            item_name = str(row.get("item_name") or "").strip()
+            if item_code:
+                feature_map[item_code] = payload
+            if item_name and item_name not in feature_map:
+                feature_map[item_name] = payload
+        return feature_map
+
+    def _load_inventory_qty_map(
+        self,
+        *,
+        store_id: str | None,
+        item_codes: list[str],
+        item_names: list[str],
+    ) -> dict[str, int]:
+        if not self.engine or not has_table(self.engine, "raw_inventory_extract"):
+            return {}
+
+        columns = self._table_columns("raw_inventory_extract")
+        store_column = self._pick_column(columns, ("masked_stor_cd", "store_id", "stor_cd"))
+        date_column = self._pick_column(columns, ("stock_dt", "date", "biz_dt"))
+        item_code_column = self._pick_column(columns, ("item_cd", "item_code", "sku_id"))
+        item_name_column = self._pick_column(columns, ("item_nm", "item_name", "product_nm"))
+        qty_column = self._pick_column(columns, ("stock_qty", "qty", "remaining_qty"))
+        if not date_column or not qty_column or (not item_code_column and not item_name_column):
+            return {}
+
+        filter_clauses, params = self._build_metric_filter_clauses(
+            store_id=store_id,
+            store_column=store_column,
+            item_codes=item_codes,
+            item_code_column=item_code_column,
+            item_names=item_names,
+            item_name_column=item_name_column,
+            date_column=date_column,
+        )
+
+        item_code_expr = (
+            f"NULLIF(TRIM(CAST({item_code_column} AS TEXT)), '')" if item_code_column else "NULL"
+        )
+        item_name_expr = (
+            f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')" if item_name_column else "NULL"
+        )
+        normalized_date_expr = f"REPLACE(CAST({date_column} AS TEXT), '-', '')"
+        qty_expr = f"COALESCE(NULLIF(TRIM(CAST({qty_column} AS TEXT)), '')::numeric, 0)"
+
+        try:
+            with self.engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            WITH filtered AS (
+                                SELECT
+                                    {item_code_expr} AS item_code,
+                                    {item_name_expr} AS item_name,
+                                    {qty_expr} AS stock_qty,
+                                    TO_DATE({normalized_date_expr}, 'YYYYMMDD') AS stock_date
+                                FROM raw_inventory_extract
+                                WHERE {' AND '.join(filter_clauses)}
+                            ),
+                            ranked AS (
+                                SELECT
+                                    item_code,
+                                    item_name,
+                                    stock_qty,
+                                    ROW_NUMBER() OVER (
+                                        PARTITION BY COALESCE(item_code, item_name)
+                                        ORDER BY stock_date DESC
+                                    ) AS rn
+                                FROM filtered
+                            )
+                            SELECT item_code, item_name, stock_qty
+                            FROM ranked
+                            WHERE rn = 1
+                            """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return {}
+
+        qty_map: dict[str, int] = {}
+        for row in rows:
+            qty = self._safe_int(row.get("stock_qty"))
+            item_code = str(row.get("item_code") or "").strip()
+            item_name = str(row.get("item_name") or "").strip()
+            if item_code:
+                qty_map[item_code] = qty
+            if item_name and item_name not in qty_map:
+                qty_map[item_name] = qty
+        return qty_map
+
+    def _compute_qty_adjustment(
+        self,
+        *,
+        recent_daily_sales: float,
+        trend_factor: float,
+        inventory_qty: int,
+        shelf_life_days: int | None,
+    ) -> dict[str, float]:
+        if recent_daily_sales <= 0 and inventory_qty <= 0 and shelf_life_days is None:
+            return {
+                "inventory_cover_days": 0.0,
+                "inventory_factor": 1.0,
+                "expiry_factor": 1.0,
+                "final_factor": self._clamp(
+                    trend_factor,
+                    self._NO_BASE_TREND_FACTOR_MIN,
+                    self._NO_BASE_TREND_FACTOR_MAX,
+                ),
+                "expiry_risk": "낮음",
+            }
+        demand_base = max(recent_daily_sales, 1.0)
+        inventory_cover_days = float(inventory_qty) / demand_base
+
+        if inventory_cover_days >= 4.0:
+            inventory_factor = 0.82
+        elif inventory_cover_days >= 3.0:
+            inventory_factor = 0.88
+        elif inventory_cover_days >= 2.0:
+            inventory_factor = 0.94
+        elif inventory_cover_days <= 0.5:
+            inventory_factor = 1.22
+        elif inventory_cover_days <= 1.0:
+            inventory_factor = 1.12
+        else:
+            inventory_factor = 1.0
+
+        expiry_factor = 1.0
+        expiry_risk = "낮음"
+        if shelf_life_days is not None:
+            if shelf_life_days <= 1:
+                expiry_factor = 0.78 if inventory_cover_days > 1.5 else 0.90
+                expiry_risk = "높음" if inventory_cover_days > 1.0 else "중간"
+            elif shelf_life_days <= 2:
+                expiry_factor = 0.88 if inventory_cover_days > 2.0 else 0.96
+                expiry_risk = "중간" if inventory_cover_days > 1.0 else "낮음"
+            elif shelf_life_days <= 3 and inventory_cover_days > 2.5:
+                expiry_factor = 0.93
+                expiry_risk = "중간"
+
+        final_factor = self._clamp(
+            trend_factor * inventory_factor * expiry_factor,
+            self._FINAL_FACTOR_MIN,
+            self._FINAL_FACTOR_MAX,
+        )
+        return {
+            "inventory_cover_days": round(inventory_cover_days, 2),
+            "inventory_factor": inventory_factor,
+            "expiry_factor": expiry_factor,
+            "final_factor": final_factor,
+            "expiry_risk": expiry_risk,
+        }
+
+    def _aggregate_option_rows(self, rows: list[object]) -> dict[str, dict[str, object]]:
+        aggregated: dict[str, dict[str, object]] = {}
+        for row in rows:
+            item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
+            item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
+            key = item_code or item_name
+            if not key:
+                continue
+            bucket = aggregated.setdefault(
+                key,
+                {
+                    "name": item_name or item_code or key,
+                    "code": item_code or None,
+                    "qty": 0,
+                },
+            )
+            if not bucket.get("code") and item_code:
+                bucket["code"] = item_code
+            bucket["qty"] = int(bucket["qty"]) + self._safe_int(row["quantity"])
+        return aggregated
+
+    def _build_adjusted_option_items(
+        self,
+        *,
+        aggregated: dict[str, dict[str, object]],
+        store_id: str | None,
+    ) -> tuple[list[dict[str, object]], dict[str, float]]:
+        item_codes = [
+            str(value.get("code") or "").strip()
+            for value in aggregated.values()
+            if str(value.get("code") or "").strip()
+        ]
+        item_names = [
+            str(value.get("name") or "").strip()
+            for value in aggregated.values()
+            if str(value.get("name") or "").strip()
+        ]
+        sales_feature_map = self._load_recent_sales_features(
+            store_id=store_id,
+            item_codes=item_codes,
+            item_names=item_names,
+        )
+        inventory_qty_map = self._load_inventory_qty_map(
+            store_id=store_id,
+            item_codes=item_codes,
+            item_names=item_names,
+        )
+        shelf_life_map = self.get_shelf_life_days_map(
+            item_codes=item_codes,
+            item_names=item_names,
+        )
+
+        sorted_items = sorted(
+            aggregated.values(),
+            key=lambda bucket: (-int(bucket["qty"]), str(bucket["name"])),
+        )
+        total_base_qty = sum(int(bucket["qty"]) for bucket in sorted_items)
+        total_adjusted_qty = 0
+        weighted_trend_factor = 0.0
+        weighted_inventory_cover = 0.0
+        high_expiry_risk_count = 0
+        recent_7d_sales_total = 0.0
+
+        items = [
+            {
+                "sku_id": str(bucket.get("code") or "").strip() or None,
+                "sku_name": str(bucket["name"]),
+                "quantity": 0,
+                "note": None,
+            }
+            for bucket in sorted_items
+        ]
+
+        for index, bucket in enumerate(sorted_items):
+            item_code = str(bucket.get("code") or "").strip()
+            item_name = str(bucket.get("name") or "").strip()
+            base_qty = int(bucket["qty"])
+            sales_features = sales_feature_map.get(item_code) or sales_feature_map.get(item_name) or {}
+            recent_daily_sales = float(sales_features.get("recent_daily_sales") or 0.0)
+            trend_factor = float(sales_features.get("trend_factor") or 1.0)
+            inventory_qty = int(inventory_qty_map.get(item_code) or inventory_qty_map.get(item_name) or 0)
+            shelf_life_days = shelf_life_map.get(item_code)
+            if shelf_life_days is None:
+                shelf_life_days = shelf_life_map.get(item_name)
+            adjustment = self._compute_qty_adjustment(
+                recent_daily_sales=recent_daily_sales,
+                trend_factor=trend_factor,
+                inventory_qty=inventory_qty,
+                shelf_life_days=shelf_life_days,
+            )
+            adjusted_qty = int(round(base_qty * adjustment["final_factor"]))
+            if adjusted_qty <= 0 and base_qty > 0:
+                adjusted_qty = 1
+
+            items[index]["quantity"] = adjusted_qty
+            total_adjusted_qty += adjusted_qty
+            weighted_trend_factor += trend_factor * base_qty
+            weighted_inventory_cover += adjustment["inventory_cover_days"] * base_qty
+            recent_7d_sales_total += float(sales_features.get("qty_7d") or 0.0)
+            if adjustment["expiry_risk"] == "높음":
+                high_expiry_risk_count += 1
+
+        metrics = {
+            "total_base_qty": float(total_base_qty),
+            "total_adjusted_qty": float(total_adjusted_qty),
+            "avg_trend_factor": (weighted_trend_factor / total_base_qty) if total_base_qty > 0 else 1.0,
+            "avg_inventory_cover": (weighted_inventory_cover / total_base_qty) if total_base_qty > 0 else 0.0,
+            "high_expiry_risk_count": float(high_expiry_risk_count),
+            "recent_7d_sales_total": recent_7d_sales_total,
+            "adjustment_ratio": (float(total_adjusted_qty) / float(total_base_qty)) if total_base_qty > 0 else 1.0,
+            "top_item_name": str(sorted_items[0]["name"]) if sorted_items else "",
+        }
+        return items, metrics
 
     @staticmethod
     def _build_recommendation_basis_dates(reference_date: str | None = None) -> list[str]:
@@ -902,12 +1322,21 @@ class OrderingRepository:
             else f"NULLIF(TRIM(CAST({item_name_column} AS TEXT)), '')"
         )
         normalized_date_expr = f"REPLACE(CAST({date_column} AS TEXT), '-', '')"
+        date_as_date_expr = f"TO_DATE({normalized_date_expr}, 'YYYYMMDD')"
         quantity_expr = f"COALESCE(NULLIF(TRIM(CAST({quantity_column} AS TEXT)), '')::numeric, 0)"
         store_filter_sql = ""
         filter_params: dict[str, object] = {}
         if store_id and store_column:
             store_filter_sql = f" AND CAST({store_column} AS TEXT) = :store_id"
             filter_params["store_id"] = store_id
+        recent_window_filter_sql = f"""
+                          AND {date_as_date_expr} >= (
+                              SELECT MAX(TO_DATE(REPLACE(CAST(window_source.{date_column} AS TEXT), '-', ''), 'YYYYMMDD')) - INTERVAL '27 day'
+                              FROM {relation} window_source
+                              WHERE NULLIF(TRIM(CAST(window_source.{date_column} AS TEXT)), '') IS NOT NULL
+                              {f"AND CAST(window_source.{store_column} AS TEXT) = :store_id" if store_id and store_column else ""}
+                          )
+        """
         production_exclusion_sql = ""
         basis_dates = self._build_recommendation_basis_dates(reference_date)
 
@@ -942,59 +1371,47 @@ class OrderingRepository:
                         ),
                         {"date_value": str(date_value), **filter_params},
                     ).mappings().all()
-
-                    aggregated: dict[str, dict[str, object]] = {}
-                    for row in rows:
-                        item_name = str(row["item_name"]).strip() if row["item_name"] not in (None, "") else ""
-                        item_code = str(row["item_code"]).strip() if row["item_code"] not in (None, "") else ""
-                        key = item_code or item_name
-                        if not key:
-                            continue
-                        bucket = aggregated.setdefault(
-                            key,
-                            {
-                                "name": item_name or item_code or key,
-                                "qty": 0,
-                            },
-                        )
-                        bucket["qty"] = int(bucket["qty"]) + self._safe_int(row["quantity"])
+                    aggregated = self._aggregate_option_rows(rows)
 
                     if not aggregated:
                         continue
 
-                    sorted_items = sorted(
-                        aggregated.values(),
-                        key=lambda bucket: (-int(bucket["qty"]), str(bucket["name"])),
+                    items, calc_metrics = self._build_adjusted_option_items(
+                        aggregated=aggregated,
+                        store_id=store_id,
                     )
-                    items = [
-                        {
-                            "sku_name": bucket["name"],
-                            "quantity": int(bucket["qty"]),
-                            "note": "추천 상위 SKU" if date_idx == 0 and idx == 0 else None,
-                        }
-                        for idx, bucket in enumerate(sorted_items)
-                    ]
+                    if date_idx == 0 and items:
+                        items[0]["note"] = "추천 상위 SKU"
                     if items:
                         raw_notes = notes_map[date_idx] if date_idx < len(notes_map) else None
-                        total_qty = sum(int(b["qty"]) for b in aggregated.values())
-                        top_item = sorted_items[0] if sorted_items else None
                         reasoning_metrics: list[dict] = [
                             {"key": "기준일", "value": self._format_basis_date(date_value)},
-                            {"key": "총 주문량", "value": f"{total_qty}개"},
+                            {"key": "보정 전 주문량", "value": f"{int(round(calc_metrics['total_base_qty']))}개"},
+                            {"key": "추천 주문량", "value": f"{int(round(calc_metrics['total_adjusted_qty']))}개"},
                             {"key": "품목 수", "value": f"{len(aggregated)}개 SKU"},
+                            {"key": "최근 7일 판매량", "value": f"{int(round(calc_metrics['recent_7d_sales_total']))}개"},
+                            {"key": "판매 추세", "value": f"{calc_metrics['avg_trend_factor']:.2f}x"},
+                            {"key": "재고 커버리지", "value": f"{calc_metrics['avg_inventory_cover']:.1f}일"},
+                            {"key": "유통기한 고위험", "value": f"{int(round(calc_metrics['high_expiry_risk_count']))}개 SKU"},
+                            {"key": "최종 보정계수", "value": f"{calc_metrics['adjustment_ratio']:.2f}x"},
                         ]
-                        if top_item:
-                            reasoning_metrics.append({"key": "주요 품목", "value": str(top_item["name"])})
+                        if calc_metrics["top_item_name"]:
+                            reasoning_metrics.append({"key": "주요 품목", "value": str(calc_metrics["top_item_name"])})
                         options.append(
                             {
                                 "option_id": f"opt-{chr(97 + date_idx)}",
                                 "title": labels[date_idx],
                                 "basis": self._format_basis_date(date_value),
-                                "description": descriptions[date_idx],
+                                "description": f"{descriptions[date_idx]} 최근 7일 판매/재고/유통기한을 반영해 수량을 조정했습니다.",
                                 "recommended": date_idx == 0,
                                 "reasoning_text": raw_notes[0] if raw_notes else "",
                                 "reasoning_metrics": reasoning_metrics,
-                                "special_factors": raw_notes[1:],
+                                "special_factors": [
+                                    *(raw_notes[1:] if raw_notes else []),
+                                    "최근 7일 판매 추세 반영",
+                                    "현재 재고 커버리지 반영",
+                                    "유통기한 폐기 리스크 반영",
+                                ],
                                 "items": items,
                             }
                         )
