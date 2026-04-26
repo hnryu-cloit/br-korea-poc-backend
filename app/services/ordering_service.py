@@ -262,8 +262,6 @@ class OrderingService:
     def _merge_option_payloads(self, option: dict, ai_option: dict | None = None, index: int = 0) -> dict:
         fallback_id = option.get("option_id") or f"opt-{chr(97 + index)}"
         ai_reasoning = OrderingService._safe_str(ai_option.get("reasoning_text") if ai_option else None)
-        ai_metrics = ai_option.get("reasoning_metrics") if ai_option else None
-        ai_special_factors = ai_option.get("special_factors") if ai_option else None
         option_basis = OrderingService._safe_str(option.get("basis"))
         merged = {
             "option_id": OrderingService._safe_str(ai_option.get("option_id") if ai_option else None) or fallback_id,
@@ -271,11 +269,13 @@ class OrderingService:
             "basis": option_basis or OrderingService._safe_str(ai_option.get("basis") if ai_option else None) or "-",
             "description": OrderingService._safe_str(ai_option.get("description") if ai_option else None) or option.get("description") or "",
             "recommended": bool((ai_option or {}).get("recommended", option.get("recommended", index == 0))),
-            "reasoning_text": ai_reasoning or option.get("reasoning_text") or option.get("description") or "",
+            "reasoning_text": ai_reasoning,
             "reasoning_metrics": option.get("reasoning_metrics") or [],
             "special_factors": option.get("special_factors") or [],
             "items": option.get("items") or [],
         }
+        if not merged["reasoning_text"]:
+            merged["reasoning_text"] = self._compose_metric_reasoning(merged, index)
         if not merged["reasoning_metrics"]:
             total_qty = sum(item.get("quantity", 0) for item in merged["items"])
             if total_qty:
@@ -286,25 +286,79 @@ class OrderingService:
         return merged
 
     @staticmethod
+    def _metric_value(metrics: list[dict], key: str) -> str:
+        for metric in metrics or []:
+            if isinstance(metric, dict) and str(metric.get("key")) == key:
+                return str(metric.get("value") or "").strip()
+        return ""
+
+    @classmethod
+    def _compose_metric_reasoning(cls, option: dict, index: int) -> str:
+        """AI 응답이 비었을 때 실제 metric 수치를 조합해 옵션별로 다른 2~3문장을 생성한다."""
+        metrics = option.get("reasoning_metrics") or []
+        basis = cls._metric_value(metrics, "기준일") or str(option.get("basis") or "").strip() or "-"
+        rec_qty = cls._metric_value(metrics, "추천 주문량") or "-"
+        trend = cls._metric_value(metrics, "판매 추세")
+        cover = cls._metric_value(metrics, "재고 커버리지")
+        adj = cls._metric_value(metrics, "최종 보정계수")
+        expiry_high = cls._metric_value(metrics, "유통기한 고위험")
+
+        option_id = str(option.get("option_id") or "").lower()
+        if option_id == "opt-a" or index == 0:
+            base = (
+                f"{basis} 같은 요일 주문을 시작점으로, 판매 추세 {trend or '-'}와 재고 커버리지 {cover or '-'}을 반영해 "
+                f"추천 주문량을 {rec_qty}로 조정했어요. 최근 운영 흐름을 그대로 이어가고 싶을 때 적합합니다."
+            )
+        elif option_id == "opt-b" or index == 1:
+            base = (
+                f"2주 전({basis})은 행사·이벤트 영향이 적은 비교 기준이에요. "
+                f"보정계수 {adj or '-'}로 추천 주문량을 {rec_qty}로 제안하며, 변동성이 낮은 평균치를 보고 싶을 때 추천합니다."
+            )
+        else:
+            base = (
+                f"지난달 같은 요일({basis})을 참고해 시즌성과 채널 변동을 반영했어요. "
+                f"추천 주문량은 {rec_qty}이며, 전월 패턴과 비교하면서 결정하고 싶을 때 적합합니다."
+            )
+
+        if expiry_high and not expiry_high.startswith("0"):
+            base += f" 유통기한 임박 {expiry_high}가 있어 보정계수에 반영됐어요."
+        return base
+
+    @staticmethod
     def _derive_focus_option_id(options: list[dict]) -> str | None:
         if not options:
             return None
         focus = next((option for option in options if option.get("recommended")), options[0])
         return OrderingService._safe_str(focus.get("option_id"))
 
-    @staticmethod
-    def _build_ai_option_summaries(options: list[dict]) -> list[dict[str, object]]:
+    _OPTION_ID_TO_TYPE = {
+        "opt-a": "LAST_WEEK",
+        "opt-b": "TWO_WEEKS_AGO",
+        "opt-c": "LAST_MONTH",
+    }
+
+    @classmethod
+    def _option_id_to_type(cls, option_id: str | None) -> str:
+        if not option_id:
+            return ""
+        return cls._OPTION_ID_TO_TYPE.get(option_id.strip().lower(), "")
+
+    @classmethod
+    def _build_ai_option_summaries(cls, options: list[dict]) -> list[dict[str, object]]:
         summaries: list[dict[str, object]] = []
         for option in options:
             if not isinstance(option, dict):
                 continue
             items = [item for item in (option.get("items") or []) if isinstance(item, dict)]
             total_qty = sum(int(item.get("quantity") or 0) for item in items)
+            option_id = str(option.get("option_id") or "")
             summaries.append(
                 {
-                    "option_id": str(option.get("option_id") or ""),
+                    "option_id": option_id,
+                    "option_type": cls._option_id_to_type(option_id),
                     "title": str(option.get("title") or ""),
                     "basis": str(option.get("basis") or ""),
+                    "basis_date": str(option.get("basis") or ""),
                     "total_qty": total_qty,
                     "line_count": len(items),
                     "reasoning_metrics": option.get("reasoning_metrics") or [],
@@ -318,17 +372,26 @@ class OrderingService:
         reference_date: str | None = None,
         limit: int = 3,
     ) -> OrderingActiveCampaignsResponse:
-        """기준일자 기준 진행 중 캠페인 리스트 반환."""
-        resolved = (reference_date or self._today_kst()).strip()
+        """기준일자 기준 진행 중 캠페인 리스트 반환. 입력이 유효하지 않으면 오늘로 폴백."""
+        resolved = self._normalize_iso_date(reference_date) or self._today_kst()
         rows = self.repository.get_active_campaigns(reference_date=resolved, limit=limit)
         items = [ActiveCampaignItem(**row) for row in rows]
         return OrderingActiveCampaignsResponse(reference_date=resolved, items=items)
+
+    @staticmethod
+    def _normalize_iso_date(value: str | None) -> str | None:
+        if not value:
+            return None
+        text_value = value.strip().replace("-", "")
+        if len(text_value) != 8 or not text_value.isdigit():
+            return None
+        return f"{text_value[0:4]}-{text_value[4:6]}-{text_value[6:8]}"
 
     async def list_options(
         self,
         notification_entry: bool = False,
         store_id: str | None = None,
-        skip_ai: bool = True,
+        skip_ai: bool = False,
         reference_datetime: datetime | None = None,
     ) -> OrderingOptionsResponse:
         normalized_store_id = (store_id or _DEFAULT_ORDERING_STORE_ID).strip() or _DEFAULT_ORDERING_STORE_ID

@@ -1455,13 +1455,13 @@ class OrderingRepository:
                 start_dt,
                 fnsh_dt,
                 cpi_kind,
-                cpi_dc_type_nm
+                cpi_kind_nm
             FROM raw_campaign_master
             WHERE COALESCE(NULLIF(TRIM(CAST(start_dt AS TEXT)), ''), '') <> ''
               AND COALESCE(NULLIF(TRIM(CAST(fnsh_dt AS TEXT)), ''), '') <> ''
               AND REPLACE(CAST(start_dt AS TEXT), '-', '') <= :ref_date
               AND REPLACE(CAST(fnsh_dt AS TEXT), '-', '') >= :ref_date
-              AND COALESCE(use_yn, 'Y') = 'Y'
+              AND UPPER(COALESCE(NULLIF(TRIM(CAST(use_yn AS TEXT)), ''), 'Y')) NOT IN ('0', 'N')
             ORDER BY REPLACE(CAST(start_dt AS TEXT), '-', '') DESC, cpi_cd
             LIMIT :limit
             """
@@ -1490,7 +1490,7 @@ class OrderingRepository:
                     "name": name,
                     "start_date": start_dt,
                     "end_date": end_dt,
-                    "kind": self._safe_str_value(row.get("cpi_dc_type_nm"))
+                    "kind": self._safe_str_value(row.get("cpi_kind_nm"))
                     or self._safe_str_value(row.get("cpi_kind")),
                 }
             )
@@ -1593,11 +1593,6 @@ class OrderingRepository:
             "행사나 이벤트 영향이 적은 비교 기준이에요. 무난한 기준입니다.",
             "시즌성과 채널 변동을 함께 반영한 비교 기준이에요.",
         ]
-        notes_map = [
-            ["최근 주문 수량이 가장 높은 SKU를 우선 반영했어요", "주문 회전이 빠른 품목 중심으로 정리했어요"],
-            ["주문 변동성이 낮은 날짜를 참고했어요", "재고 리스크를 낮추는 쪽으로 정리했어요"],
-            ["수요가 조금 높았던 날을 반영했어요", "배달/온라인 유입 증가 가능성을 고려했어요"],
-        ]
 
         try:
             with self.engine.connect() as connection:
@@ -1630,7 +1625,6 @@ class OrderingRepository:
                     if date_idx == 0 and items:
                         items[0]["note"] = "추천 상위 SKU"
                     if items:
-                        raw_notes = notes_map[date_idx] if date_idx < len(notes_map) else None
                         reasoning_metrics: list[dict] = [
                             {"key": "기준일", "value": self._format_basis_date(date_value)},
                             {"key": "보정 전 주문량", "value": f"{int(round(calc_metrics['total_base_qty']))}개"},
@@ -1651,10 +1645,9 @@ class OrderingRepository:
                                 "basis": self._format_basis_date(date_value),
                                 "description": f"{descriptions[date_idx]} 최근 7일 판매/재고/유통기한을 반영해 수량을 조정했습니다.",
                                 "recommended": date_idx == 0,
-                                "reasoning_text": raw_notes[0] if raw_notes else "",
+                                "reasoning_text": "",
                                 "reasoning_metrics": reasoning_metrics,
                                 "special_factors": [
-                                    *(raw_notes[1:] if raw_notes else []),
                                     "최근 7일 판매 추세 반영",
                                     "현재 재고 커버리지 반영",
                                     "유통기한 폐기 리스크 반영",
@@ -1679,11 +1672,6 @@ class OrderingRepository:
             "가장 최근 주문 데이터 기준이에요. 오늘 운영에 바로 참고할 수 있습니다.",
             "행사나 이벤트 영향이 적은 비교 기준이에요. 무난한 기준입니다.",
             "시즌성과 채널 변동을 함께 반영한 비교 기준이에요.",
-        ]
-        notes_map = [
-            ["최근 주문 수량이 가장 높은 SKU를 우선 반영했어요", "주문 회전이 빠른 품목 중심으로 정리했어요"],
-            ["주문 변동성이 낮은 날짜를 참고했어요", "재고 리스크를 낮추는 쪽으로 정리했어요"],
-            ["수요가 조금 높았던 날을 반영했어요", "배달/온라인 유입 증가 가능성을 고려했어요"],
         ]
         try:
             with sqlite3.connect(cache_path) as connection:
@@ -1716,12 +1704,19 @@ class OrderingRepository:
                     )
                     if date_idx == 0 and items:
                         items[0]["note"] = "추천 상위 SKU"
-                    raw_notes = notes_map[date_idx] if date_idx < len(notes_map) else None
                     reasoning_metrics: list[dict] = [
                         {"key": "기준일", "value": self._format_basis_date(date_value)},
                         {"key": "보정 전 주문량", "value": f"{int(round(calc_metrics['total_base_qty']))}개"},
                         {"key": "추천 주문량", "value": f"{int(round(calc_metrics['total_adjusted_qty']))}개"},
+                        {"key": "품목 수", "value": f"{len(aggregated)}개 SKU"},
+                        {"key": "최근 7일 판매량", "value": f"{int(round(calc_metrics['recent_7d_sales_total']))}개"},
+                        {"key": "판매 추세", "value": f"{calc_metrics['avg_trend_factor']:.2f}x"},
+                        {"key": "재고 커버리지", "value": f"{calc_metrics['avg_inventory_cover']:.1f}일"},
+                        {"key": "유통기한 고위험", "value": f"{int(round(calc_metrics['high_expiry_risk_count']))}개 SKU"},
+                        {"key": "최종 보정계수", "value": f"{calc_metrics['adjustment_ratio']:.2f}x"},
                     ]
+                    if calc_metrics.get("top_item_name"):
+                        reasoning_metrics.append({"key": "주요 품목", "value": str(calc_metrics["top_item_name"])})
                     options.append(
                         {
                             "option_id": f"opt-{chr(97 + date_idx)}",
@@ -1729,10 +1724,9 @@ class OrderingRepository:
                             "basis": self._format_basis_date(date_value),
                             "description": f"{descriptions[date_idx]} 최근 7일 판매/재고/유통기한을 반영해 수량을 조정했습니다.",
                             "recommended": date_idx == 0,
-                            "reasoning_text": raw_notes[0] if raw_notes else "",
+                            "reasoning_text": "",
                             "reasoning_metrics": reasoning_metrics,
                             "special_factors": [
-                                *(raw_notes[1:] if raw_notes else []),
                                 "최근 7일 판매 추세 반영",
                                 "현재 재고 커버리지 반영",
                                 "유통기한 폐기 리스크 반영",

@@ -508,7 +508,7 @@ async def test_ordering_service_skips_ai_when_join_table_is_available() -> None:
     service = OrderingService(repository=_Repo(), ai_client=_AI())
 
 @pytest.mark.asyncio
-async def test_ordering_service_list_options_defaults_to_skip_ai() -> None:
+async def test_ordering_service_list_options_invokes_ai_by_default() -> None:
     class _Repo:
         async def list_options(
             self,
@@ -543,21 +543,18 @@ async def test_ordering_service_list_options_defaults_to_skip_ai() -> None:
         ) -> list[dict]:
             return []
 
-        def get_ordering_trend_summary(
-            self,
-            *,
-            store_id: str,
-            reference_date: str | None = None,
-        ) -> str | None:
-            return None
+    ai_calls: list[dict] = []
 
     class _AI:
         async def recommend_ordering(self, *args, **kwargs):
-            raise AssertionError("AI should not be called for default ordering options")
+            ai_calls.append(kwargs)
+            return None
 
     service = OrderingService(repository=_Repo(), ai_client=_AI())
 
     await service.list_options(store_id="POC_010")
+
+    assert len(ai_calls) == 1, "AI는 옵션 수와 무관하게 요청당 1회만 호출되어야 한다"
 
 
 @pytest.mark.asyncio
