@@ -111,26 +111,36 @@ class AnalyticsRepository:
         resolved_store_id = self._resolve_metrics_store_id(store_id)
 
         items: list[dict] = []
-        channel_metrics = self._get_channel_metrics(store_id=resolved_store_id, period=period)
-        if channel_metrics:
-            items.extend(
-                [
-                    channel_metrics["delivery_orders"],
-                    channel_metrics["hall_visits"],
-                    channel_metrics["app_order_ratio"],
-                    channel_metrics["average_ticket"],
-                ]
-            )
-
         sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
         selected_period_total_sales = None
         if sales_metrics:
-            items.extend([sales_metrics["total_sales"], sales_metrics["coffee_attach_ratio"]])
             selected_period_total_sales = sales_metrics.get("total_sales_amount")
 
-        discount_metrics = self._get_discount_metrics(store_id=resolved_store_id, period=period)
-        if discount_metrics:
-            items.append(discount_metrics["discount_ratio"])
+        channel_metrics = self._get_channel_metrics(
+            store_id=resolved_store_id,
+            period=period,
+            total_sales_amount=selected_period_total_sales,
+        )
+        if channel_metrics:
+            items.extend(
+                [
+                    channel_metrics["takeout_count"],
+                    channel_metrics["delivery_sales"],
+                    channel_metrics["in_store_pay_count"],
+                ]
+            )
+
+        if sales_metrics:
+            items.append(sales_metrics["coffee_attach_ratio"])
+
+        if channel_metrics:
+            items.extend(
+                [
+                    channel_metrics["lunch_unit_price"],
+                    channel_metrics["swing_unit_price"],
+                    channel_metrics["dinner_unit_price"],
+                ]
+            )
 
         return {
             "items": items,
@@ -374,41 +384,203 @@ class AnalyticsRepository:
 
         raise ValueError(f"store_id not found in raw_store_master: {normalized}")
 
+    def _fetch_in_store_pay_counts(
+        self,
+        store_id: str | None,
+        period: dict[str, str] | None,
+    ) -> tuple[float, float]:
+        """매장 결제 건수(배달/해피오더 제외) — recent/prior 튜플.
+
+        1순위: mart_store_daily_kpi.in_store_pay_count (사전 계산)
+        폴백: raw_daily_store_pay_way 직접 카운트
+        """
+        if not self.engine:
+            return 0.0, 0.0
+
+        store_filter, store_params = self._build_store_filter(store_id)
+
+        # 1순위: mart 사용
+        if has_table(self.engine, "mart_store_daily_kpi"):
+            mart_filter, mart_params = (
+                ("WHERE store_id = :store_id", {"store_id": store_id})
+                if store_id
+                else ("", {})
+            )
+            if period:
+                params: dict[str, str] = {**mart_params, **period}
+                query = text(
+                    f"""
+                    SELECT
+                        COALESCE(SUM(in_store_pay_count) FILTER (
+                            WHERE sale_dt BETWEEN :recent_from AND :recent_to
+                        ), 0) AS recent_count,
+                        COALESCE(SUM(in_store_pay_count) FILTER (
+                            WHERE sale_dt BETWEEN :prior_from AND :prior_to
+                        ), 0) AS prior_count
+                    FROM mart_store_daily_kpi
+                    {mart_filter}
+                    """
+                )
+            else:
+                params = {**mart_params}
+                query = text(
+                    f"""
+                    WITH ranked AS (
+                        SELECT
+                            sale_dt,
+                            in_store_pay_count,
+                            DENSE_RANK() OVER (ORDER BY sale_dt DESC) AS dr
+                        FROM mart_store_daily_kpi
+                        {mart_filter}
+                    )
+                    SELECT
+                        COALESCE(SUM(in_store_pay_count) FILTER (WHERE dr <= 7), 0) AS recent_count,
+                        COALESCE(SUM(in_store_pay_count) FILTER (WHERE dr > 7 AND dr <= 14), 0) AS prior_count
+                    FROM ranked
+                    """
+                )
+            try:
+                with self.engine.connect() as connection:
+                    row = connection.execute(query, params).mappings().one()
+                return float(row["recent_count"] or 0), float(row["prior_count"] or 0)
+            except SQLAlchemyError as exc:
+                logger.warning(
+                    "_fetch_in_store_pay_counts mart 조회 실패, 폴백: store_id=%s error=%s",
+                    store_id,
+                    exc,
+                )
+
+        # 폴백: raw_daily_store_pay_way 직접 카운트
+        if not has_table(self.engine, "raw_daily_store_pay_way"):
+            return 0.0, 0.0
+        if period:
+            params = {**store_params, **period}
+            query = text(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE sale_dt BETWEEN :recent_from AND :recent_to
+                          AND COALESCE(pay_way_cd, '') <> '18'
+                    ) AS recent_count,
+                    COUNT(*) FILTER (
+                        WHERE sale_dt BETWEEN :prior_from AND :prior_to
+                          AND COALESCE(pay_way_cd, '') <> '18'
+                    ) AS prior_count
+                FROM raw_daily_store_pay_way
+                {store_filter}
+                """
+            )
+        else:
+            params = {**store_params}
+            query = text(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        sale_dt,
+                        pay_way_cd,
+                        DENSE_RANK() OVER (ORDER BY sale_dt DESC) AS dr
+                    FROM raw_daily_store_pay_way
+                    {store_filter}
+                )
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE dr <= 7 AND COALESCE(pay_way_cd, '') <> '18'
+                    ) AS recent_count,
+                    COUNT(*) FILTER (
+                        WHERE dr > 7 AND dr <= 14 AND COALESCE(pay_way_cd, '') <> '18'
+                    ) AS prior_count
+                FROM ranked
+                """
+            )
+
+        try:
+            with self.engine.connect() as connection:
+                row = connection.execute(query, params).mappings().one()
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "_fetch_in_store_pay_counts 실패: store_id=%s error=%s", store_id, exc
+            )
+            return 0.0, 0.0
+
+        return float(row["recent_count"] or 0), float(row["prior_count"] or 0)
+
     def _get_channel_metrics(
-        self, store_id: str | None, period: dict[str, str] | None
+        self,
+        store_id: str | None,
+        period: dict[str, str] | None,
+        total_sales_amount: float | None = None,
     ) -> dict | None:
         if not self.engine:
             return None
 
         store_filter, store_params = self._build_store_filter(store_id)
+        hour_expr = (
+            "CASE "
+            "WHEN COALESCE(NULLIF(CAST(tmzon_div AS TEXT), ''), '') ~ '^[0-9]+$' "
+            "THEN CAST(tmzon_div AS INTEGER) "
+            "ELSE NULL "
+            "END"
+        )
+        sales_expr = "CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)"
+        order_expr = "CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)"
+        delivery_condition = "COALESCE(ho_chnl_div, '') LIKE '%배달%'"
+        takeout_condition = (
+            "COALESCE(ho_chnl_div, '') LIKE '%픽업%' "
+            "OR COALESCE(ho_chnl_div, '') LIKE '%포장%' "
+            "OR COALESCE(ho_chnl_div, '') LIKE '%투고%'"
+        )
 
         if period:
             params: dict[str, str] = {**store_params, **period}
             query = text(
                 f"""
-                WITH daily AS (
+                WITH normalized AS (
                     SELECT
                         sale_dt,
-                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS total_sales,
-                        SUM(CASE WHEN ho_chnl_div IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
-                        0 AS offline_orders,
-                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS online_sales,
-                        SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS total_orders
+                        COALESCE(ho_chnl_div, '') AS ho_chnl_div,
+                        {hour_expr} AS hour_div,
+                        {sales_expr} AS sale_amt_num,
+                        {order_expr} AS ord_cnt_num
                     FROM raw_daily_store_channel
                     {store_filter}
+                ),
+                daily AS (
+                    SELECT
+                        sale_dt,
+                        SUM(CASE WHEN ho_chnl_div = '' THEN ord_cnt_num ELSE 0 END) AS offline_orders,
+                        SUM(sale_amt_num) AS online_sales,
+                        SUM(CASE WHEN {delivery_condition} THEN sale_amt_num ELSE 0 END) AS delivery_sales,
+                        SUM(CASE WHEN {takeout_condition} THEN ord_cnt_num ELSE 0 END) AS takeout_orders,
+                        SUM(CASE WHEN hour_div <= 15 THEN sale_amt_num ELSE 0 END) AS lunch_sales,
+                        SUM(CASE WHEN hour_div <= 15 THEN ord_cnt_num ELSE 0 END) AS lunch_orders,
+                        SUM(CASE WHEN hour_div > 15 AND hour_div < 17 THEN sale_amt_num ELSE 0 END) AS swing_sales,
+                        SUM(CASE WHEN hour_div > 15 AND hour_div < 17 THEN ord_cnt_num ELSE 0 END) AS swing_orders,
+                        SUM(CASE WHEN hour_div >= 17 THEN sale_amt_num ELSE 0 END) AS dinner_sales,
+                        SUM(CASE WHEN hour_div >= 17 THEN ord_cnt_num ELSE 0 END) AS dinner_orders
+                    FROM normalized
                     GROUP BY sale_dt
                 )
                 SELECT
-                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN total_sales END), 0) AS recent_total_sales,
-                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN total_sales END), 0) AS prior_total_sales,
-                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN online_orders END), 0) AS recent_online_orders,
-                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN online_orders END), 0) AS prior_online_orders,
                     COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN offline_orders END), 0) AS recent_offline_orders,
                     COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN offline_orders END), 0) AS prior_offline_orders,
                     COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN online_sales END), 0) AS recent_online_sales,
                     COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN online_sales END), 0) AS prior_online_sales,
-                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN total_orders END), 0) AS recent_total_orders,
-                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN total_orders END), 0) AS prior_total_orders
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN delivery_sales END), 0) AS recent_delivery_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN delivery_sales END), 0) AS prior_delivery_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN takeout_orders END), 0) AS recent_takeout_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN takeout_orders END), 0) AS prior_takeout_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN lunch_sales END), 0) AS recent_lunch_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN lunch_orders END), 0) AS recent_lunch_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN lunch_sales END), 0) AS prior_lunch_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN lunch_orders END), 0) AS prior_lunch_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN swing_sales END), 0) AS recent_swing_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN swing_orders END), 0) AS recent_swing_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN swing_sales END), 0) AS prior_swing_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN swing_orders END), 0) AS prior_swing_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN dinner_sales END), 0) AS recent_dinner_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN dinner_orders END), 0) AS recent_dinner_orders,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN dinner_sales END), 0) AS prior_dinner_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN dinner_orders END), 0) AS prior_dinner_orders
                 FROM daily
                 """
             )
@@ -416,40 +588,69 @@ class AnalyticsRepository:
             params = {**store_params}
             query = text(
                 f"""
-                WITH daily AS (
+                WITH normalized AS (
                     SELECT
                         sale_dt,
-                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS total_sales,
-                        SUM(CASE WHEN ho_chnl_div IS NOT NULL THEN CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC) ELSE 0 END) AS online_orders,
-                        0 AS offline_orders,
-                        SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)) AS online_sales,
-                        SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)) AS total_orders
+                        COALESCE(ho_chnl_div, '') AS ho_chnl_div,
+                        {hour_expr} AS hour_div,
+                        {sales_expr} AS sale_amt_num,
+                        {order_expr} AS ord_cnt_num
                     FROM raw_daily_store_channel
                     {store_filter}
+                ),
+                daily AS (
+                    SELECT
+                        sale_dt,
+                        SUM(CASE WHEN ho_chnl_div = '' THEN ord_cnt_num ELSE 0 END) AS offline_orders,
+                        SUM(sale_amt_num) AS online_sales,
+                        SUM(CASE WHEN {delivery_condition} THEN sale_amt_num ELSE 0 END) AS delivery_sales,
+                        SUM(CASE WHEN {takeout_condition} THEN ord_cnt_num ELSE 0 END) AS takeout_orders,
+                        SUM(CASE WHEN hour_div <= 15 THEN sale_amt_num ELSE 0 END) AS lunch_sales,
+                        SUM(CASE WHEN hour_div <= 15 THEN ord_cnt_num ELSE 0 END) AS lunch_orders,
+                        SUM(CASE WHEN hour_div > 15 AND hour_div < 17 THEN sale_amt_num ELSE 0 END) AS swing_sales,
+                        SUM(CASE WHEN hour_div > 15 AND hour_div < 17 THEN ord_cnt_num ELSE 0 END) AS swing_orders,
+                        SUM(CASE WHEN hour_div >= 17 THEN sale_amt_num ELSE 0 END) AS dinner_sales,
+                        SUM(CASE WHEN hour_div >= 17 THEN ord_cnt_num ELSE 0 END) AS dinner_orders
+                    FROM normalized
                     GROUP BY sale_dt
                 ),
                 ranked AS (
                     SELECT
                         sale_dt,
-                        total_sales,
-                        online_orders,
                         offline_orders,
                         online_sales,
-                        total_orders,
+                        delivery_sales,
+                        takeout_orders,
+                        lunch_sales,
+                        lunch_orders,
+                        swing_sales,
+                        swing_orders,
+                        dinner_sales,
+                        dinner_orders,
                         ROW_NUMBER() OVER (ORDER BY sale_dt DESC) AS rn
                     FROM daily
                 )
                 SELECT
-                    COALESCE(SUM(CASE WHEN rn <= 7 THEN total_sales END), 0) AS recent_total_sales,
-                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN total_sales END), 0) AS prior_total_sales,
-                    COALESCE(SUM(CASE WHEN rn <= 7 THEN online_orders END), 0) AS recent_online_orders,
-                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN online_orders END), 0) AS prior_online_orders,
                     COALESCE(SUM(CASE WHEN rn <= 7 THEN offline_orders END), 0) AS recent_offline_orders,
                     COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN offline_orders END), 0) AS prior_offline_orders,
                     COALESCE(SUM(CASE WHEN rn <= 7 THEN online_sales END), 0) AS recent_online_sales,
                     COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN online_sales END), 0) AS prior_online_sales,
-                    COALESCE(SUM(CASE WHEN rn <= 7 THEN total_orders END), 0) AS recent_total_orders,
-                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN total_orders END), 0) AS prior_total_orders
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN delivery_sales END), 0) AS recent_delivery_sales,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN delivery_sales END), 0) AS prior_delivery_sales,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN takeout_orders END), 0) AS recent_takeout_orders,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN takeout_orders END), 0) AS prior_takeout_orders,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN lunch_sales END), 0) AS recent_lunch_sales,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN lunch_orders END), 0) AS recent_lunch_orders,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN lunch_sales END), 0) AS prior_lunch_sales,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN lunch_orders END), 0) AS prior_lunch_orders,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN swing_sales END), 0) AS recent_swing_sales,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN swing_orders END), 0) AS recent_swing_orders,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN swing_sales END), 0) AS prior_swing_sales,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN swing_orders END), 0) AS prior_swing_orders,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN dinner_sales END), 0) AS recent_dinner_sales,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN dinner_orders END), 0) AS recent_dinner_orders,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN dinner_sales END), 0) AS prior_dinner_sales,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN dinner_orders END), 0) AS prior_dinner_orders
                 FROM ranked
                 """
             )
@@ -457,16 +658,32 @@ class AnalyticsRepository:
         with self.engine.connect() as connection:
             summary = connection.execute(query, params).mappings().one()
 
-        recent_total_sales = float(summary["recent_total_sales"] or 0)
-        prior_total_sales = float(summary["prior_total_sales"] or 0)
-        recent_online_orders = float(summary["recent_online_orders"] or 0)
-        prior_online_orders = float(summary["prior_online_orders"] or 0)
         recent_offline_orders = float(summary["recent_offline_orders"] or 0)
         prior_offline_orders = float(summary["prior_offline_orders"] or 0)
+
+        # 매장 결제 건수 — raw_daily_store_pay_way 기준
+        # pay_way_cd != '18' (배달/해피오더 제외)
+        in_store_pay_recent, in_store_pay_prior = self._fetch_in_store_pay_counts(
+            store_id=store_id, period=period
+        )
         recent_online_sales = float(summary["recent_online_sales"] or 0)
         prior_online_sales = float(summary["prior_online_sales"] or 0)
-        recent_total_orders = float(summary["recent_total_orders"] or 0)
-        prior_total_orders = float(summary["prior_total_orders"] or 0)
+        recent_delivery_sales = float(summary["recent_delivery_sales"] or 0)
+        prior_delivery_sales = float(summary["prior_delivery_sales"] or 0)
+        recent_takeout_orders = float(summary["recent_takeout_orders"] or 0)
+        prior_takeout_orders = float(summary["prior_takeout_orders"] or 0)
+        recent_lunch_sales = float(summary["recent_lunch_sales"] or 0)
+        recent_lunch_orders = float(summary["recent_lunch_orders"] or 0)
+        prior_lunch_sales = float(summary["prior_lunch_sales"] or 0)
+        prior_lunch_orders = float(summary["prior_lunch_orders"] or 0)
+        recent_swing_sales = float(summary["recent_swing_sales"] or 0)
+        recent_swing_orders = float(summary["recent_swing_orders"] or 0)
+        prior_swing_sales = float(summary["prior_swing_sales"] or 0)
+        prior_swing_orders = float(summary["prior_swing_orders"] or 0)
+        recent_dinner_sales = float(summary["recent_dinner_sales"] or 0)
+        recent_dinner_orders = float(summary["recent_dinner_orders"] or 0)
+        prior_dinner_sales = float(summary["prior_dinner_sales"] or 0)
+        prior_dinner_orders = float(summary["prior_dinner_orders"] or 0)
 
         def fmt_change(recent: float, prior: float, percent_suffix: str = "%") -> tuple[str, str]:
             if prior == 0 and recent == 0:
@@ -477,55 +694,80 @@ class AnalyticsRepository:
             trend = "up" if change > 0 else "down" if change < 0 else "flat"
             return f"{change:+.1f}{percent_suffix}", trend
 
-        app_ratio_recent = (
-            0
-            if recent_total_sales == 0
-            else round(recent_online_sales / recent_total_sales * 100, 1)
-        )
-        app_ratio_prior = (
-            0 if prior_total_sales == 0 else round(prior_online_sales / prior_total_sales * 100, 1)
-        )
-        avg_ticket_recent = (
-            0 if recent_total_orders == 0 else round(recent_total_sales / recent_total_orders)
-        )
-        avg_ticket_prior = (
-            0 if prior_total_orders == 0 else round(prior_total_sales / prior_total_orders)
-        )
+        # 배달/투고 분류가 불가능한 데이터셋에서는 온라인 매출을 배달로 간주
+        if recent_delivery_sales <= 0 and recent_takeout_orders <= 0 and recent_online_sales > 0:
+            recent_delivery_sales = recent_online_sales
+        if prior_delivery_sales <= 0 and prior_takeout_orders <= 0 and prior_online_sales > 0:
+            prior_delivery_sales = prior_online_sales
 
-        delivery_change, delivery_trend = fmt_change(recent_online_orders, prior_online_orders)
-        hall_change, hall_trend = fmt_change(recent_offline_orders, prior_offline_orders)
-        app_ratio_delta = app_ratio_recent - app_ratio_prior
-        app_ratio_trend = "up" if app_ratio_delta > 0 else "down" if app_ratio_delta < 0 else "flat"
-        avg_ticket_change, avg_ticket_trend = fmt_change(avg_ticket_recent, avg_ticket_prior)
+        def unit_price(sales: float, orders: float) -> float:
+            if orders <= 0:
+                return 0.0
+            return round(sales / orders)
+
+        lunch_recent_unit_price = unit_price(recent_lunch_sales, recent_lunch_orders)
+        lunch_prior_unit_price = unit_price(prior_lunch_sales, prior_lunch_orders)
+        swing_recent_unit_price = unit_price(recent_swing_sales, recent_swing_orders)
+        swing_prior_unit_price = unit_price(prior_swing_sales, prior_swing_orders)
+        dinner_recent_unit_price = unit_price(recent_dinner_sales, recent_dinner_orders)
+        dinner_prior_unit_price = unit_price(prior_dinner_sales, prior_dinner_orders)
+
+        takeout_change, takeout_trend = fmt_change(recent_takeout_orders, prior_takeout_orders)
+        delivery_change, delivery_trend = fmt_change(recent_delivery_sales, prior_delivery_sales)
+        in_store_change, in_store_trend = fmt_change(in_store_pay_recent, in_store_pay_prior)
+        lunch_change, lunch_trend = fmt_change(lunch_recent_unit_price, lunch_prior_unit_price)
+        swing_change, swing_trend = fmt_change(swing_recent_unit_price, swing_prior_unit_price)
+        dinner_change, dinner_trend = fmt_change(dinner_recent_unit_price, dinner_prior_unit_price)
 
         period_detail = "선택 기간 기준" if period else "최근 7일 기준"
+        base_total_sales = float(total_sales_amount or 0)
+
+        def to_share_text(amount: float) -> str:
+            if base_total_sales <= 0:
+                return "전체 매출액 중 0.0%"
+            return f"전체 매출액 중 {(amount / base_total_sales) * 100:.1f}%"
+
         return {
-            "delivery_orders": {
-                "label": "배달 건수",
-                "value": f"{int(round(recent_online_orders)):,}건",
+            "takeout_count": {
+                "label": "투고 건수",
+                "value": f"{int(round(recent_takeout_orders)):,}건",
+                "change": takeout_change,
+                "trend": takeout_trend,
+                "detail": period_detail,
+            },
+            "delivery_sales": {
+                "label": "배달 매출액",
+                "value": f"₩{int(round(recent_delivery_sales)):,}",
                 "change": delivery_change,
                 "trend": delivery_trend,
+                "detail": f"{period_detail} · {to_share_text(recent_delivery_sales)}",
+            },
+            "in_store_pay_count": {
+                "label": "매장 결제 건수",
+                "value": f"{int(round(in_store_pay_recent)):,}건",
+                "change": in_store_change,
+                "trend": in_store_trend,
+                "detail": f"{period_detail} · 배달/해피오더 제외",
+            },
+            "lunch_unit_price": {
+                "label": "런치 판매단가(~15시)",
+                "value": f"₩{int(lunch_recent_unit_price):,}",
+                "change": lunch_change,
+                "trend": lunch_trend,
                 "detail": period_detail,
             },
-            "hall_visits": {
-                "label": "홀 방문 고객",
-                "value": f"{int(round(recent_offline_orders)):,}명",
-                "change": hall_change,
-                "trend": hall_trend,
+            "swing_unit_price": {
+                "label": "스윙타임 판매단가(15~17시)",
+                "value": f"₩{int(swing_recent_unit_price):,}",
+                "change": swing_change,
+                "trend": swing_trend,
                 "detail": period_detail,
             },
-            "app_order_ratio": {
-                "label": "앱 주문 비중",
-                "value": f"{app_ratio_recent:.1f}%",
-                "change": f"{app_ratio_delta:+.1f}%p",
-                "trend": app_ratio_trend,
-                "detail": "온라인 매출 비중",
-            },
-            "average_ticket": {
-                "label": "평균 객단가",
-                "value": f"₩{int(avg_ticket_recent):,}",
-                "change": avg_ticket_change,
-                "trend": avg_ticket_trend,
+            "dinner_unit_price": {
+                "label": "디너 판매단가(17시~)",
+                "value": f"₩{int(dinner_recent_unit_price):,}",
+                "change": dinner_change,
+                "trend": dinner_trend,
                 "detail": period_detail,
             },
         }
@@ -1002,6 +1244,9 @@ class AnalyticsRepository:
             return {
                 "gu_options": gu_options,
                 "dong_options_by_gu": dong_options_by_gu,
+                "available_quarters": [],
+                "latest_year": None,
+                "latest_quarter": None,
             }
 
         table_names = ("raw_seoul_market_sales", "raw_seoul_market_floating_population")
@@ -1035,6 +1280,9 @@ class AnalyticsRepository:
             return {
                 "gu_options": gu_options,
                 "dong_options_by_gu": dong_options_by_gu,
+                "available_quarters": [],
+                "latest_year": None,
+                "latest_quarter": None,
             }
 
         discovered_dongs: dict[str, set[str]] = {gu: set() for gu in gu_options if gu != "전체"}
@@ -1058,9 +1306,44 @@ class AnalyticsRepository:
             dongs = sorted(discovered_dongs.get(gu, set()))
             dong_options_by_gu[gu] = ["전체", *dongs] if dongs else ["전체"]
 
+        available_quarters: list[dict[str, int]] = []
+        latest_year: int | None = None
+        latest_quarter: int | None = None
+        try:
+            with self.engine.connect() as conn:
+                if has_table(self.engine, "raw_seoul_market_sales"):
+                    quarter_rows = (
+                        conn.execute(
+                            text(
+                                """
+                                SELECT DISTINCT base_year, base_quarter
+                                FROM raw_seoul_market_sales
+                                WHERE base_year > 0 AND base_quarter > 0
+                                ORDER BY base_year DESC, base_quarter DESC
+                                """
+                            )
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    for row in quarter_rows:
+                        year_value = int(row.get("base_year") or 0)
+                        quarter_value = int(row.get("base_quarter") or 0)
+                        if year_value <= 0 or quarter_value <= 0:
+                            continue
+                        available_quarters.append({"year": year_value, "quarter": quarter_value})
+                    if available_quarters:
+                        latest_year = available_quarters[0]["year"]
+                        latest_quarter = available_quarters[0]["quarter"]
+        except SQLAlchemyError as exc:
+            logger.warning("market scope quarter options 조회 실패: %s", exc)
+
         return {
             "gu_options": gu_options,
             "dong_options_by_gu": dong_options_by_gu,
+            "available_quarters": available_quarters,
+            "latest_year": latest_year,
+            "latest_quarter": latest_quarter,
         }
 
     def get_sales_trend(
@@ -1845,24 +2128,29 @@ class AnalyticsRepository:
                             FROM raw_seoul_market_sales
                             WHERE {sales_where}
                             GROUP BY area_name, service_name
+                        ),
+                        bucketed AS (
+                            SELECT
+                                CASE
+                                    WHEN active_years >= 5 THEN '5년 이상'
+                                    WHEN active_years = 4 THEN '4년'
+                                    WHEN active_years = 3 THEN '3년'
+                                    WHEN active_years = 2 THEN '2년'
+                                    ELSE '1년 이하'
+                                END AS bucket
+                            FROM entity_years
                         )
                         SELECT
-                            CASE
-                                WHEN active_years >= 5 THEN '5년 이상'
-                                WHEN active_years = 4 THEN '4년'
-                                WHEN active_years = 3 THEN '3년'
-                                WHEN active_years = 2 THEN '2년'
-                                ELSE '1년 이하'
-                            END AS bucket,
+                            bucket,
                             COUNT(*) AS business_count
-                        FROM entity_years
+                        FROM bucketed
                         GROUP BY bucket
                         ORDER BY
-                            CASE bucket
-                                WHEN '1년 이하' THEN 1
-                                WHEN '2년' THEN 2
-                                WHEN '3년' THEN 3
-                                WHEN '4년' THEN 4
+                            CASE
+                                WHEN bucket = '1년 이하' THEN 1
+                                WHEN bucket = '2년' THEN 2
+                                WHEN bucket = '3년' THEN 3
+                                WHEN bucket = '4년' THEN 4
                                 ELSE 5
                             END
                         """

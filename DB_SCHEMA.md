@@ -904,7 +904,7 @@ resource 기준으로 보면 현재 매핑은 아래처럼 해석하면 된다.
 | `GET /api/production/registrations/history` | `production_registrations` | 생산 등록 이력을 조회한다. |
 | `GET /api/production/registrations/summary` | `production_registrations` | 최근 생산 등록 요약 지표를 계산한다. |
 | `GET /api/production/inventory-status` | `core_stock_rate`, `core_stockout_time` | 최신 재고율/품절시각 기준으로 과잉·부족·적정 상태를 분류하고 근거(evidence)와 가설 유통기한 지표를 함께 반환한다. |
-| `GET /api/production/waste-summary` | `core_stock_rate`, `raw_inventory_extract` | D+1 보정 로스(`당일 잉여 - 익일 흡수`)와 실폐기(`disuse_qty`)를 분리 집계하고 근거(evidence)를 반환한다. |
+| `GET /api/production/waste-summary` | `core_stock_rate`, `raw_inventory_extract`, `mart_product_price_master` | D+1 보정 로스(`당일 잉여 - 익일 흡수`)와 실폐기(`disuse_qty`)를 분리 집계한다. 판매가 단가는 `mart_product_price_master.regular_list_price`를 1순위로, 미적재 품목은 `core_daily_item_sales` 전 지점 평균을 폴백으로 사용해 기간 데이터 부재 시에도 단가가 0이 되지 않도록 한다. |
 
 - `inventory-status` 서비스 계층은 레포지토리 반환값을 `(rows, total_items, summary_metrics)` 형식으로 정규화해 레거시 2-튜플 반환에서도 언패킹 오류 없이 동작한다.
 - `inventory-status`는 `page`, `page_size` 쿼리를 지원하며, 요약 카운트 값은 문자열/빈값 데이터에서도 안전 정수 변환으로 처리해 422(ValueError)를 방지한다.
@@ -1328,3 +1328,38 @@ POC_030         20260101  두바이 스타일 초콜릿도넛  303      15      
 
 - 본 세션의 추가 작업은 프론트 후보질문 구성 로직 변경이며, 백엔드 DB 스키마 변경은 없습니다.
 - `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
+
+## Session Update (2026-04-26, mart_product_price 신규 도입)
+
+- 전 지점 통합 제품 판매가 마트 2종 추가: `mart_product_price_daily`, `mart_product_price_master`
+- 마이그레이션: `db/migrations/0026_create_mart_product_price.sql`
+- 적재 스크립트: `scripts/load_mart_product_price.py`
+  - 원천: `core_daily_item_sales` (전 지점 일별 sale_amt/sale_qty/actual_sale_amt/dc_amt 집계)
+  - 캠페인 매칭: `raw_campaign_master` × `raw_campaign_item` (확정 + use_yn=Y)
+  - is_promotion 판정: 평상시 정가(mode) 대비 5%↑ 할인일 OR 캠페인 매칭일
+- `mart_product_price_daily` 컬럼: item_cd/item_nm/price_dt + list_price/net_price/discount_amount/discount_rate/sample_store_count/sample_qty/is_promotion/matched_campaign_codes
+- `mart_product_price_master` 컬럼: item_cd/item_nm + regular_list_price(평상시 정가, mode) / regular_net_price(평상시 실판매단가) / latest_*_price(최근 30일 평균) / price_change_count / last_price_change_dt / active_promotion_count / sample_day_count
+- 사용처: `production_repository.get_production_waste_rows()` SQL의 `unit_price` CTE를 `mart_product_price_master.regular_list_price` 우선 + `core_daily_item_sales` 전 지점 평균 폴백으로 교체. 기간 데이터 부재(예: 4월 폐기 조회 시 sales 데이터 ~3/10까지) 시에도 판매가 단가가 0이 되지 않는다.
+
+
+## Session Update (2026-04-26, 사전 계산 마트 6종 일괄 도입)
+
+운영 KPI/분석 화면들의 반복 SQL 부하를 줄이기 위해 사전 계산 마트 6종을 추가했다. `scripts/load_all_marts.py` 한 번 실행으로 일괄 재계산 가능.
+
+| 마이그레이션 | 마트 테이블 | 적재 스크립트 | 행수 |
+|---|---|---|---|
+| 0027 | `mart_item_category_master` | `load_mart_item_category.py` | 660 |
+| 0028 | `mart_store_daily_kpi` | `load_mart_store_daily_kpi.py` | 10,927 |
+| 0029 | `mart_hourly_sales_pattern` | `load_mart_hourly_sales_pattern.py` | 3,191 |
+| 0030 | `mart_inventory_health_daily` | `load_mart_inventory_health_daily.py` | 81,586 |
+| 0031 | `mart_campaign_effect_daily` | `load_mart_campaign_effect_daily.py` | 24,284 |
+| 0032 | `mart_payment_mix_daily` | `load_mart_payment_mix_daily.py` | 51,476 |
+
+### 마트별 핵심 컬럼/효용
+- `mart_item_category_master`: 660품목을 베이커리/커피/음료/차/비제품/기타 6분류로 사전 분류. `is_coffee/is_drink/is_food`, `is_seasonal`, `season_tag`, `parent_item_nm`(`[JBOD]` 접두사 매핑) 제공.
+- `mart_store_daily_kpi`: 매장×일별 1행 — total_sales/orders, delivery_sales, takeout_orders, in_store_pay_count, lunch/swing/dinner_avg_ticket, coffee/drink/food_sales, coffee_attach_ratio, top_item_nm, avg_temp_c/precipitation_mm.
+- `mart_hourly_sales_pattern`: 매장×요일×시간대 평균(최근 28일) — avg_sale_amt/avg_ord_cnt + peak_rank.
+- `mart_inventory_health_daily`: 매장×품목×일별(최근 90일) — stk_rt, is_stockout, shelf_life_days, expiry_risk_level, inventory_status(과잉/적정/부족/품절).
+- `mart_campaign_effect_daily`: 캠페인×일별 — applicable_item_count, total_sales_during, total_dc_amt, baseline_sales_avg, sales_lift_ratio.
+- `mart_payment_mix_daily`: 매장×일별×결제수단 — pay_amt/pay_count/share_ratio, is_delivery_channel(`pay_way_cd='18'`), is_discount_channel(`'03'`/`'19'`).
+

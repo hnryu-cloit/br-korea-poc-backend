@@ -1757,22 +1757,28 @@ class ProductionRepository(BaseRepository):
                                   AND p.prod_dt BETWEEN :date_from AND :date_to
                             ),
                             unit_price AS (
+                                -- 1순위: mart_product_price_master (전 지점 통합 평상시 정가)
+                                SELECT item_nm,
+                                       regular_list_price AS avg_unit_price
+                                FROM mart_product_price_master
+                            ),
+                            unit_price_fallback AS (
+                                -- 폴백: 기간 무관 전 지점 평균 (마트 미적재 품목 대응)
                                 SELECT item_nm,
                                        AVG(actual_sale_amt / NULLIF(sale_qty, 0)) AS avg_unit_price
                                 FROM core_daily_item_sales
-                                WHERE masked_stor_cd = :store_id
-                                  AND sale_qty > 0
-                                  AND sale_dt BETWEEN :date_from AND :date_to
+                                WHERE sale_qty > 0
                                 GROUP BY item_nm
                             )
                             SELECT
                                 dw.item_cd,
                                 dw.item_nm,
-                                SUM(dw.waste_qty)                                        AS total_waste_qty,
-                                SUM(dw.waste_qty * COALESCE(u.avg_unit_price, 0))        AS total_waste_amount,
-                                COALESCE(MAX(u.avg_unit_price), 0)                       AS avg_cost
+                                SUM(dw.waste_qty)                                                              AS total_waste_qty,
+                                SUM(dw.waste_qty * COALESCE(u.avg_unit_price, uf.avg_unit_price, 0))           AS total_waste_amount,
+                                COALESCE(MAX(u.avg_unit_price), MAX(uf.avg_unit_price), 0)                     AS avg_cost
                             FROM daily_waste dw
                             LEFT JOIN unit_price u ON dw.item_nm = u.item_nm
+                            LEFT JOIN unit_price_fallback uf ON dw.item_nm = uf.item_nm
                             GROUP BY dw.item_cd, dw.item_nm
                             HAVING SUM(dw.waste_qty) > 0
                             ORDER BY total_waste_qty DESC
@@ -1883,22 +1889,25 @@ class ProductionRepository(BaseRepository):
                                 text(
                                     f"""
                                     SELECT
-                                        item_cd,
-                                        item_nm,
-                                        total_stock AS stk_avg,
-                                        total_sold AS sal_avg,
-                                        total_orderable AS ord_avg,
-                                        stock_rate AS stk_rt,
-                                        is_stockout,
-                                        stockout_hour,
-                                        assumed_shelf_life_days,
-                                        expiry_risk_level,
-                                        status
-                                    FROM mart_poc_010_production_inventory_status
-                                    WHERE store_id = :store_id
-                                      AND business_date = :business_date
+                                        m.item_cd,
+                                        m.item_nm,
+                                        psl.item_group,
+                                        m.total_stock AS stk_avg,
+                                        m.total_sold AS sal_avg,
+                                        m.total_orderable AS ord_avg,
+                                        m.stock_rate AS stk_rt,
+                                        m.is_stockout,
+                                        m.stockout_hour,
+                                        m.assumed_shelf_life_days,
+                                        m.expiry_risk_level,
+                                        m.status
+                                    FROM mart_poc_010_production_inventory_status AS m
+                                    LEFT JOIN raw_product_shelf_life AS psl
+                                        ON psl.item_cd = m.item_cd
+                                    WHERE m.store_id = :store_id
+                                      AND m.business_date = :business_date
                                       {status_filter_clause}
-                                    ORDER BY stock_rate ASC, item_nm ASC
+                                    ORDER BY m.stock_rate ASC, m.item_nm ASC
                                     LIMIT :page_size OFFSET :offset
                                     """
                                 ),
@@ -1914,34 +1923,47 @@ class ProductionRepository(BaseRepository):
                             .all()
                         )
                         return [dict(r) for r in rows], total_items, dict(summary_row)
+                base_cte_sql = f"""
+                    WITH latest AS (
+                        SELECT DISTINCT ON (sr.item_cd)
+                            sr.item_cd,
+                            sr.item_nm,
+                            sr.stk_avg,
+                            sr.sal_avg,
+                            sr.ord_avg,
+                            sr.stk_rt,
+                            COALESCE(st.is_stockout, FALSE) AS is_stockout,
+                            st.stockout_hour,
+                            CASE
+                                WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
+                                WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
+                                ELSE '적정'
+                            END AS status
+                        FROM core_stock_rate sr
+                        LEFT JOIN core_stockout_time st
+                            ON sr.masked_stor_cd = st.masked_stor_cd
+                           AND sr.item_cd = st.item_cd
+                           AND sr.prc_dt = st.prc_dt
+                        WHERE sr.masked_stor_cd = :store_id
+                          AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
+                        ORDER BY sr.item_cd, sr.prc_dt DESC
+                    ),
+                    filtered AS (
+                        SELECT *
+                        FROM latest
+                        WHERE 1 = 1
+                        {status_filter_clause}
+                    )
+                """
+                base_params = {
+                    "store_id": store_id,
+                    "business_date": normalized_business_date,
+                    **status_filter_params,
+                }
                 summary_row = conn.execute(
                     text(
                         f"""
-                        WITH latest AS (
-                            SELECT DISTINCT ON (sr.item_cd)
-                                sr.item_cd,
-                                sr.stk_rt,
-                                COALESCE(st.is_stockout, FALSE) AS is_stockout,
-                                CASE
-                                    WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
-                                    WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
-                                    ELSE '적정'
-                                END AS status
-                            FROM core_stock_rate sr
-                            LEFT JOIN core_stockout_time st
-                                ON sr.masked_stor_cd = st.masked_stor_cd
-                               AND sr.item_cd = st.item_cd
-                               AND sr.prc_dt = st.prc_dt
-                            WHERE sr.masked_stor_cd = :store_id
-                              AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
-                            ORDER BY sr.item_cd, sr.prc_dt DESC
-                        ),
-                        filtered AS (
-                            SELECT *
-                            FROM latest
-                            WHERE 1 = 1
-                            {status_filter_clause}
-                        )
+                        {base_cte_sql}
                         SELECT
                             COUNT(*) FILTER (WHERE status = '부족') AS shortage_count,
                             COUNT(*) FILTER (WHERE status = '여유') AS excess_count,
@@ -1950,51 +1972,19 @@ class ProductionRepository(BaseRepository):
                         FROM filtered
                         """
                     ),
-                    {
-                        "store_id": store_id,
-                        "business_date": normalized_business_date,
-                        **status_filter_params,
-                    },
+                    base_params,
                 ).mappings().one()
                 summary_metrics = dict(summary_row)
                 total_items = int(
                     conn.execute(
                         text(
                             f"""
-                            WITH latest AS (
-                                SELECT DISTINCT ON (sr.item_cd)
-                                    sr.item_cd,
-                                    sr.stk_rt,
-                                    COALESCE(st.is_stockout, FALSE) AS is_stockout,
-                                    CASE
-                                        WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
-                                        WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
-                                        ELSE '적정'
-                                    END AS status
-                                FROM core_stock_rate sr
-                                LEFT JOIN core_stockout_time st
-                                    ON sr.masked_stor_cd = st.masked_stor_cd
-                                   AND sr.item_cd = st.item_cd
-                                   AND sr.prc_dt = st.prc_dt
-                                WHERE sr.masked_stor_cd = :store_id
-                                  AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
-                                ORDER BY sr.item_cd, sr.prc_dt DESC
-                            ),
-                            filtered AS (
-                                SELECT *
-                                FROM latest
-                                WHERE 1 = 1
-                                {status_filter_clause}
-                            )
+                            {base_cte_sql}
                             SELECT COUNT(*) AS total_items
                             FROM filtered
                             """
                         ),
-                        {
-                            "store_id": store_id,
-                            "business_date": normalized_business_date,
-                            **status_filter_params,
-                        },
+                        base_params,
                     ).scalar_one()
                 )
                 if total_items == 0:
@@ -2009,57 +1999,29 @@ class ProductionRepository(BaseRepository):
                     conn.execute(
                         text(
                             f"""
-                            WITH latest AS (
-                                SELECT DISTINCT ON (sr.item_cd)
-                                    sr.item_cd,
-                                    sr.item_nm,
-                                    sr.stk_avg,
-                                    sr.sal_avg,
-                                    sr.ord_avg,
-                                    sr.stk_rt,
-                                    COALESCE(st.is_stockout, FALSE) AS is_stockout,
-                                    st.stockout_hour,
-                                    CASE
-                                        WHEN sr.stk_rt < 0 OR COALESCE(st.is_stockout, FALSE) THEN '부족'
-                                        WHEN sr.stk_rt >= 0.35 AND NOT COALESCE(st.is_stockout, FALSE) THEN '여유'
-                                        ELSE '적정'
-                                    END AS status
-                                FROM core_stock_rate sr
-                                LEFT JOIN core_stockout_time st
-                                    ON sr.masked_stor_cd = st.masked_stor_cd
-                                   AND sr.item_cd = st.item_cd
-                                   AND sr.prc_dt = st.prc_dt
-                                WHERE sr.masked_stor_cd = :store_id
-                                  AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
-                                ORDER BY sr.item_cd, sr.prc_dt DESC
-                            ),
-                            filtered AS (
-                                SELECT *
-                                FROM latest
-                                WHERE 1 = 1
-                                {status_filter_clause}
-                            )
+                            {base_cte_sql}
                             SELECT
-                                item_cd,
-                                item_nm,
-                                stk_avg,
-                                sal_avg,
-                                ord_avg,
-                                stk_rt,
-                                is_stockout,
-                                stockout_hour,
-                                status
-                            FROM filtered
-                            ORDER BY stk_rt ASC, item_nm ASC
+                                f.item_cd,
+                                f.item_nm,
+                                psl.item_group,
+                                f.stk_avg,
+                                f.sal_avg,
+                                f.ord_avg,
+                                f.stk_rt,
+                                f.is_stockout,
+                                f.stockout_hour,
+                                f.status
+                            FROM filtered AS f
+                            LEFT JOIN raw_product_shelf_life AS psl
+                                ON psl.item_cd = f.item_cd
+                            ORDER BY f.stk_rt ASC, f.item_nm ASC
                             LIMIT :page_size OFFSET :offset
                             """
                         ),
                         {
-                            "store_id": store_id,
+                            **base_params,
                             "page_size": page_size,
                             "offset": offset,
-                            "business_date": normalized_business_date,
-                            **status_filter_params,
                         },
                     )
                     .mappings()
@@ -2221,8 +2183,7 @@ class ProductionRepository(BaseRepository):
         """점포별 FIFO Lot 품목 요약 조회.
 
         품목·Lot 유형별로 생산/소진/폐기/잔여 수량을 집계한다.
-        date 파라미터는 '시점 스냅샷' 기준일로, 해당 일자 이전(포함)에 입고된 lot 중
-        해당 일자 시점에 active 상태였던 것을 잔여 수량으로 카운트한다.
+        date 파라미터는 조회 기준일이며, 해당 일자(lot_date) 데이터만 집계한다.
         date 파라미터가 없으면 KST 오늘 날짜를 기본값으로 사용한다.
         """
         if not self.engine or not has_table(self.engine, "inventory_fifo_lots"):
@@ -2252,7 +2213,7 @@ class ProductionRepository(BaseRepository):
                                 SELECT DISTINCT item_nm, lot_type
                                 FROM inventory_fifo_lots
                                 WHERE masked_stor_cd = :store_id
-                                  AND lot_date <= :target_date
+                                  AND lot_date = :target_date
                                   {type_clause}
                             ) AS sub
                             """
@@ -2279,7 +2240,7 @@ class ProductionRepository(BaseRepository):
                                 COUNT(*) FILTER (WHERE status = 'expired')                    AS expired_lot_count
                             FROM inventory_fifo_lots
                             WHERE masked_stor_cd = :store_id
-                              AND lot_date <= :target_date
+                              AND lot_date = :target_date
                               {type_clause}
                             GROUP BY item_nm, lot_type
                             ORDER BY total_wasted_qty DESC, item_nm

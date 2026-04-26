@@ -530,6 +530,14 @@ class CampaignRepositoryMixin:
             reference_date = self._to_date(date_to or date_from)
             return self._build_tday_effect(store_id=store_id, reference_date=reference_date)
 
+        # 1순위: mart_campaign_effect_daily 사용 (활성/비활성 모두 처리)
+        if self.engine and has_table(self.engine, "mart_campaign_effect_daily"):
+            mart_payload = self._build_campaign_effect_from_mart(
+                date_from=date_from, date_to=date_to
+            )
+            if mart_payload:
+                return mart_payload
+
         campaign_context = self._fetch_campaign_context()
         if not campaign_context:
             raise LookupError("캠페인 효과 데이터가 없습니다.")
@@ -627,3 +635,182 @@ class CampaignRepositoryMixin:
                 {"label": "캠페인 후", "start_date": self._fmt_date(post_start), "end_date": self._fmt_date(post_end), "revenue": post_revenue},
             ],
         }
+
+    def _build_campaign_effect_from_mart(
+        self,
+        date_from: str | None,
+        date_to: str | None,
+    ) -> dict | None:
+        """mart_campaign_effect_daily 기반 활성/비활성 캠페인 효과 페이로드 산출.
+
+        - 기준 기간(date_from~date_to) 내 mart 행이 있으면 '진행 중' 모드.
+        - 기간 내 행이 없으면 종료 직후 가장 최근 90일치 캠페인을 조회해 '비활성' 모드 반환.
+        """
+        if not self.engine:
+            return None
+
+        normalized_from = self._normalize_yyyymmdd(date_from)
+        normalized_to = self._normalize_yyyymmdd(date_to)
+        if not normalized_to:
+            normalized_to = self._fetch_latest_mart_dt()
+        if not normalized_from and normalized_to:
+            normalized_from = self._shift_yyyymmdd(normalized_to, -27)
+        if not normalized_from or not normalized_to:
+            return None
+
+        active_rows = self._fetch_mart_window(normalized_from, normalized_to)
+        no_active = not active_rows
+        window_label_from = normalized_from
+        window_label_to = normalized_to
+        if no_active:
+            # 폴백: 가장 최근 90일 캠페인 활동 보여주기
+            fallback_to = self._fetch_latest_mart_dt() or normalized_to
+            fallback_from = self._shift_yyyymmdd(fallback_to, -89)
+            active_rows = self._fetch_mart_window(fallback_from, fallback_to)
+            window_label_from = fallback_from
+            window_label_to = fallback_to
+        if not active_rows:
+            return None
+
+        # 캠페인 단위 집계
+        by_campaign: dict[str, dict] = {}
+        for row in active_rows:
+            cpi = str(row["cpi_cd"])
+            bucket = by_campaign.setdefault(
+                cpi,
+                {
+                    "cpi_cd": cpi,
+                    "cpi_nm": row.get("cpi_nm") or cpi,
+                    "sales": 0.0,
+                    "dc_amt": 0.0,
+                    "qty": 0.0,
+                    "lift_sum": 0.0,
+                    "lift_days": 0,
+                    "active_days": 0,
+                    "first_dt": row["sale_dt"],
+                    "last_dt": row["sale_dt"],
+                    "stores": int(row.get("participating_store_count") or 0),
+                    "applicable_items": int(row.get("applicable_item_count") or 0),
+                },
+            )
+            bucket["sales"] += float(row.get("total_sales_during") or 0)
+            bucket["dc_amt"] += float(row.get("total_dc_amt") or 0)
+            bucket["qty"] += float(row.get("total_qty") or 0)
+            lift = row.get("sales_lift_ratio")
+            if lift is not None:
+                bucket["lift_sum"] += float(lift)
+                bucket["lift_days"] += 1
+            bucket["active_days"] += 1
+            if str(row["sale_dt"]) < str(bucket["first_dt"]):
+                bucket["first_dt"] = row["sale_dt"]
+            if str(row["sale_dt"]) > str(bucket["last_dt"]):
+                bucket["last_dt"] = row["sale_dt"]
+            stores_val = int(row.get("participating_store_count") or 0)
+            if stores_val > bucket["stores"]:
+                bucket["stores"] = stores_val
+            apps_val = int(row.get("applicable_item_count") or 0)
+            if apps_val > bucket["applicable_items"]:
+                bucket["applicable_items"] = apps_val
+
+        ranked = sorted(by_campaign.values(), key=lambda x: x["sales"], reverse=True)
+        active_count = len(ranked)
+        total_sales = sum(c["sales"] for c in ranked)
+        total_dc = sum(c["dc_amt"] for c in ranked)
+        avg_lift = (
+            sum(c["lift_sum"] for c in ranked)
+            / max(sum(c["lift_days"] for c in ranked), 1)
+        )
+
+        top = ranked[0] if ranked else None
+        roi_pct = (
+            round(((total_sales - total_dc) / total_dc) * 100, 1)
+            if total_dc > 0
+            else 0.0
+        )
+
+        top_campaigns = [
+            {
+                "cpi_cd": c["cpi_cd"],
+                "cpi_nm": c["cpi_nm"],
+                "sales": round(c["sales"], 0),
+                "dc_amt": round(c["dc_amt"], 0),
+                "active_days": c["active_days"],
+                "avg_lift_ratio": (
+                    round(c["lift_sum"] / c["lift_days"], 4) if c["lift_days"] else 0.0
+                ),
+                "applicable_items": c["applicable_items"],
+            }
+            for c in ranked[:5]
+        ]
+
+        if no_active:
+            campaign_name = f"진행 중 캠페인 없음 (최근 90일 {active_count}건 참고)"
+        elif active_count == 1 and top:
+            campaign_name = top["cpi_nm"]
+        else:
+            campaign_name = f"{active_count}건 진행 중 (대표: {top['cpi_nm']})" if top else f"{active_count}건"
+
+        return {
+            "campaign_code": top["cpi_cd"] if top else "-",
+            "campaign_name": campaign_name,
+            "benefit_type": "기간 내 캠페인 통합" if not no_active else "최근 캠페인 통합",
+            "discount_cost": round(total_dc, 0),
+            "uplift_revenue": round(total_sales - total_dc, 0),
+            "roi_pct": roi_pct,
+            "payback_days": None,
+            "active_campaign_count": active_count,
+            "no_active_campaigns": no_active,
+            "avg_lift_ratio": round(avg_lift, 4),
+            "total_sales_during": round(total_sales, 0),
+            "top_campaigns": top_campaigns,
+            "window_from": window_label_from,
+            "window_to": window_label_to,
+            "periods": [
+                {
+                    "label": "기간 내 캠페인 매출",
+                    "start_date": self._fmt_yyyymmdd(window_label_from),
+                    "end_date": self._fmt_yyyymmdd(window_label_to),
+                    "revenue": round(total_sales, 0),
+                }
+            ],
+        }
+
+    def _fetch_mart_window(self, dt_from: str, dt_to: str) -> list[dict]:
+        sql = text(
+            """
+            SELECT cpi_cd, cpi_nm, sale_dt, total_sales_during, total_dc_amt,
+                   total_qty, sales_lift_ratio, applicable_item_count,
+                   participating_store_count
+            FROM mart_campaign_effect_daily
+            WHERE sale_dt BETWEEN :dt_from AND :dt_to
+              AND total_sales_during > 0
+            """
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, {"dt_from": dt_from, "dt_to": dt_to}).mappings().all()
+        return [dict(r) for r in rows]
+
+    def _fetch_latest_mart_dt(self) -> str | None:
+        sql = text("SELECT MAX(sale_dt) AS max_dt FROM mart_campaign_effect_daily")
+        with self.engine.connect() as conn:
+            row = conn.execute(sql).mappings().first()
+        return row["max_dt"] if row and row.get("max_dt") else None
+
+    @staticmethod
+    def _normalize_yyyymmdd(value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = str(value).replace("-", "").strip()
+        return cleaned if len(cleaned) == 8 and cleaned.isdigit() else None
+
+    @staticmethod
+    def _shift_yyyymmdd(value: str, days: int) -> str:
+        base = datetime.strptime(value, "%Y%m%d")
+        return (base + timedelta(days=days)).strftime("%Y%m%d")
+
+    @staticmethod
+    def _fmt_yyyymmdd(value: str | None) -> str:
+        if not value or len(str(value)) != 8:
+            return ""
+        s = str(value)
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"

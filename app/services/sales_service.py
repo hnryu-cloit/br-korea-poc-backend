@@ -778,41 +778,142 @@ class SalesService:
         if not periods:
             raise LookupError("캠페인 효과 실데이터가 없습니다.")
 
-        metrics = [
-            {
-                "label": "캠페인 코드",
-                "value": str(payload.get("campaign_code") or "-"),
-                "detail": str(payload.get("campaign_name") or "-"),
-            },
-            {
-                "label": "할인 비용",
-                "value": f"{int(float(payload.get('discount_cost') or 0)):,}원",
-                "detail": "raw_daily_store_cpi_tmzon 기준",
-            },
-            {
-                "label": "순 업리프트",
-                "value": f"{int(float(payload.get('uplift_revenue') or 0)):,}원",
-                "detail": "캠페인 전/중 매출 비교",
-            },
-            {
-                "label": "ROI",
-                "value": f"{float(payload.get('roi_pct') or 0):.1f}%",
-                "detail": "((업리프트-비용)/비용) * 100",
-            },
-        ]
+        # 마트 기반 페이로드 (활성/비활성 구분)
+        active_count = payload.get("active_campaign_count")
+        no_active = bool(payload.get("no_active_campaigns"))
+        top_campaigns = payload.get("top_campaigns") or []
+        avg_lift_ratio = payload.get("avg_lift_ratio")
+        is_mart_payload = active_count is not None
+
+        if is_mart_payload:
+            total_sales_val = float(payload.get("total_sales_during") or 0)
+            dc_val = float(payload.get("discount_cost") or 0)
+            sales_dc_multiple = (
+                round(total_sales_val / dc_val, 1) if dc_val > 0 else None
+            )
+            metrics = [
+                {
+                    "label": "활성 캠페인 수",
+                    "value": (
+                        f"{active_count}건 (기준 기간 내 진행 중 없음)"
+                        if no_active
+                        else f"{active_count}건"
+                    ),
+                    "detail": (
+                        f"{payload.get('window_from','')}~{payload.get('window_to','')}"
+                    ),
+                },
+                {
+                    "label": "총 캠페인 매출 (전 지점)",
+                    "value": f"{int(total_sales_val):,}원",
+                    "detail": (
+                        f"대표: {(top_campaigns[0]['cpi_nm']) if top_campaigns else '-'}"
+                    ),
+                },
+                {
+                    "label": "할인 비용",
+                    "value": f"{int(dc_val):,}원",
+                    "detail": "mart_campaign_effect_daily 할인액 합산",
+                },
+                {
+                    "label": "매출/할인 배수",
+                    "value": (
+                        f"{sales_dc_multiple:.1f}배"
+                        if sales_dc_multiple is not None
+                        else "-"
+                    ),
+                    "detail": "캠페인 적용 매출 ÷ 할인 비용 (할인 1원당 매출 배수)",
+                },
+            ]
+            if avg_lift_ratio is not None and float(avg_lift_ratio) != 0:
+                metrics.append(
+                    {
+                        "label": "평균 lift",
+                        "value": f"{float(avg_lift_ratio) * 100:+.1f}%",
+                        "detail": "캠페인 시작 직전 14일 매출 대비",
+                    }
+                )
+            if top_campaigns:
+                top_label = (
+                    "Top 캠페인" if not no_active else "최근 90일 Top 캠페인"
+                )
+                metrics.append(
+                    {
+                        "label": top_label,
+                        "value": str(top_campaigns[0]["cpi_nm"]),
+                        "detail": (
+                            f"매출 {int(top_campaigns[0]['sales']):,}원 · "
+                            f"활성 {top_campaigns[0]['active_days']}일"
+                        ),
+                    }
+                )
+        else:
+            metrics = [
+                {
+                    "label": "캠페인 코드",
+                    "value": str(payload.get("campaign_code") or "-"),
+                    "detail": str(payload.get("campaign_name") or "-"),
+                },
+                {
+                    "label": "할인 비용",
+                    "value": f"{int(float(payload.get('discount_cost') or 0)):,}원",
+                    "detail": "raw_daily_store_cpi_tmzon 기준",
+                },
+                {
+                    "label": "순 업리프트",
+                    "value": f"{int(float(payload.get('uplift_revenue') or 0)):,}원",
+                    "detail": "캠페인 전/중 매출 비교",
+                },
+                {
+                    "label": "ROI",
+                    "value": f"{float(payload.get('roi_pct') or 0):.1f}%",
+                    "detail": "((업리프트-비용)/비용) * 100",
+                },
+            ]
 
         before = next((period for period in periods if period.get("label") == "캠페인 전"), None)
         during = next((period for period in periods if period.get("label") == "캠페인 중"), None)
         after = next((period for period in periods if period.get("label") == "캠페인 후"), None)
-        default_summary = (
-            f"캠페인 전 {int(float((before or {}).get('revenue') or 0)):,}원 대비 "
-            f"캠페인 중 {int(float((during or {}).get('revenue') or 0)):,}원을 기록했습니다. "
-            f"캠페인 후 매출은 {int(float((after or {}).get('revenue') or 0)):,}원입니다."
-        )
-        default_actions = [
-            "ROI가 낮으면 할인강도 대신 번들/세트 구성을 우선 검토하세요.",
-            "캠페인 전/중/후 기간의 채널 믹스와 결제수단 반응을 함께 점검하세요.",
-        ]
+
+        if is_mart_payload:
+            if no_active:
+                default_summary = (
+                    f"기준 기간({payload.get('window_from','')}~{payload.get('window_to','')})에는 진행 중인 캠페인이 없습니다. "
+                    f"최근 90일 동안 {active_count}건의 캠페인이 운영되었으며, "
+                    f"대표 캠페인은 \"{(top_campaigns[0]['cpi_nm']) if top_campaigns else '-'}\"입니다."
+                )
+                default_actions = [
+                    "다음 캠페인 기획 시 최근 Top 캠페인 구성을 벤치마킹하세요.",
+                    "비프로모션 기간의 매출 패턴을 함께 점검해 캠페인 의존도를 낮추세요.",
+                ]
+            else:
+                total_sales_val = float(payload.get("total_sales_during") or 0)
+                dc_val = float(payload.get("discount_cost") or 0)
+                multiple_text = (
+                    f", 할인 1원당 매출 {(total_sales_val / dc_val):.1f}배"
+                    if dc_val > 0
+                    else ""
+                )
+                default_summary = (
+                    f"기준 기간({payload.get('window_from','')}~{payload.get('window_to','')})에 "
+                    f"{active_count}건의 캠페인이 진행 중이며, 캠페인 적용 매출(전 지점) "
+                    f"{int(total_sales_val):,}원, 할인 비용 "
+                    f"{int(dc_val):,}원{multiple_text}을 기록했습니다."
+                )
+                default_actions = [
+                    "매출/할인 배수가 낮은 캠페인은 할인 강도 대신 번들 구성을 검토하세요.",
+                    "Top 캠페인의 채널/요일 반응을 점검해 가속 운영 여부를 결정하세요.",
+                ]
+        else:
+            default_summary = (
+                f"캠페인 전 {int(float((before or {}).get('revenue') or 0)):,}원 대비 "
+                f"캠페인 중 {int(float((during or {}).get('revenue') or 0)):,}원을 기록했습니다. "
+                f"캠페인 후 매출은 {int(float((after or {}).get('revenue') or 0)):,}원입니다."
+            )
+            default_actions = [
+                "ROI가 낮으면 할인강도 대신 번들/세트 구성을 우선 검토하세요.",
+                "캠페인 전/중/후 기간의 채널 믹스와 결제수단 반응을 함께 점검하세요.",
+            ]
         summary, actions = await self._generate_campaign_effect_narrative(
             store_id=store_id,
             payload=payload,

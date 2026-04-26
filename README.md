@@ -2,8 +2,37 @@
 
 BR Korea 매장 운영 지원 POC의 백엔드 API 서버입니다. FastAPI 기반의 REST API, PostgreSQL 데이터 적재 파이프라인, 감사 로그·운영 이력 관리 기능을 포함합니다. 현재 인터페이스 기준은 `br-korea-poc-front`입니다.
 
+## 최근 업데이트 (2026-04-26)
+
+- 사전 계산 마트 6종을 추가로 도입했습니다 (분석/대시보드 화면의 반복 SQL 부하 해소). 일괄 재계산은 `python scripts/load_all_marts.py`.
+  - 첫 활용처: `analytics_repository._fetch_in_store_pay_counts()`가 `mart_store_daily_kpi.in_store_pay_count` 합산을 1순위로 사용하고 raw 카운트를 폴백으로 둡니다.
+  - `mart_item_category_master` (0027): 660품목 카테고리 사전 분류 (`is_coffee`, `is_seasonal`, `parent_item_nm` 등). 기존 `LIKE '%커피%'` 분기를 대체합니다.
+  - `mart_store_daily_kpi` (0028): 매장×일별 1행 KPI 통합 — total_sales, delivery_sales, takeout_orders, in_store_pay_count, 시간대 평균 단가 3종, 카테고리별 매출, top_item, 날씨.
+  - `mart_hourly_sales_pattern` (0029): 매장×요일×시간대 28일 평균 + peak_rank. SalesTrendChart hour/dow_points 가속.
+  - `mart_inventory_health_daily` (0030): 매장×품목×일별(90일) 재고 건전성 사전 분류(과잉/적정/부족/품절).
+  - `mart_campaign_effect_daily` (0031): 캠페인×일별 매출/할인/lift 비율. baseline은 시작 직전 14일 평균.
+  - `mart_payment_mix_daily` (0032): 매장×일별×결제수단 영수증 단위 합산 + share_ratio.
+
+- production inventory-status 리팩토링을 적용했습니다.
+  - `ProductionService.get_inventory_status()` 캐시 키에 `business_date`를 포함해 기준일별 캐시 오염 가능성을 제거했습니다.
+  - `ProductionRepository.get_inventory_status()`의 non-mart 경로에서 반복되던 `latest/filtered` CTE를 공통 SQL 템플릿으로 통합해 요약/카운트/목록 조회 정합성을 높였습니다.
+
+- 전 지점 통합 제품 판매가 마트(`mart_product_price_daily`, `mart_product_price_master`) 2종을 추가했습니다.
+  - 마이그레이션: `db/migrations/0026_create_mart_product_price.sql`
+  - 적재 스크립트: `scripts/load_mart_product_price.py` — `core_daily_item_sales` 전 지점 일별 집계 + `raw_campaign_master`/`raw_campaign_item` 매칭으로 평상시 정가(mode), 평상시 실단가, 최근 30일 평균, 가격 변동 횟수, 진행중 프로모션 수를 사전 계산합니다.
+  - `mart_product_price_daily`는 일별 시계열(`is_promotion`, `matched_campaign_codes` 포함)이며, `mart_product_price_master`는 품목별 1행 룩업입니다.
+  - 폐기 손실 API(`get_production_waste_rows`)의 `unit_price` CTE를 마트 우선 + 전 지점 평균 폴백으로 교체해 기간 데이터 부재 시에도 판매가가 0으로 빠지지 않도록 했습니다.
+
 ## 최근 업데이트 (2026-04-25)
 
+- `GET /api/production/fifo-lots` 집계 기준을 기준일 당일(`lot_date = date`)로 변경했습니다.
+  - 기존 기준일 이전 누적 집계(`lot_date <= date`)를 당일 집계로 전환해, 화면의 "기준일시 기준" 의미와 API 결과를 일치시켰습니다.
+  - endpoint `date` 파라미터 설명도 "해당 일자 lot_date만 집계"로 동기화했습니다.
+
+- `GET /api/analytics/metrics` 응답 KPI를 매출 현황 운영 지표 7종으로 재구성했습니다 (앱 주문 비중·할인 결제 비중·선택 기간 총 매출(items)·평균 객단가·기존 배달 건수 제거 → 투고 건수·배달 매출액·매장 결제 건수·커피 동반 구매율·런치/스윙/디너 시간대 평균 단가).
+  - `app/repositories/analytics_repository.py`의 `_get_channel_metrics()`가 `raw_daily_store_channel.tmzon_div`를 활용해 시간대(런치 ~15시 / 스윙 15~17시 / 디너 17시~) 평균 단가와 투고/배달 매출 분리를 계산합니다.
+  - 매장 결제 건수는 `raw_daily_store_pay_way`에서 `pay_way_cd != '18'`(배달/해피오더 제외) 영수증을 카운트해 산출합니다 — POC 데이터에 오프라인 채널 컬럼이 없어 추정치인 "홀 방문 고객" 대신 실측 결제 건수로 라벨링합니다.
+  - `selected_period_total_sales` 필드는 그대로 유지되어 매출 현황 화면 상단 큰 카드에서 사용됩니다.
 - 런타임 오류를 수정했습니다.
   - `app/repositories/ordering_repository.py`의 `logging` 미임포트로 인한 `NameError` 가능성을 제거했습니다.
   - `app/repositories/sales_repository.py`의 미정의 변수(`max_dt_row`) 참조를 제거하고 기존 `date_bounds_row` 기준 흐름으로 정리했습니다.
@@ -477,7 +506,7 @@ mypy .
 | `GET /api/dashboard/summary-cards` | 대시보드 요약 카드 |
 | `GET /api/data/catalog` | raw/core 테이블 목록 |
 | `GET /api/data/preview/{table_name}` | 테이블 미리보기 |
-| `GET /api/analytics/metrics` | 상단 운영 지표 |
+| `GET /api/analytics/metrics` | 매출 현황 화면 KPI 7종(투고 건수·배달 매출액·매장 결제 건수·커피 동반 구매율·런치/스윙/디너 시간대 평균 단가) + `selected_period_total_sales` |
 | `GET /api/analytics/market-intelligence` | 상권 인텔리전스(구/동/업종/연도/분기/반경 스코프 지원, `EXTERNAL_API_KEY` 설정 시 소진공 SmallShop 실시간 경쟁사 반경 조회 포함) |
 | `GET /api/analytics/market-intelligence/weekly-report` | 상권 인텔리전스 데이터를 기반으로 상권 인텔리전스 데이터를 기반으로 주간 분석 리포트를 PDF/markdown으로 다운로드한다. |
 | `GET /api/analytics/weather-impact` | 날씨(기온/강수)와 매출 지표 상관 분석 |
@@ -709,7 +738,7 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 - 주문 추천 옵션 응답(`GET /api/ordering/options`)은 AI 날씨 정보가 비어 있을 때 Open-Meteo 예보 API를 폴백으로 호출해 구조화된 `weather` 객체를 채웁니다.
 - `GET /api/analytics/metrics`는 `store_id=STORE_DEMO` 또는 미존재 점포 ID 요청 시 전체 매장 집계로 자동 폴백하도록 보정해 KPI가 0값으로 고정되는 케이스를 줄였습니다.
 - `GET /api/analytics/metrics`에서 사용자가 선택한 기간(`date_from/date_to`)에 데이터가 전혀 없으면, 자동으로 최근 가용 7일 구간으로 폴백해 0집계 고정 현상을 완화했습니다.
-- 프론트 기본 환경값은 `VITE_DEFAULT_STORE_ID=POC_010`, `VITE_DEFAULT_REFERENCE_DATETIME=2026-03-05T00:00` 기준으로 동기화합니다.
+- 프론트 기본 환경값은 `VITE_DEFAULT_STORE_ID=POC_010`, `VITE_DEFAULT_REFERENCE_DATETIME=2026-03-05T09:00` 기준으로 동기화합니다.
 - `할인 결제 비중`은 0.1% 미만의 소수값도 `0.03%` 형태로 표시하도록 포맷을 보정해, 실제 할인 결제 집계가 `0.0%`로만 보이는 표시 한계를 줄였습니다.
 
 - 상권 화면의 글로벌 실패 문구는 메인 분석 API(`/api/analytics/market-intelligence`) 오류 기준으로만 노출되도록 프론트 표시 정책이 조정되었습니다(보조 API 오류와 분리).
@@ -903,3 +932,50 @@ raw_*            원본 데이터를 그대로 TEXT 컬럼으로 보존
 
 - 프론트 플로팅 챗 후보 질문 소스가 골든 프롬프트 중심으로 조정되었습니다.
 - 백엔드 API/스키마/마이그레이션 변경은 없습니다.
+
+## Session Update (2026-04-25, ordering history chart date-axis alignment 영향도)
+
+- 프론트 `/ordering/history` 차트 날짜 축 보정(필터 기간 전체 일자 표시)이 반영되었습니다.
+- 백엔드 API/스키마/쿼리 변경은 없습니다.
+
+## Session Update (2026-04-25, SPECIAL ordering basis removal 영향도)
+
+- AI 주문 추천 계약에서 `SPECIAL(특별 기간)` 옵션 타입이 제거되었습니다.
+- 백엔드 API/스키마/쿼리 변경은 없습니다.
+
+## Session Update (2026-04-25, reference datetime default 09:00 영향도)
+
+- 프론트 기준일시 기본값이 `2026-03-05T09:00`으로 조정되었습니다.
+- backend docker-compose의 프론트 환경변수(`VITE_DEFAULT_REFERENCE_DATETIME`)도 `2026-03-05T09:00`으로 동기화했습니다.
+
+## Session Update (2026-04-25, weekly revenue x-axis date+weekday tilt 영향도)
+
+- 프론트 `/sales/metrics` 차트 X축 라벨 표기/기울기 UI 개선이 반영되었습니다.
+- 백엔드 API/스키마/쿼리 변경은 없습니다.
+
+## Session Update (2026-04-25, treemap chart height reduction 영향도)
+
+- 프론트 `/sales/metrics` Treemap 높이 축소(UI) 변경이 반영되었습니다.
+- 백엔드 API/스키마/쿼리 변경은 없습니다.
+
+## Session Update (2026-04-25, analytics KPI curation for /analytics)
+
+- `/api/analytics/metrics` 하단 KPI 구성을 재정의했습니다.
+- 제외: `앱 주문 비중`, `할인 결제 비중`, 하단 카드의 `선택 기간 총 매출`
+- 추가/대체: `투고 매출액`, `배달 매출액`, `런치 판매단가(~15시)`, `스윙타임 판매단가(15~17시)`, `디너 판매단가(17시~)`
+- 유지: `홀 방문 고객`, `커피 동반 구매율`, 상단 `선택 기간 총 매출` 값(`selected_period_total_sales`) 제공
+- 변경 파일:
+  - `app/repositories/analytics_repository.py`
+  - `tests/test_health.py`
+- 검증:
+  - `python -m py_compile app/repositories/analytics_repository.py tests/test_health.py` 통과
+  - `pytest`는 로컬 DB(5435) 접속 제한으로 실행 실패
+
+## Session Update (2026-04-25, takeout/delivery share of total sales)
+
+- `/api/analytics/metrics`에서 `투고 매출액`, `배달 매출액` 카드 detail에 `전체 매출액 중 비중`을 추가했습니다.
+- `selected_period_total_sales`를 분모로 사용해 비중을 계산합니다.
+- 변경 파일:
+  - `app/repositories/analytics_repository.py`
+  - `tests/test_health.py`
+- 검증: `python -m py_compile app/repositories/analytics_repository.py tests/test_health.py` 통과

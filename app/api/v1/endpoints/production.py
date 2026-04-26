@@ -180,7 +180,10 @@ async def get_fifo_lot_summary(
     lot_type: str | None = Query(default=None, regex="^(production|delivery)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    date: str | None = Query(default=None, description="조회 기준일 (YYYY-MM-DD). 미입력 시 KST 오늘"),
+    date: str | None = Query(
+        default=None,
+        description="조회 기준일 (YYYY-MM-DD). 해당 일자 lot_date만 집계하며, 미입력 시 KST 오늘",
+    ),
     service: ProductionService = Depends(get_production_service),
 ) -> FifoLotSummaryResponse:
     try:

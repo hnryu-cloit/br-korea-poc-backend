@@ -133,12 +133,23 @@ class AnalyticsService:
 
     def get_market_scope_options(self) -> MarketScopeOptionsResponse:
         data = self.repository.get_market_scope_options()
+        latest_year = data.get("latest_year")
+        latest_quarter = data.get("latest_quarter")
         return MarketScopeOptionsResponse(
             gu_options=[str(item) for item in data.get("gu_options", [])],
             dong_options_by_gu={
                 str(gu): [str(dong) for dong in dongs]
                 for gu, dongs in data.get("dong_options_by_gu", {}).items()
             },
+            available_quarters=[
+                {"year": int(item["year"]), "quarter": int(item["quarter"])}
+                for item in data.get("available_quarters", [])
+                if isinstance(item, dict)
+                and item.get("year") is not None
+                and item.get("quarter") is not None
+            ],
+            latest_year=int(latest_year) if latest_year is not None else None,
+            latest_quarter=int(latest_quarter) if latest_quarter is not None else None,
         )
 
     def get_sales_trend(

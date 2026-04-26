@@ -1001,6 +1001,9 @@ class ProductionService:
         normalized_status_filters, normalized_status_filter_key = (
             self._normalize_inventory_status_filters(status_filters)
         )
+        cache_business_date = business_date
+        if cache_business_date is None and reference_datetime is not None:
+            cache_business_date = reference_datetime.strftime("%Y-%m-%d")
 
         cache_key = self._cache_key(
             "inventory-status",
@@ -1008,6 +1011,7 @@ class ProductionService:
             page=page,
             page_size=page_size,
             status=normalized_status_filter_key,
+            business_date=cache_business_date or "",
         )
         cached_payload = self._cached_payload(cache_key)
         if cached_payload:
@@ -1080,10 +1084,13 @@ class ProductionService:
                 shelf_life_days = self._safe_int(row.get("assumed_shelf_life_days"), shelf_life_days)
                 expiry_risk_level = str(row.get("expiry_risk_level") or expiry_risk_level)
 
+            item_group_raw = row.get("item_group")
+            item_group = str(item_group_raw).strip() if item_group_raw else None
             items.append(
                 InventoryStatusItem(
                     item_cd=item_cd,
                     item_nm=item_nm,
+                    item_group=item_group or None,
                     image_url=self._resolve_image_url(item_nm),
                     total_stock=total_stock,
                     total_sold=total_sold,

@@ -692,6 +692,36 @@ def test_analytics_metrics_endpoint_returns_response_shape() -> None:
         assert {"label", "value", "change", "trend", "detail"} <= set(payload["items"][0].keys())
 
 
+def test_analytics_metrics_endpoint_returns_curated_kpi_labels() -> None:
+    response = client.get("/api/analytics/metrics?store_id=POC_012")
+    assert response.status_code == 200
+    payload = response.json()
+    items = payload.get("items", [])
+    labels = [str(item.get("label", "")) for item in items]
+
+    assert "앱 주문 비중" not in labels
+    assert "할인 결제 비중" not in labels
+    assert "선택 기간 총 매출" not in labels
+
+    required_labels = {
+        "투고 매출액",
+        "배달 매출액",
+        "홀 방문 고객",
+        "런치 판매단가(~15시)",
+        "스윙타임 판매단가(15~17시)",
+        "디너 판매단가(17시~)",
+        "커피 동반 구매율",
+    }
+    if labels:
+        assert required_labels <= set(labels)
+        takeout_item = next((item for item in items if item.get("label") == "투고 매출액"), None)
+        delivery_item = next((item for item in items if item.get("label") == "배달 매출액"), None)
+        if takeout_item:
+            assert "전체 매출액 중" in str(takeout_item.get("detail", ""))
+        if delivery_item:
+            assert "전체 매출액 중" in str(delivery_item.get("detail", ""))
+
+
 def test_analytics_metrics_endpoint_fallbacks_invalid_store_id() -> None:
     default_response = client.get("/api/analytics/metrics")
     invalid_store_response = client.get("/api/analytics/metrics?store_id=STORE_DEMO")

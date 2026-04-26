@@ -49,9 +49,17 @@ class CustomerProfileResponse(BaseModel):
     telecom_discounts: list[TelecomDiscountItem]
 
 
+class AvailableQuarter(BaseModel):
+    year: int
+    quarter: int
+
+
 class MarketScopeOptionsResponse(BaseModel):
     gu_options: list[str]
     dong_options_by_gu: dict[str, list[str]]
+    available_quarters: list[AvailableQuarter] = []
+    latest_year: int | None = None
+    latest_quarter: int | None = None
 
 
 class SalesTrendPoint(BaseModel):

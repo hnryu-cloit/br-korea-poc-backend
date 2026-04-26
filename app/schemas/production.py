@@ -274,6 +274,7 @@ class WasteSummaryResponse(BaseModel):
 class InventoryStatusItem(BaseModel):
     item_cd: str
     item_nm: str
+    item_group: str | None = None
     image_url: str | None = None
     total_stock: float
     total_sold: float
