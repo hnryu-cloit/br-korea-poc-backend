@@ -36,6 +36,12 @@ def _resolve_production_reference_date(x_reference_datetime: str | None) -> str 
     return parsed.strftime("%Y-%m-%d")
 
 
+def _resolve_production_reference_datetime(x_reference_datetime: str | None):
+    return parse_reference_datetime(
+        x_reference_datetime or DEFAULT_PRODUCTION_REFERENCE_DATETIME
+    )
+
+
 def _parse_inventory_status_filters(raw_status: str | None) -> list[str] | None:
     if raw_status is None:
         return None
@@ -55,7 +61,11 @@ async def get_production_overview(
     resolved_business_date = business_date or _resolve_production_reference_date(
         x_reference_datetime
     )
-    return await service.get_overview(store_id=store_id, business_date=resolved_business_date)
+    return await service.get_overview(
+        store_id=store_id,
+        business_date=resolved_business_date,
+        reference_datetime=_resolve_production_reference_datetime(x_reference_datetime),
+    )
 
 
 @router.get("/skus", response_model=GetProductionSkuListResponse)
@@ -76,6 +86,7 @@ async def get_production_sku_list(
         page_size=page_size,
         store_id=store_id,
         business_date=resolved_business_date,
+        reference_datetime=_resolve_production_reference_datetime(x_reference_datetime),
     )
 
 
@@ -95,6 +106,7 @@ async def get_production_sku_detail(
             sku_id=sku_id,
             store_id=store_id,
             business_date=resolved_business_date,
+            reference_datetime=_resolve_production_reference_datetime(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -181,6 +193,7 @@ async def get_waste_summary(
             page=page,
             page_size=page_size,
             reference_date=_resolve_production_reference_date(x_reference_datetime),
+            reference_datetime=_resolve_production_reference_datetime(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -198,8 +211,9 @@ async def get_fifo_lot_summary(
     page_size: int = Query(default=20, ge=1, le=100),
     date: str | None = Query(
         default=None,
-        description="조회 기준일 (YYYY-MM-DD). 해당 일자 lot_date만 집계하며, 미입력 시 KST 오늘",
+        description="조회 기준일 (YYYY-MM-DD). 해당 월 1일~기준일 전일까지 누적 집계하며, 1일은 0건",
     ),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> FifoLotSummaryResponse:
     try:
@@ -208,7 +222,7 @@ async def get_fifo_lot_summary(
             lot_type=lot_type,
             page=page,
             page_size=page_size,
-            date=date,
+            date=date or _resolve_production_reference_date(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -244,6 +258,7 @@ async def get_inventory_status(
             page_size=page_size,
             status_filters=_parse_inventory_status_filters(status),
             business_date=resolved_business_date,
+            reference_datetime=_resolve_production_reference_datetime(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

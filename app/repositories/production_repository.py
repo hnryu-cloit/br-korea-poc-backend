@@ -52,6 +52,18 @@ class ProductionRepository(BaseRepository):
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
 
+    @staticmethod
+    def _resolve_fifo_month_window(
+        date: str | None,
+    ) -> tuple[str, date_type, date_type, date_type | None]:
+        target_date = _validate_iso_date(date) or datetime.now(_KST).date().isoformat()
+        target_day = date_type.fromisoformat(target_date)
+        month_start = target_day.replace(day=1)
+        previous_day = target_day - timedelta(days=1)
+        if previous_day < month_start:
+            return target_date, target_day, month_start, None
+        return target_date, target_day, month_start, previous_day
+
     def _get_production_inventory_mart_table(self, store_id: str | None) -> str | None:
         if not self.engine:
             return None
@@ -74,6 +86,142 @@ class ProductionRepository(BaseRepository):
     def _production_waste_daily_mart_configured(self, store_id: str | None) -> bool:
         return has_store_mart_mapping(store_id, "production", "waste_daily_table")
 
+    def _fetch_fifo_production_item_keys(
+        self,
+        *,
+        store_id: str,
+        month_start_date: str,
+        previous_day_date: str,
+    ) -> set[str]:
+        direct_keys = self._fetch_direct_production_item_keys(store_id=store_id)
+        normalized_direct_keys = {
+            self._normalize_item_key(key, key) for key in direct_keys if str(key or "").strip()
+        }
+        if normalized_direct_keys:
+            return normalized_direct_keys
+
+        if not self.engine or not has_table(self.engine, "raw_production_extract"):
+            return set()
+
+        try:
+            with self.engine.connect() as connection:
+                rows = (
+                    connection.execute(
+                        text(
+                            """
+                            SELECT DISTINCT item_cd, item_nm
+                            FROM raw_production_extract
+                            WHERE masked_stor_cd = :store_id
+                              AND prod_dt BETWEEN :month_start_date AND :previous_day_date
+                            """
+                        ),
+                        {
+                            "store_id": store_id,
+                            "month_start_date": month_start_date,
+                            "previous_day_date": previous_day_date,
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return set()
+
+        return {
+            self._normalize_item_key(row.get("item_cd"), row.get("item_nm"))
+            for row in rows
+            if self._normalize_item_key(row.get("item_cd"), row.get("item_nm"))
+        }
+
+    def _normalize_fifo_lot_rows(
+        self,
+        *,
+        store_id: str,
+        rows: list[dict[str, object]],
+        lot_type: str | None,
+        page: int,
+        page_size: int,
+        month_start_date: str,
+        previous_day_date: str,
+    ) -> tuple[list[dict[str, object]], int]:
+        production_keys = self._fetch_fifo_production_item_keys(
+            store_id=store_id,
+            month_start_date=month_start_date,
+            previous_day_date=previous_day_date,
+        )
+        aggregated: dict[tuple[str, str], dict[str, object]] = {}
+
+        for row in rows:
+            item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            item_nm = str(row.get("item_nm") or item_cd).strip()
+            item_key = self._normalize_item_key(item_cd, item_nm)
+            normalized_lot_type = "production" if item_key in production_keys else "delivery"
+            if lot_type and normalized_lot_type != lot_type:
+                continue
+
+            aggregate_key = (item_nm, normalized_lot_type)
+            current = aggregated.get(aggregate_key)
+            last_lot_date = str(row.get("last_lot_date") or "")
+            if current is None:
+                aggregated[aggregate_key] = {
+                    "item_nm": item_nm,
+                    "lot_type": normalized_lot_type,
+                    "shelf_life_days": row.get("shelf_life_days"),
+                    "last_lot_date": last_lot_date or None,
+                    "total_initial_qty": self._safe_float(row.get("total_initial_qty")),
+                    "total_consumed_qty": self._safe_float(row.get("total_consumed_qty")),
+                    "total_wasted_qty": self._safe_float(row.get("total_wasted_qty")),
+                    "active_remaining_qty": self._safe_float(row.get("active_remaining_qty")),
+                    "active_lot_count": self._safe_int(row.get("active_lot_count")),
+                    "sold_out_lot_count": self._safe_int(row.get("sold_out_lot_count")),
+                    "expired_lot_count": self._safe_int(row.get("expired_lot_count")),
+                }
+                continue
+
+            if row.get("shelf_life_days") is not None:
+                current["shelf_life_days"] = max(
+                    self._safe_int(current.get("shelf_life_days")),
+                    self._safe_int(row.get("shelf_life_days")),
+                )
+            if last_lot_date and (
+                current.get("last_lot_date") is None or str(current.get("last_lot_date")) < last_lot_date
+            ):
+                current["last_lot_date"] = last_lot_date
+            current["total_initial_qty"] = self._safe_float(current.get("total_initial_qty")) + self._safe_float(
+                row.get("total_initial_qty")
+            )
+            current["total_consumed_qty"] = self._safe_float(current.get("total_consumed_qty")) + self._safe_float(
+                row.get("total_consumed_qty")
+            )
+            current["total_wasted_qty"] = self._safe_float(current.get("total_wasted_qty")) + self._safe_float(
+                row.get("total_wasted_qty")
+            )
+            current["active_remaining_qty"] = self._safe_float(
+                current.get("active_remaining_qty")
+            ) + self._safe_float(row.get("active_remaining_qty"))
+            current["active_lot_count"] = self._safe_int(current.get("active_lot_count")) + self._safe_int(
+                row.get("active_lot_count")
+            )
+            current["sold_out_lot_count"] = self._safe_int(
+                current.get("sold_out_lot_count")
+            ) + self._safe_int(row.get("sold_out_lot_count"))
+            current["expired_lot_count"] = self._safe_int(current.get("expired_lot_count")) + self._safe_int(
+                row.get("expired_lot_count")
+            )
+
+        normalized_rows = list(aggregated.values())
+        normalized_rows.sort(
+            key=lambda row: (
+                -self._safe_float(row.get("total_wasted_qty")),
+                str(row.get("item_nm") or ""),
+            )
+        )
+
+        total = len(normalized_rows)
+        offset = max(0, (page - 1) * page_size)
+        paged_rows = normalized_rows[offset : offset + page_size]
+        return paged_rows, total
+
     def _get_fifo_lot_summary_from_inventory_mart(
         self,
         *,
@@ -92,10 +240,12 @@ class ProductionRepository(BaseRepository):
                 return [], 0
             return None
 
-        target_date = _validate_iso_date(date) or datetime.now(_KST).date().isoformat()
-        target_day = date_type.fromisoformat(target_date)
-        previous_day = (target_day - timedelta(days=1)).strftime("%Y%m%d")
-        current_day = target_day.strftime("%Y%m%d")
+        _, _, month_start, previous_day = self._resolve_fifo_month_window(date)
+        if previous_day is None:
+            return [], 0
+
+        month_start_key = month_start.strftime("%Y%m%d")
+        previous_day_key = previous_day.strftime("%Y%m%d")
         offset = max(0, (page - 1) * page_size)
 
         waste_mart_table = self._production_waste_daily_mart_table(store_id)
@@ -120,11 +270,38 @@ class ProductionRepository(BaseRepository):
                             ORDER BY total_stock DESC, item_nm ASC
                             """
                         ),
-                        {"store_id": store_id, "business_date": previous_day},
+                        {"store_id": store_id, "business_date": previous_day_key},
                     )
                     .mappings()
                     .all()
                 )
+
+                monthly_sales_rows = [
+                    dict(row)
+                    for row in (
+                        conn.execute(
+                            text(
+                                f"""
+                                SELECT
+                                    item_cd,
+                                    item_nm,
+                                    SUM(COALESCE(total_sold, 0)) AS total_consumed_qty
+                                FROM {inventory_mart_table}
+                                WHERE store_id = :store_id
+                                  AND business_date BETWEEN :month_start_date AND :previous_day_date
+                                GROUP BY item_cd, item_nm
+                                """
+                            ),
+                            {
+                                "store_id": store_id,
+                                "month_start_date": month_start_key,
+                                "previous_day_date": previous_day_key,
+                            },
+                        )
+                        .mappings()
+                        .all()
+                    )
+                ]
 
                 waste_rows: list[dict[str, object]] = []
                 if waste_mart_table:
@@ -137,40 +314,29 @@ class ProductionRepository(BaseRepository):
                                     SELECT
                                         item_cd,
                                         item_nm,
-                                        total_waste_qty
+                                        SUM(total_waste_qty) AS total_waste_qty
                                     FROM {waste_mart_table}
                                     WHERE store_id = :store_id
-                                      AND target_date = :target_date
+                                      AND target_date BETWEEN :month_start_date AND :previous_day_date
+                                    GROUP BY item_cd, item_nm
                                     """
                                 ),
-                                {"store_id": store_id, "target_date": current_day},
+                                {
+                                    "store_id": store_id,
+                                    "month_start_date": month_start_key,
+                                    "previous_day_date": previous_day_key,
+                                },
                             )
                             .mappings()
                             .all()
                         )
                     ]
 
-                production_keys = {
-                    self._normalize_item_key(row.get("item_cd"), row.get("item_nm"))
-                    for row in (
-                        conn.execute(
-                            text(
-                                """
-                                SELECT DISTINCT
-                                    COALESCE(NULLIF(TRIM(CAST(item_cd AS TEXT)), ''), NULLIF(TRIM(CAST(item_nm AS TEXT)), '')) AS item_cd,
-                                    COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), NULLIF(TRIM(CAST(item_cd AS TEXT)), '')) AS item_nm
-                                FROM raw_production_extract
-                                WHERE masked_stor_cd = :store_id
-                                  AND prod_dt <= :target_date
-                                """
-                            ),
-                            {"store_id": store_id, "target_date": previous_day},
-                        )
-                        .mappings()
-                        .all()
-                    )
-                    if self._normalize_item_key(row.get("item_cd"), row.get("item_nm"))
-                }
+                production_keys = self._fetch_fifo_production_item_keys(
+                    store_id=store_id,
+                    month_start_date=month_start_key,
+                    previous_day_date=previous_day_key,
+                )
         except SQLAlchemyError as exc:
             logger.warning(
                 "inventory mart 기반 FIFO 요약 조회 실패: store_id=%s error=%s",
@@ -186,14 +352,22 @@ class ProductionRepository(BaseRepository):
                 continue
             waste_qty_by_key[item_key] = self._safe_float(row.get("total_waste_qty"))
 
+        consumed_qty_by_key: dict[str, float] = {}
+        for row in monthly_sales_rows:
+            item_key = self._normalize_item_key(row.get("item_cd"), row.get("item_nm"))
+            if not item_key:
+                continue
+            consumed_qty_by_key[item_key] = self._safe_float(row.get("total_consumed_qty"))
+
         materialized_rows: list[dict[str, object]] = []
         for row in inventory_rows:
             item_cd = str(row.get("item_cd") or row.get("item_nm") or "").strip()
             item_nm = str(row.get("item_nm") or item_cd).strip()
             item_key = self._normalize_item_key(item_cd, item_nm)
-            expired_today_qty = waste_qty_by_key.get(item_key, 0.0)
+            month_wasted_qty = waste_qty_by_key.get(item_key, 0.0)
+            month_consumed_qty = consumed_qty_by_key.get(item_key, 0.0)
             previous_day_stock = max(self._safe_float(row.get("total_stock")), 0.0)
-            active_remaining_qty = max(previous_day_stock - expired_today_qty, 0.0)
+            active_remaining_qty = previous_day_stock
             if active_remaining_qty <= 0:
                 continue
 
@@ -201,24 +375,20 @@ class ProductionRepository(BaseRepository):
             if lot_type and inferred_lot_type != lot_type:
                 continue
 
-            total_orderable = max(self._safe_float(row.get("total_orderable")), previous_day_stock)
-            total_consumed_qty = max(
-                min(self._safe_float(row.get("total_sold")), total_orderable),
-                0.0,
-            )
+            total_initial_qty = max(previous_day_stock + month_consumed_qty + month_wasted_qty, 0.0)
             materialized_rows.append(
                 {
                     "item_nm": item_nm,
                     "lot_type": inferred_lot_type,
                     "shelf_life_days": max(self._safe_int(row.get("assumed_shelf_life_days")), 1),
-                    "last_lot_date": previous_day,
-                    "total_initial_qty": round(total_orderable, 2),
-                    "total_consumed_qty": round(total_consumed_qty, 2),
-                    "total_wasted_qty": round(expired_today_qty, 2),
+                    "last_lot_date": previous_day.isoformat(),
+                    "total_initial_qty": round(total_initial_qty, 2),
+                    "total_consumed_qty": round(month_consumed_qty, 2),
+                    "total_wasted_qty": round(month_wasted_qty, 2),
                     "active_remaining_qty": round(active_remaining_qty, 2),
                     "active_lot_count": 1,
                     "sold_out_lot_count": 0,
-                    "expired_lot_count": 1 if expired_today_qty > 0 else 0,
+                    "expired_lot_count": 1 if month_wasted_qty > 0 else 0,
                 }
             )
 
@@ -310,6 +480,11 @@ class ProductionRepository(BaseRepository):
         item_cd_text = str(item_cd or "").strip()
         item_nm_text = str(item_nm or "").strip()
         return item_cd_text or item_nm_text
+
+    @staticmethod
+    def _expand_item_keys(item_cd: object, item_nm: object) -> set[str]:
+        keys = {str(item_cd or "").strip(), str(item_nm or "").strip()}
+        return {key for key in keys if key}
 
     @staticmethod
     def _parse_yyyymmdd(value: str) -> date_type:
@@ -1424,44 +1599,49 @@ class ProductionRepository(BaseRepository):
         if not stock and current <= 0 and production_qty > 0:
             current = production_qty
 
-        demand_baseline = max(sale_qty, order_confirm_qty, hourly_sale_qty)
-        forecast = demand_baseline
-        if forecast <= 0 and production_qty > 0:
-            forecast = min(production_qty, max(4, current + max(4, current // 2)))
-        if forecast <= 0:
-            forecast = max(0, current // 2)
+        predicted_sales_1h = max(sale_qty, order_confirm_qty, hourly_sale_qty)
+        if predicted_sales_1h <= 0 and production_qty > 0:
+            predicted_sales_1h = min(production_qty, max(4, current + max(4, current // 2)))
+        if predicted_sales_1h <= 0:
+            predicted_sales_1h = max(0, current // 2)
         current = max(0, current)
-        forecast = max(0, forecast)
+        predicted_sales_1h = max(0, predicted_sales_1h)
+        forecast = max(current - predicted_sales_1h, 0)
 
-        order_pressure = order_confirm_qty >= max(1, int(round(forecast * 0.8)))
-        velocity_pressure = hourly_sale_qty >= max(1, int(round(forecast * 0.8)))
+        order_pressure = order_confirm_qty >= max(1, int(round(predicted_sales_1h * 0.8)))
+        velocity_pressure = hourly_sale_qty >= max(1, int(round(predicted_sales_1h * 0.8)))
 
-        if forecast <= 0:
+        if predicted_sales_1h <= 0:
             status = "safe"
-        elif current <= forecast or (order_pressure and current <= int(round(forecast * 1.1))):
+        elif current <= predicted_sales_1h or (
+            order_pressure and current <= int(round(predicted_sales_1h * 1.1))
+        ):
             status = "danger"
-        elif current <= int(round(forecast * 1.5)) or velocity_pressure:
+        elif current <= int(round(predicted_sales_1h * 1.5)) or velocity_pressure:
             status = "warning"
         else:
             status = "safe"
         if status == "safe":
             recommended = 0
         else:
-            gap = max(forecast - current, 0)
-            buffer_qty = max(4, int(round(forecast * 0.2)))
-            recommended = self._clamp_recommended_qty(current, forecast, gap + buffer_qty)
+            gap = max(predicted_sales_1h - current, 0)
+            buffer_qty = max(4, int(round(predicted_sales_1h * 0.2)))
+            recommended = self._clamp_recommended_qty(
+                current, predicted_sales_1h, gap + buffer_qty
+            )
 
         # 화면의 1차/2차 생산량은 최근 4주 평균 실적을 그대로 보여준다.
         # 추천 생산수량은 별도 recommended 필드에서 계산한다.
         prod1_qty = max(production_qty, 0)
         prod2_qty = max(secondary_qty, 0)
 
-        risk_score = max(forecast - current, 0)
+        risk_score = max(predicted_sales_1h - current, 0)
         return {
             "sku_id": item_cd,
             "name": item_nm,
             "current": current,
             "forecast": forecast,
+            "predicted_sales_1h": predicted_sales_1h,
             "order_confirm_qty": order_confirm_qty,
             "hourly_sale_qty": hourly_sale_qty,
             "order_pressure": order_pressure,
@@ -1542,6 +1722,314 @@ class ProductionRepository(BaseRepository):
         return self._finalize_ranked_rows(ranked_rows)
 
     @staticmethod
+    def _normalize_business_date_text(value: str | None) -> str:
+        if value:
+            return value.replace("-", "").strip()
+        return datetime.now(_KST).strftime("%Y%m%d")
+
+    @classmethod
+    def _resolve_reference_hour(cls, reference_datetime: datetime | None) -> int:
+        base = reference_datetime.astimezone(_KST) if reference_datetime else datetime.now(_KST)
+        hour = int(base.hour)
+        return max(cls._BUSINESS_HOURS[0], min(22, hour))
+
+    @staticmethod
+    def _recent_same_weekday_dates(reference_date_text: str, weeks: int = 4) -> list[str]:
+        reference_date = datetime.strptime(reference_date_text, "%Y%m%d").date()
+        return [
+            (reference_date - timedelta(days=7 * offset)).strftime("%Y%m%d")
+            for offset in range(1, weeks + 1)
+        ]
+
+    @staticmethod
+    def _build_item_filter_clause(
+        *,
+        params: dict[str, object],
+        item_keys: set[str],
+        code_column: str,
+        name_column: str,
+    ) -> str:
+        if not item_keys:
+            return ""
+        placeholders: list[str] = []
+        for index, item_key in enumerate(sorted(item_keys)):
+            key_name = f"item_key_{index}"
+            params[key_name] = item_key
+            placeholders.append(f":{key_name}")
+        placeholder_sql = ", ".join(placeholders)
+        return (
+            f" AND (CAST({code_column} AS TEXT) IN ({placeholder_sql})"
+            f" OR CAST({name_column} AS TEXT) IN ({placeholder_sql}))"
+        )
+
+    def _enrich_items_with_historical_metrics(
+        self,
+        *,
+        items: list[dict],
+        store_id: str | None,
+        business_date: str | None,
+        reference_datetime: datetime | None,
+    ) -> list[dict]:
+        if not items or not self.engine or not store_id:
+            return items
+        if not has_table(self.engine, "raw_daily_store_item_tmzon") or not has_table(
+            self.engine, "raw_production_extract"
+        ):
+            return items
+
+        reference_date_text = self._normalize_business_date_text(
+            business_date or (reference_datetime.astimezone(_KST).strftime("%Y-%m-%d") if reference_datetime else None)
+        )
+        historical_dates = self._recent_same_weekday_dates(reference_date_text, weeks=4)
+        if not historical_dates:
+            return items
+
+        target_dates = historical_dates + [reference_date_text]
+        date_from = min(target_dates)
+        date_to = max(target_dates)
+        reference_hour = self._resolve_reference_hour(reference_datetime)
+        prior_hours = tuple(hour for hour in range(self._BUSINESS_HOURS[0], reference_hour))
+        future_hours = tuple(range(reference_hour, 23))
+        item_keys = {
+            str(item.get("sku_id") or item.get("name") or "").strip()
+            for item in items
+            if str(item.get("sku_id") or item.get("name") or "").strip()
+        }
+        if not item_keys:
+            return items
+
+        sales_params: dict[str, object] = {
+            "store_id": store_id,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+        production_params: dict[str, object] = {
+            "store_id": store_id,
+            "date_from": min(historical_dates),
+            "date_to": max(historical_dates),
+        }
+        sales_item_filter = self._build_item_filter_clause(
+            params=sales_params,
+            item_keys=item_keys,
+            code_column="item_cd",
+            name_column="item_nm",
+        )
+        production_item_filter = self._build_item_filter_clause(
+            params=production_params,
+            item_keys=item_keys,
+            code_column="item_cd",
+            name_column="item_nm",
+        )
+
+        try:
+            with self.engine.connect() as connection:
+                sales_rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                REPLACE(CAST(sale_dt AS TEXT), '-', '') AS sale_dt,
+                                CAST(item_cd AS TEXT) AS item_cd,
+                                CAST(item_nm AS TEXT) AS item_nm,
+                                CAST(tmzon_div AS TEXT) AS tmzon_div,
+                                COALESCE(NULLIF(TRIM(CAST(sale_qty AS TEXT)), '')::numeric, 0) AS sale_qty
+                            FROM raw_daily_store_item_tmzon
+                            WHERE CAST(masked_stor_cd AS TEXT) = :store_id
+                              AND REPLACE(CAST(sale_dt AS TEXT), '-', '') BETWEEN :date_from AND :date_to
+                              {sales_item_filter}
+                            """
+                        ),
+                        sales_params,
+                    )
+                    .mappings()
+                    .all()
+                )
+                production_rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                REPLACE(CAST(prod_dt AS TEXT), '-', '') AS prod_dt,
+                                CAST(item_cd AS TEXT) AS item_cd,
+                                CAST(item_nm AS TEXT) AS item_nm,
+                                COALESCE(NULLIF(TRIM(CAST(prod_qty AS TEXT)), '')::numeric, 0) AS prod_qty,
+                                COALESCE(
+                                    NULLIF(TRIM(CAST(prod_qty_2 AS TEXT)), '')::numeric,
+                                    NULLIF(TRIM(CAST(reprod_qty AS TEXT)), '')::numeric,
+                                    NULLIF(TRIM(CAST(prod_qty_3 AS TEXT)), '')::numeric,
+                                    0
+                                ) AS prod_qty_2,
+                                COALESCE(NULLIF(TRIM(CAST(sale_prc AS TEXT)), '')::numeric, 0) AS sale_prc
+                            FROM raw_production_extract
+                            WHERE CAST(masked_stor_cd AS TEXT) = :store_id
+                              AND REPLACE(CAST(prod_dt AS TEXT), '-', '') BETWEEN :date_from AND :date_to
+                              {production_item_filter}
+                            """
+                        ),
+                        production_params,
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return items
+
+        sales_by_item_date_hour: dict[str, dict[str, dict[int, float]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(float))
+        )
+        for row in sales_rows:
+            item_key = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_key:
+                continue
+            sale_dt = str(row.get("sale_dt") or "").strip()
+            hour = self._normalize_tmzon_hour(row.get("tmzon_div"))
+            if not sale_dt or hour is None:
+                continue
+            sales_by_item_date_hour[item_key][sale_dt][hour] += self._safe_float(row.get("sale_qty"))
+
+        production_by_item_date: dict[str, dict[str, dict[str, float]]] = defaultdict(
+            lambda: defaultdict(lambda: {"prod1": 0.0, "prod2": 0.0, "sale_prc_sum": 0.0, "sale_prc_count": 0.0})
+        )
+        for row in production_rows:
+            item_key = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_key:
+                continue
+            prod_dt = str(row.get("prod_dt") or "").strip()
+            if not prod_dt:
+                continue
+            bucket = production_by_item_date[item_key][prod_dt]
+            bucket["prod1"] += self._safe_float(row.get("prod_qty"))
+            bucket["prod2"] += self._safe_float(row.get("prod_qty_2"))
+            sale_prc = self._safe_float(row.get("sale_prc"))
+            if sale_prc > 0:
+                bucket["sale_prc_sum"] += sale_prc
+                bucket["sale_prc_count"] += 1.0
+
+        enriched_items: list[dict] = []
+        for item in items:
+            item_key = str(item.get("sku_id") or item.get("name") or "").strip()
+            if not item_key:
+                enriched_items.append(item)
+                continue
+
+            current_stock = self._safe_non_negative_int(item.get("current"))
+            daily_sales = sales_by_item_date_hour.get(item_key, {})
+            daily_production = production_by_item_date.get(item_key, {})
+
+            avg_first_qty = int(
+                round(
+                    sum(self._safe_float(daily_production.get(day, {}).get("prod1")) for day in historical_dates)
+                    / max(len(historical_dates), 1)
+                )
+            )
+            avg_second_qty = int(
+                round(
+                    sum(self._safe_float(daily_production.get(day, {}).get("prod2")) for day in historical_dates)
+                    / max(len(historical_dates), 1)
+                )
+            )
+
+            avg_sales_to_reference = sum(
+                sum(self._safe_float(daily_sales.get(day, {}).get(hour, 0.0)) for hour in prior_hours)
+                for day in historical_dates
+            ) / max(len(historical_dates), 1)
+            current_sales_to_reference = sum(
+                self._safe_float(daily_sales.get(reference_date_text, {}).get(hour, 0.0))
+                for hour in prior_hours
+            )
+            sales_velocity = (
+                round(current_sales_to_reference / avg_sales_to_reference, 1)
+                if avg_sales_to_reference > 0
+                else (1.0 if current_sales_to_reference <= 0 else round(current_sales_to_reference, 1))
+            )
+            sales_velocity = max(0.5, min(3.0, sales_velocity))
+
+            avg_sales_by_hour: dict[int, float] = {}
+            for hour in future_hours:
+                avg_sales_by_hour[hour] = sum(
+                    self._safe_float(daily_sales.get(day, {}).get(hour, 0.0)) for day in historical_dates
+                ) / max(len(historical_dates), 1)
+
+            predicted_sales_1h = int(round(avg_sales_by_hour.get(reference_hour, 0.0) * sales_velocity))
+            predicted_sales_1h = max(predicted_sales_1h, 0)
+            forecast_stock_1h = max(current_stock - predicted_sales_1h, 0)
+
+            if reference_hour < 14:
+                phase_baseline = avg_first_qty
+            else:
+                phase_baseline = avg_second_qty or avg_first_qty
+            historical_baseline = int(
+                round((avg_first_qty + avg_second_qty) / max(1, 2 if (avg_first_qty or avg_second_qty) else 1))
+            )
+            target_stock_level = max(phase_baseline, historical_baseline)
+            recommended_qty = max(target_stock_level - forecast_stock_1h, 0)
+
+            remaining_stock = float(current_stock)
+            stockout_hour: int | None = None
+            chance_loss_qty = 0.0
+            for hour in future_hours:
+                hour_qty = avg_sales_by_hour.get(hour, 0.0)
+                if remaining_stock > 0:
+                    if remaining_stock - hour_qty <= 0:
+                        stockout_hour = hour
+                        chance_loss_qty += max(hour_qty - remaining_stock, 0.0)
+                        remaining_stock = 0.0
+                    else:
+                        remaining_stock -= hour_qty
+                else:
+                    chance_loss_qty += hour_qty
+
+            predicted_stockout_time = None
+            if stockout_hour is not None:
+                predicted_stockout_time = f"{max(stockout_hour - reference_hour + 1, 1)}시간 이내"
+
+            sale_prc_total = 0.0
+            sale_prc_count = 0.0
+            for day in historical_dates:
+                sale_prc_total += self._safe_float(daily_production.get(day, {}).get("sale_prc_sum"))
+                sale_prc_count += self._safe_float(daily_production.get(day, {}).get("sale_prc_count"))
+            unit_price = sale_prc_total / sale_prc_count if sale_prc_count > 0 else 1200.0
+            chance_loss_amt = int(round(chance_loss_qty * unit_price))
+            chance_loss_reduction_amt = int(round(min(recommended_qty, max(chance_loss_qty, 0.0)) * unit_price))
+
+            enriched = dict(item)
+            enriched.update(
+                {
+                    "forecast": forecast_stock_1h,
+                    "predicted_sales_1h": predicted_sales_1h,
+                    "recommended": recommended_qty,
+                    "prod1": f"08:00 / {avg_first_qty}",
+                    "prod2": f"14:00 / {avg_second_qty}",
+                    "stockout_expected_at": predicted_stockout_time or str(item.get("stockout_expected_at") or ""),
+                    "chance_loss_qty": round(chance_loss_qty, 2),
+                    "chance_loss_amt": chance_loss_reduction_amt if chance_loss_reduction_amt > 0 else chance_loss_amt,
+                    "chance_loss_reduction_pct": float(
+                        chance_loss_reduction_amt if chance_loss_reduction_amt > 0 else chance_loss_amt
+                    ),
+                    "chance_loss_basis_text": (
+                        "추천 생산 수량은 최근 4주 동요일의 1차/2차 생산 평균과 1시간 후 예측 재고를 함께 반영했고, "
+                        "찬스 로스 절감액은 동일 요일 평균 판매 패턴 기준 품절 이후 23시까지의 예상 손실 판매를 기준으로 계산했습니다."
+                    ),
+                    "sales_velocity": sales_velocity,
+                }
+            )
+
+            if forecast_stock_1h <= 0:
+                enriched["status"] = "danger"
+            elif forecast_stock_1h <= max(int(round(predicted_sales_1h * 0.5)), 3):
+                enriched["status"] = "warning"
+            else:
+                enriched["status"] = "safe"
+            enriched_items.append(enriched)
+
+        return self._finalize_ranked_rows(
+            [
+                {**row, "_risk_score": max(self._safe_int(row.get("predicted_sales_1h")) - self._safe_int(row.get("current")), 0)}
+                for row in enriched_items
+            ]
+        )
+
+    @staticmethod
     def _resolve_active_item_keys(
         *,
         recent_sales_keys: set[str],
@@ -1549,10 +2037,10 @@ class ProductionRepository(BaseRepository):
         direct_production_keys: set[str],
     ) -> set[str]:
         # 생산 현황 조회 대상:
-        # 1) 최근 7일 내 생산 이력이 있으면서 해당 지점 생산 대상인 제품
+        # 1) 최근 7일 내 생산 이력이 있는 제품
         # 2) 최근 7일 내 매출 이력이 있으면서 해당 지점 생산 대상인 제품
         direct_keys = set(direct_production_keys)
-        return (set(recent_production_keys) & direct_keys) | (set(recent_sales_keys) & direct_keys)
+        return set(recent_production_keys) | (set(recent_sales_keys) & direct_keys)
 
     @staticmethod
     def _normalize_reference_date(value: str | None) -> str:
@@ -1594,10 +2082,8 @@ class ProductionRepository(BaseRepository):
                         text(
                             f"""
                             SELECT DISTINCT
-                                COALESCE(
-                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
-                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
-                                ) AS item_key
+                                item_cd,
+                                item_nm
                             FROM raw_daily_store_item
                             WHERE 1=1
                               {store_filter_sql}
@@ -1611,12 +2097,16 @@ class ProductionRepository(BaseRepository):
                             "date_to": date_to,
                         },
                     )
-                    .scalars()
+                    .mappings()
                     .all()
                 )
         except SQLAlchemyError:
             return set()
-        return {str(row).strip() for row in rows if str(row or "").strip()}
+        return {
+            key
+            for row in rows
+            for key in self._expand_item_keys(row.get("item_cd"), row.get("item_nm"))
+        }
 
     def _fetch_recent_production_item_keys(
         self,
@@ -1640,10 +2130,8 @@ class ProductionRepository(BaseRepository):
                         text(
                             f"""
                             SELECT DISTINCT
-                                COALESCE(
-                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
-                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
-                                ) AS item_key
+                                item_cd,
+                                item_nm
                             FROM raw_production_extract
                             WHERE 1=1
                               {store_filter_sql}
@@ -1662,12 +2150,16 @@ class ProductionRepository(BaseRepository):
                             "date_to": date_to,
                         },
                     )
-                    .scalars()
+                    .mappings()
                     .all()
                 )
         except SQLAlchemyError:
             return set()
-        return {str(row).strip() for row in rows if str(row or "").strip()}
+        return {
+            key
+            for row in rows
+            for key in self._expand_item_keys(row.get("item_cd"), row.get("item_nm"))
+        }
 
     def _fetch_direct_production_item_keys(self, *, store_id: str | None) -> set[str]:
         if not self.engine or not store_id:
@@ -1680,22 +2172,24 @@ class ProductionRepository(BaseRepository):
                             text(
                                 """
                                 SELECT DISTINCT
-                                    COALESCE(
-                                        NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
-                                        NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
-                                    ) AS item_key
+                                    item_cd,
+                                    item_nm
                                 FROM raw_store_production_item
                                 WHERE CAST(masked_stor_cd AS TEXT) = :store_id
                                 """
                             ),
                             {"store_id": store_id},
                         )
-                        .scalars()
+                        .mappings()
                         .all()
                     )
             except SQLAlchemyError:
                 rows = []
-            direct_keys = {str(row).strip() for row in rows if str(row or "").strip()}
+            direct_keys = {
+                key
+                for row in rows
+                for key in self._expand_item_keys(row.get("item_cd"), row.get("item_nm"))
+            }
             if direct_keys:
                 return direct_keys
 
@@ -1708,10 +2202,8 @@ class ProductionRepository(BaseRepository):
                         text(
                             """
                             SELECT DISTINCT
-                                COALESCE(
-                                    NULLIF(TRIM(CAST(item_cd AS TEXT)), ''),
-                                    NULLIF(TRIM(CAST(item_nm AS TEXT)), '')
-                                ) AS item_key
+                                item_cd,
+                                item_nm
                             FROM raw_production_extract
                             WHERE CAST(masked_stor_cd AS TEXT) = :store_id
                               AND (
@@ -1724,12 +2216,16 @@ class ProductionRepository(BaseRepository):
                         ),
                         {"store_id": store_id},
                     )
-                    .scalars()
+                    .mappings()
                     .all()
                 )
         except SQLAlchemyError:
             return set()
-        return {str(row).strip() for row in rows if str(row or "").strip()}
+        return {
+            key
+            for row in rows
+            for key in self._expand_item_keys(row.get("item_cd"), row.get("item_nm"))
+        }
 
     def _fetch_store_production_item_keys(self, store_id: str | None) -> set[str]:
         return self._fetch_direct_production_item_keys(store_id=store_id)
@@ -1738,6 +2234,7 @@ class ProductionRepository(BaseRepository):
         self,
         store_id: str | None,
         business_date: str | None,
+        reference_datetime: datetime | None = None,
     ) -> list[dict]:
         if not self.engine or not hasattr(self.engine, "connect"):
             return []
@@ -1749,6 +2246,20 @@ class ProductionRepository(BaseRepository):
         normalized_business_date = (
             str(business_date).replace("-", "").strip() if business_date else None
         )
+        recent_sales_keys = self._fetch_recent_sales_item_keys(
+            store_id=store_id,
+            business_date=business_date,
+        )
+        recent_production_keys = self._fetch_recent_production_item_keys(
+            store_id=store_id,
+            business_date=business_date,
+        )
+        direct_production_keys = self._fetch_store_production_item_keys(store_id)
+        active_keys = self._resolve_active_item_keys(
+            recent_sales_keys=recent_sales_keys,
+            recent_production_keys=recent_production_keys,
+            direct_production_keys=direct_production_keys,
+        )
 
         try:
             with self.engine.connect() as connection:
@@ -1757,11 +2268,11 @@ class ProductionRepository(BaseRepository):
                         connection.execute(
                             text(
                                 f"""
-                                SELECT business_date, reference_hour
+                                SELECT business_date
                                 FROM {table_name}
                                 WHERE store_id = :store_id
                                   AND business_date <= :business_date
-                                ORDER BY business_date DESC, reference_hour DESC
+                                ORDER BY business_date DESC
                                 LIMIT 1
                                 """
                             ),
@@ -1775,10 +2286,10 @@ class ProductionRepository(BaseRepository):
                         connection.execute(
                             text(
                                 f"""
-                                SELECT business_date, reference_hour
+                                SELECT business_date
                                 FROM {table_name}
                                 WHERE store_id = :store_id
-                                ORDER BY business_date DESC, reference_hour DESC
+                                ORDER BY business_date DESC
                                 LIMIT 1
                                 """
                             ),
@@ -1796,47 +2307,28 @@ class ProductionRepository(BaseRepository):
                         text(
                             f"""
                             SELECT
-                                sku_id,
-                                sku_name,
-                                current_stock_qty,
-                                forecast_stock_1h_qty,
-                                avg_first_production_qty_4w,
-                                avg_first_production_time_4w,
-                                avg_second_production_qty_4w,
-                                avg_second_production_time_4w,
-                                order_confirm_qty,
-                                hourly_sale_qty,
+                                item_cd,
+                                item_nm,
+                                total_stock,
+                                stock_rate,
                                 status,
-                                depletion_time,
-                                predicted_stockout_time,
-                                recommended_production_qty,
-                                chance_loss_saving_pct,
-                                chance_loss_basis_text,
-                                alert_message,
-                                sales_velocity,
-                                speed_alert,
-                                speed_alert_message,
-                                material_alert,
-                                material_alert_message,
-                                can_produce
+                                stockout_hour
                             FROM {table_name}
                             WHERE store_id = :store_id
                               AND business_date = :business_date
-                              AND reference_hour = :reference_hour
                             ORDER BY
                                 CASE status
-                                    WHEN 'danger' THEN 0
+                                    WHEN 'shortage' THEN 0
                                     WHEN 'warning' THEN 1
                                     ELSE 2
                                 END,
-                                forecast_stock_1h_qty DESC,
-                                sku_name ASC
+                                total_stock ASC,
+                                item_nm ASC
                             """
                         ),
                         {
                             "store_id": store_id,
                             "business_date": str(snapshot_row.get("business_date") or ""),
-                            "reference_hour": self._safe_int(snapshot_row.get("reference_hour")),
                         },
                     )
                     .mappings()
@@ -1853,23 +2345,36 @@ class ProductionRepository(BaseRepository):
 
         items: list[dict] = []
         for row in rows:
-            first_qty = self._safe_non_negative_int(row.get("avg_first_production_qty_4w"))
-            second_qty = self._safe_non_negative_int(row.get("avg_second_production_qty_4w"))
-            first_time = str(row.get("avg_first_production_time_4w") or "08:00")
-            second_time = str(row.get("avg_second_production_time_4w") or "14:00")
+            sku_id = str(row.get("item_cd") or "").strip()
+            name = str(row.get("item_nm") or "").strip()
+            if active_keys and sku_id not in active_keys and name not in active_keys:
+                continue
+
+            current_stock = self._safe_non_negative_int(row.get("total_stock"))
+            status = str(row.get("status") or "normal").strip().lower()
+            normalized_status = "safe"
+            if status == "shortage":
+                normalized_status = "danger"
+            elif status == "warning":
+                normalized_status = "warning"
+
+            stockout_hour = row.get("stockout_hour")
+            first_time = "08:00"
+            first_qty = 0
+            second_time = "14:00"
+            second_qty = 0
             items.append(
                 {
-                    "sku_id": str(row.get("sku_id") or ""),
-                    "name": str(row.get("sku_name") or ""),
-                    "current": self._safe_non_negative_int(row.get("current_stock_qty")),
-                    "forecast": self._safe_non_negative_int(row.get("forecast_stock_1h_qty")),
-                    "order_confirm_qty": self._safe_non_negative_int(row.get("order_confirm_qty")),
-                    "hourly_sale_qty": self._safe_non_negative_int(row.get("hourly_sale_qty")),
-                    "status": str(row.get("status") or "safe"),
-                    "depletion_time": str(row.get("depletion_time") or "-"),
-                    "recommended": self._safe_non_negative_int(
-                        row.get("recommended_production_qty")
-                    ),
+                    "sku_id": sku_id or name,
+                    "name": name or sku_id,
+                    "current": current_stock,
+                    "forecast": current_stock,
+                    "predicted_sales_1h": 0,
+                    "order_confirm_qty": 0,
+                    "hourly_sale_qty": 0,
+                    "status": normalized_status,
+                    "depletion_time": "-",
+                    "recommended": 0,
                     "prod1": f"{first_time} / {first_qty}개",
                     "prod2": f"{second_time} / {second_qty}개",
                     "stockout_expected_at": str(row.get("predicted_stockout_time") or ""),
@@ -1887,7 +2392,31 @@ class ProductionRepository(BaseRepository):
                     "can_produce": bool(row.get("can_produce") if row.get("can_produce") is not None else True),
                 }
             )
-        return items
+            items[-1].update(
+                {
+                    "prod1": "08:00 / 0개",
+                    "prod2": "14:00 / 0개",
+                    "stockout_expected_at": (
+                        str(stockout_hour).strip() if stockout_hour not in (None, "") else ""
+                    ),
+                    "chance_loss_reduction_pct": None,
+                    "chance_loss_amt": None,
+                    "chance_loss_basis_text": "",
+                    "alert_message": "",
+                    "sales_velocity": self._safe_float(row.get("stock_rate")),
+                    "speed_alert": False,
+                    "speed_alert_message": "",
+                    "material_alert": False,
+                    "material_alert_message": "",
+                    "can_produce": True,
+                }
+            )
+        return self._enrich_items_with_historical_metrics(
+            items=items,
+            store_id=store_id,
+            business_date=business_date,
+            reference_datetime=reference_datetime,
+        )
 
     def _list_items_from_prediction_snapshot(
         self,
@@ -1994,12 +2523,18 @@ class ProductionRepository(BaseRepository):
             second_qty = self._safe_non_negative_int(row.get("avg_second_production_qty_4w"))
             first_time = str(row.get("avg_first_production_time_4w") or "08:00")
             second_time = str(row.get("avg_second_production_time_4w") or "14:00")
+            current_stock = self._safe_non_negative_int(row.get("current_stock"))
+            forecast_stock_1h = min(
+                current_stock,
+                max(self._safe_int(row.get("predicted_stock_1h")), 0),
+            )
             items.append(
                 {
                     "sku_id": str(row.get("sku_id") or ""),
                     "name": str(row.get("name") or ""),
-                    "current": self._safe_non_negative_int(row.get("current_stock")),
-                    "forecast": self._safe_int(row.get("predicted_stock_1h")),
+                    "current": current_stock,
+                    "forecast": forecast_stock_1h,
+                    "predicted_sales_1h": max(current_stock - forecast_stock_1h, 0),
                     "order_confirm_qty": self._safe_non_negative_int(row.get("order_confirm_qty")),
                     "hourly_sale_qty": self._safe_non_negative_int(row.get("hourly_sale_qty")),
                     "status": str(row.get("status") or "normal"),
@@ -2030,14 +2565,24 @@ class ProductionRepository(BaseRepository):
             business_date=business_date,
         )
         if mart_items:
-            return mart_items
+            return self._enrich_items_with_historical_metrics(
+                items=mart_items,
+                store_id=store_id,
+                business_date=business_date,
+                reference_datetime=reference_datetime,
+            )
 
         snapshot_items = self._list_items_from_prediction_snapshot(
             store_id=store_id,
             business_date=business_date,
         )
         if snapshot_items:
-            return snapshot_items
+            return self._enrich_items_with_historical_metrics(
+                items=snapshot_items,
+                store_id=store_id,
+                business_date=business_date,
+                reference_datetime=reference_datetime,
+            )
 
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
@@ -2719,7 +3264,7 @@ class ProductionRepository(BaseRepository):
                                     SELECT
                                         m.item_cd,
                                         m.item_nm,
-                                        psl.item_group,
+                                        COALESCE(cat.category, psl.item_group) AS item_group,
                                         m.total_stock AS stk_avg,
                                         m.total_sold AS sal_avg,
                                         m.total_orderable AS ord_avg,
@@ -2734,6 +3279,22 @@ class ProductionRepository(BaseRepository):
                                             ELSE '적정'
                                         END AS status
                                     FROM {inventory_mart_table} AS m
+                                    LEFT JOIN LATERAL (
+                                        SELECT MAX(COALESCE(NULLIF(TRIM(CAST(mic.category AS TEXT)), ''), '기타')) AS category
+                                        FROM mart_item_category_master mic
+                                        WHERE (
+                                            COALESCE(NULLIF(TRIM(CAST(mic.item_cd AS TEXT)), ''), '') <> ''
+                                            AND COALESCE(NULLIF(TRIM(CAST(mic.item_cd AS TEXT)), ''), '') =
+                                                COALESCE(NULLIF(TRIM(CAST(m.item_cd AS TEXT)), ''), '')
+                                        )
+                                        OR COALESCE(NULLIF(TRIM(CAST(mic.item_nm AS TEXT)), ''), '') =
+                                           COALESCE(NULLIF(TRIM(CAST(m.item_nm AS TEXT)), ''), '')
+                                        OR (
+                                            COALESCE(NULLIF(TRIM(CAST(mic.parent_item_nm AS TEXT)), ''), '') <> ''
+                                            AND COALESCE(NULLIF(TRIM(CAST(mic.parent_item_nm AS TEXT)), ''), '') =
+                                                COALESCE(NULLIF(TRIM(CAST(m.item_nm AS TEXT)), ''), '')
+                                        )
+                                    ) cat ON TRUE
                                     LEFT JOIN raw_product_shelf_life AS psl
                                         ON psl.item_cd = m.item_cd
                                     WHERE m.store_id = :store_id
@@ -2839,7 +3400,7 @@ class ProductionRepository(BaseRepository):
                             SELECT
                                 f.item_cd,
                                 f.item_nm,
-                                psl.item_group,
+                                COALESCE(cat.category, psl.item_group) AS item_group,
                                 f.stk_avg,
                                 f.sal_avg,
                                 f.ord_avg,
@@ -2848,6 +3409,22 @@ class ProductionRepository(BaseRepository):
                                 f.stockout_hour,
                                 f.status
                             FROM filtered AS f
+                            LEFT JOIN LATERAL (
+                                SELECT MAX(COALESCE(NULLIF(TRIM(CAST(mic.category AS TEXT)), ''), '기타')) AS category
+                                FROM mart_item_category_master mic
+                                WHERE (
+                                    COALESCE(NULLIF(TRIM(CAST(mic.item_cd AS TEXT)), ''), '') <> ''
+                                    AND COALESCE(NULLIF(TRIM(CAST(mic.item_cd AS TEXT)), ''), '') =
+                                        COALESCE(NULLIF(TRIM(CAST(f.item_cd AS TEXT)), ''), '')
+                                )
+                                OR COALESCE(NULLIF(TRIM(CAST(mic.item_nm AS TEXT)), ''), '') =
+                                   COALESCE(NULLIF(TRIM(CAST(f.item_nm AS TEXT)), ''), '')
+                                OR (
+                                    COALESCE(NULLIF(TRIM(CAST(mic.parent_item_nm AS TEXT)), ''), '') <> ''
+                                    AND COALESCE(NULLIF(TRIM(CAST(mic.parent_item_nm AS TEXT)), ''), '') =
+                                        COALESCE(NULLIF(TRIM(CAST(f.item_nm AS TEXT)), ''), '')
+                                )
+                            ) cat ON TRUE
                             LEFT JOIN raw_product_shelf_life AS psl
                                 ON psl.item_cd = f.item_cd
                             ORDER BY f.stk_rt ASC, f.item_nm ASC
@@ -3034,43 +3611,23 @@ class ProductionRepository(BaseRepository):
         if not self.engine or not has_table(self.engine, "inventory_fifo_lots"):
             return [], 0
         try:
-            target_date = _validate_iso_date(date) or datetime.now(_KST).date().isoformat()
+            _, _, month_start, previous_day = self._resolve_fifo_month_window(date)
+            if previous_day is None:
+                return [], 0
 
-            offset = max(0, (page - 1) * page_size)
             params: dict = {
                 "store_id": store_id,
-                "target_date": target_date,
-                "limit": page_size,
-                "offset": offset,
+                "month_start_date": month_start.isoformat(),
+                "previous_day_date": previous_day.isoformat(),
             }
-            type_clause = ""
-            if lot_type:
-                type_clause = "AND lot_type = :lot_type"
-                params["lot_type"] = lot_type
 
             with self.engine.connect() as conn:
-                total = int(
-                    conn.execute(
-                        text(
-                            f"""
-                            SELECT COUNT(*)
-                            FROM (
-                                SELECT DISTINCT item_nm, lot_type
-                                FROM inventory_fifo_lots
-                                WHERE masked_stor_cd = :store_id
-                                  AND lot_date = :target_date
-                                  {type_clause}
-                            ) AS sub
-                            """
-                        ),
-                        params,
-                    ).scalar_one()
-                )
                 rows = (
                     conn.execute(
                         text(
-                            f"""
+                            """
                             SELECT
+                                item_cd,
                                 item_nm,
                                 lot_type,
                                 MAX(shelf_life_days)                                          AS shelf_life_days,
@@ -3085,11 +3642,9 @@ class ProductionRepository(BaseRepository):
                                 COUNT(*) FILTER (WHERE status = 'expired')                    AS expired_lot_count
                             FROM inventory_fifo_lots
                             WHERE masked_stor_cd = :store_id
-                              AND lot_date = :target_date
-                              {type_clause}
-                            GROUP BY item_nm, lot_type
+                              AND lot_date BETWEEN :month_start_date AND :previous_day_date
+                            GROUP BY item_cd, item_nm, lot_type
                             ORDER BY total_wasted_qty DESC, item_nm
-                            LIMIT :limit OFFSET :offset
                             """
                         ),
                         params,
@@ -3097,7 +3652,16 @@ class ProductionRepository(BaseRepository):
                     .mappings()
                     .all()
                 )
-            return [dict(r) for r in rows], total
+            normalized_rows, total = self._normalize_fifo_lot_rows(
+                store_id=store_id,
+                rows=[dict(r) for r in rows],
+                lot_type=lot_type,
+                page=page,
+                page_size=page_size,
+                month_start_date=month_start.isoformat(),
+                previous_day_date=previous_day.isoformat(),
+            )
+            return normalized_rows, total
         except SQLAlchemyError as exc:
             logger.warning(
                 "get_fifo_lot_summary 쿼리 실패: store_id=%s error=%s",

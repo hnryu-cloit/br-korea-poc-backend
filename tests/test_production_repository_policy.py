@@ -322,3 +322,13 @@ def test_build_inventory_metric_row_uses_inventory_snapshot_for_stock_rate() -> 
     assert row["sal_avg"] == 20.0
     assert row["stk_avg"] == -4.0
     assert row["stk_rt"] == -0.2
+
+
+def test_resolve_active_item_keys_keeps_sales_items_only_when_store_can_produce_them() -> None:
+    active_keys = ProductionRepository._resolve_active_item_keys(
+        recent_sales_keys={"SKU_A", "Americano", "SKU_B", "Latte"},
+        recent_production_keys={"SKU_C", "Bagel"},
+        direct_production_keys={"SKU_A", "Americano", "SKU_D", "Muffin"},
+    )
+
+    assert active_keys == {"SKU_A", "Americano", "SKU_C", "Bagel"}
