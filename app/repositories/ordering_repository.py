@@ -1434,6 +1434,111 @@ class OrderingRepository:
             f"{abs(change_ratio):.1f}% {direction}했습니다."
         )
 
+    def get_active_campaigns(
+        self,
+        *,
+        reference_date: str,
+        limit: int = 3,
+    ) -> list[dict]:
+        """기준일자에 진행 중인 캠페인 리스트 조회 (raw_campaign_master 기반)."""
+        normalized = str(reference_date or "").strip().replace("-", "")
+        if len(normalized) != 8 or not normalized.isdigit():
+            return self._stub_active_campaigns(limit)
+        if not self.engine or not has_table(self.engine, "raw_campaign_master"):
+            return self._stub_active_campaigns(limit)
+
+        query = text(
+            """
+            SELECT
+                cpi_cd,
+                cpi_nm,
+                start_dt,
+                fnsh_dt,
+                cpi_kind,
+                cpi_dc_type_nm
+            FROM raw_campaign_master
+            WHERE COALESCE(NULLIF(TRIM(CAST(start_dt AS TEXT)), ''), '') <> ''
+              AND COALESCE(NULLIF(TRIM(CAST(fnsh_dt AS TEXT)), ''), '') <> ''
+              AND REPLACE(CAST(start_dt AS TEXT), '-', '') <= :ref_date
+              AND REPLACE(CAST(fnsh_dt AS TEXT), '-', '') >= :ref_date
+              AND COALESCE(use_yn, 'Y') = 'Y'
+            ORDER BY REPLACE(CAST(start_dt AS TEXT), '-', '') DESC, cpi_cd
+            LIMIT :limit
+            """
+        )
+        try:
+            with self.engine.connect() as connection:
+                rows = connection.execute(
+                    query,
+                    {"ref_date": normalized, "limit": int(max(limit, 1))},
+                ).mappings().all()
+        except SQLAlchemyError as exc:
+            logger.warning("get_active_campaigns query failed: %s", exc)
+            return self._stub_active_campaigns(limit)
+
+        items: list[dict] = []
+        for row in rows:
+            code = self._safe_str_value(row.get("cpi_cd"))
+            name = self._safe_str_value(row.get("cpi_nm"))
+            start_dt = self._format_iso_date(row.get("start_dt"))
+            end_dt = self._format_iso_date(row.get("fnsh_dt"))
+            if not code or not name or not start_dt or not end_dt:
+                continue
+            items.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "start_date": start_dt,
+                    "end_date": end_dt,
+                    "kind": self._safe_str_value(row.get("cpi_dc_type_nm"))
+                    or self._safe_str_value(row.get("cpi_kind")),
+                }
+            )
+        return items
+
+    @staticmethod
+    def _safe_str_value(value: object | None) -> str | None:
+        if value in (None, ""):
+            return None
+        text_value = str(value).strip()
+        return text_value or None
+
+    @staticmethod
+    def _format_iso_date(value: object | None) -> str | None:
+        if value in (None, ""):
+            return None
+        text_value = str(value).strip().replace("-", "")
+        if len(text_value) != 8 or not text_value.isdigit():
+            return None
+        return f"{text_value[0:4]}-{text_value[4:6]}-{text_value[6:8]}"
+
+    @staticmethod
+    def _stub_active_campaigns(limit: int) -> list[dict]:
+        stubs = [
+            {
+                "code": "CPI-STUB-001",
+                "name": "봄맞이 패밀리세트",
+                "start_date": "2026-04-20",
+                "end_date": "2026-05-10",
+                "kind": "정액할인",
+            },
+            {
+                "code": "CPI-STUB-002",
+                "name": "T-day 더블할인",
+                "start_date": "2026-04-22",
+                "end_date": "2026-04-30",
+                "kind": "통신사할인",
+            },
+            {
+                "code": "CPI-STUB-003",
+                "name": "신상품 런칭 행사",
+                "start_date": "2026-04-25",
+                "end_date": "2026-05-08",
+                "kind": "1+1",
+            },
+        ]
+        return stubs[: max(1, limit)]
+
     def _build_options_from_relation(
         self,
         relation: str,

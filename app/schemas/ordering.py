@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel
 
 from app.schemas.explainability import ExplainabilityPayload
@@ -54,6 +56,19 @@ class OrderingOptionsResponse(BaseModel):
     deadline_items: list[OrderingDeadlineItem] = []
     options: list[OrderOption]
     explainability: ExplainabilityPayload | None = None
+
+
+class ActiveCampaignItem(BaseModel):
+    code: str
+    name: str
+    start_date: date
+    end_date: date
+    kind: str | None = None
+
+
+class OrderingActiveCampaignsResponse(BaseModel):
+    reference_date: date
+    items: list[ActiveCampaignItem]
 
 
 class OrderingContextResponse(BaseModel):

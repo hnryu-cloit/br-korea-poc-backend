@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from app.core.reference_datetime import parse_reference_datetime
 from app.core.deps import get_ordering_service
 from app.schemas.ordering import (
+    OrderingActiveCampaignsResponse,
     OrderingAlertsResponse,
     OrderingContextResponse,
     OrderingHistoryResponse,
@@ -39,6 +40,15 @@ async def list_order_options(
         store_id=store_id,
         reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
     )
+
+
+@router.get("/active-campaigns", response_model=OrderingActiveCampaignsResponse)
+def list_ordering_active_campaigns(
+    reference_date: str | None = Query(default=None, description="YYYY-MM-DD 또는 YYYYMMDD"),
+    limit: int = Query(default=3, ge=1, le=10),
+    service: OrderingService = Depends(get_ordering_service),
+) -> OrderingActiveCampaignsResponse:
+    return service.list_active_campaigns(reference_date=reference_date, limit=limit)
 
 
 @router.get("/context/{notification_id}", response_model=OrderingContextResponse)

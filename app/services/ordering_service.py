@@ -9,6 +9,8 @@ from pathlib import Path
 from app.core.utils import get_now
 from app.repositories.ordering_repository import OrderingRepository
 from app.schemas.ordering import (
+    ActiveCampaignItem,
+    OrderingActiveCampaignsResponse,
     OrderingAlertsResponse,
     OrderingContextResponse,
     OrderingDeadlineAlert,
@@ -310,6 +312,17 @@ class OrderingService:
                 }
             )
         return summaries
+
+    def list_active_campaigns(
+        self,
+        reference_date: str | None = None,
+        limit: int = 3,
+    ) -> OrderingActiveCampaignsResponse:
+        """기준일자 기준 진행 중 캠페인 리스트 반환."""
+        resolved = (reference_date or self._today_kst()).strip()
+        rows = self.repository.get_active_campaigns(reference_date=resolved, limit=limit)
+        items = [ActiveCampaignItem(**row) for row in rows]
+        return OrderingActiveCampaignsResponse(reference_date=resolved, items=items)
 
     async def list_options(
         self,
