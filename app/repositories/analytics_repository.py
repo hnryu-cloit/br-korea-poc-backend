@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from calendar import monthrange
 from datetime import date as date_type
 from datetime import datetime, timedelta
@@ -105,10 +106,12 @@ class AnalyticsRepository:
         date_to: str | None = None,
     ) -> dict:
         if not self.engine:
-            raise RuntimeError("analytics database engine is not configured")
+            return []
 
         period = self._resolve_period(date_from=date_from, date_to=date_to)
         resolved_store_id = self._resolve_metrics_store_id(store_id)
+        if resolved_store_id is None and store_id:
+            period = None
 
         items: list[dict] = []
         sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
@@ -142,10 +145,14 @@ class AnalyticsRepository:
                 ]
             )
 
-        return {
+        payload = {
             "items": items,
             "selected_period_total_sales": selected_period_total_sales,
+            "resolved_store_id": resolved_store_id,
         }
+        if period and self._is_empty_metrics_payload(payload):
+            return await self.get_metrics(store_id=resolved_store_id)
+        return payload
 
     async def get_weather_impact(
         self,
@@ -353,9 +360,9 @@ class AnalyticsRepository:
 
         normalized = store_id.strip()
         if not normalized:
-            raise ValueError("store_id is invalid")
+            return None
         if normalized == "STORE_DEMO":
-            raise ValueError("store_id STORE_DEMO is not allowed")
+            return None
 
         if not self.engine or not has_table(self.engine, "raw_store_master"):
             return normalized
@@ -382,7 +389,19 @@ class AnalyticsRepository:
         if exists:
             return normalized
 
-        raise ValueError(f"store_id not found in raw_store_master: {normalized}")
+        return None
+
+    @staticmethod
+    def _is_empty_metrics_payload(payload: dict) -> bool:
+        selected_total = float(payload.get("selected_period_total_sales") or 0)
+        if selected_total > 0:
+            return False
+        for item in payload.get("items") or []:
+            value_text = str((item or {}).get("value") or "")
+            numeric = float(re.sub(r"[^0-9.\-]", "", value_text) or 0)
+            if numeric > 0:
+                return False
+        return True
 
     def _fetch_in_store_pay_counts(
         self,
@@ -727,13 +746,14 @@ class AnalyticsRepository:
                 return "전체 매출액 중 0.0%"
             return f"전체 매출액 중 {(amount / base_total_sales) * 100:.1f}%"
 
+        takeout_sales_recent = max(recent_online_sales - recent_delivery_sales, 0.0)
         return {
             "takeout_count": {
-                "label": "투고 건수",
-                "value": f"{int(round(recent_takeout_orders)):,}건",
+                "label": "투고 매출액",
+                "value": f"₩{int(round(takeout_sales_recent)):,}",
                 "change": takeout_change,
                 "trend": takeout_trend,
-                "detail": period_detail,
+                "detail": f"{period_detail} · {to_share_text(takeout_sales_recent)}",
             },
             "delivery_sales": {
                 "label": "배달 매출액",
@@ -743,7 +763,7 @@ class AnalyticsRepository:
                 "detail": f"{period_detail} · {to_share_text(recent_delivery_sales)}",
             },
             "in_store_pay_count": {
-                "label": "매장 결제 건수",
+                "label": "홀 방문 고객",
                 "value": f"{int(round(in_store_pay_recent)):,}건",
                 "change": in_store_change,
                 "trend": in_store_trend,

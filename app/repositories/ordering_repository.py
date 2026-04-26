@@ -493,47 +493,6 @@ class OrderingRepository:
             store_id=store_id,
             reference_date=reference_date,
         )
-        weather_for_reference = self._get_weather_for_reference_date(
-            store_id=store_id,
-            reference_date=reference_date,
-        )
-        if weather_for_reference is not None:
-            return weather_for_reference
-
-        sido = self._resolve_store_sido(store_id=store_id)
-        latitude, longitude = _SIDO_COORDINATES.get(sido, _DEFAULT_WEATHER_COORD)
-        try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
-                response = await client.get(
-                    _OPEN_METEO_FORECAST_URL,
-                    params={
-                        "latitude": latitude,
-                        "longitude": longitude,
-                        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-                        "forecast_days": 1,
-                        "timezone": "Asia/Seoul",
-                    },
-                )
-                response.raise_for_status()
-                daily = (response.json() or {}).get("daily") or {}
-                date = (daily.get("time") or [None])[0]
-                max_temp = (daily.get("temperature_2m_max") or [None])[0]
-                min_temp = (daily.get("temperature_2m_min") or [None])[0]
-                rain_prob = (daily.get("precipitation_probability_max") or [None])[0]
-                weather_code = (daily.get("weather_code") or [None])[0]
-                if not date:
-                    return None
-                weather_label = _WEATHER_CODE_LABELS.get(int(weather_code), "날씨")
-                return {
-                    "region": sido,
-                    "forecast_date": str(date),
-                    "weather_type": weather_label,
-                    "max_temperature_c": None if max_temp is None else int(round(float(max_temp))),
-                    "min_temperature_c": None if min_temp is None else int(round(float(min_temp))),
-                    "precipitation_probability": None if rain_prob is None else int(round(float(rain_prob))),
-                }
-        except (httpx.HTTPError, ValueError, TypeError):
-            return None
 
     def get_order_arrival_schedule(self, store_id: str | None = None) -> dict[str, str] | None:
         if not self.engine:
@@ -656,9 +615,34 @@ class OrderingRepository:
         try:
             return {column["name"].lower(): column["name"] for column in inspect(self.engine).get_columns(table_name)}
         except SQLAlchemyError:
-            return {}
+            pass
         except Exception:
-            return {}
+            pass
+        default_columns_by_table = {
+            "raw_order_extract": {
+                "masked_stor_cd": "masked_stor_cd",
+                "dlv_dt": "dlv_dt",
+                "item_nm": "item_nm",
+                "item_cd": "item_cd",
+                "ord_qty": "ord_qty",
+                "confrm_qty": "confrm_qty",
+                "ord_rec_qty": "ord_rec_qty",
+                "auto_ord_yn": "auto_ord_yn",
+                "ord_grp_nm": "ord_grp_nm",
+            },
+            self._POC_010_ORDERING_JOIN_TABLE: {
+                "masked_stor_cd": "masked_stor_cd",
+                "dlv_dt": "dlv_dt",
+                "item_nm": "item_nm",
+                "item_cd": "item_cd",
+                "ord_qty": "ord_qty",
+                "confrm_qty": "confrm_qty",
+                "ord_rec_qty": "ord_rec_qty",
+                "auto_ord_yn": "auto_ord_yn",
+                "ord_grp_nm": "ord_grp_nm",
+            },
+        }
+        return default_columns_by_table.get(table_name, {})
 
     @staticmethod
     def _pick_column(columns: dict[str, str], candidates: tuple[str, ...]) -> str | None:
@@ -1539,7 +1523,95 @@ class OrderingRepository:
         except SQLAlchemyError:
             return []
 
+    def _build_options_from_store_cache(
+        self,
+        *,
+        cache_path: Path,
+        store_id: str | None = None,
+        reference_date: str | None = None,
+    ) -> list[dict]:
+        basis_dates = self._build_recommendation_basis_dates(reference_date)
+        labels = ["지난주 같은 요일", "2주 전 같은 요일", "지난달 같은 요일"]
+        descriptions = [
+            "가장 최근 주문 데이터 기준이에요. 오늘 운영에 바로 참고할 수 있습니다.",
+            "행사나 이벤트 영향이 적은 비교 기준이에요. 무난한 기준입니다.",
+            "시즌성과 채널 변동을 함께 반영한 비교 기준이에요.",
+        ]
+        notes_map = [
+            ["최근 주문 수량이 가장 높은 SKU를 우선 반영했어요", "주문 회전이 빠른 품목 중심으로 정리했어요"],
+            ["주문 변동성이 낮은 날짜를 참고했어요", "재고 리스크를 낮추는 쪽으로 정리했어요"],
+            ["수요가 조금 높았던 날을 반영했어요", "배달/온라인 유입 증가 가능성을 고려했어요"],
+        ]
+        try:
+            with sqlite3.connect(cache_path) as connection:
+                connection.row_factory = sqlite3.Row
+                options: list[dict] = []
+                for date_idx, date_value in enumerate(basis_dates[:3]):
+                    where_clauses = ["REPLACE(CAST(dlv_dt AS TEXT), '-', '') = ?"]
+                    params: list[object] = [str(date_value)]
+                    if store_id:
+                        where_clauses.append("store_id = ?")
+                        params.append(store_id)
+                    rows = connection.execute(
+                        f"""
+                        SELECT
+                            CAST(item_nm AS TEXT) AS item_name,
+                            CAST(item_cd AS TEXT) AS item_code,
+                            ROUND(SUM(COALESCE(ord_qty, 0))) AS quantity
+                        FROM order_history
+                        WHERE {' AND '.join(where_clauses)}
+                        GROUP BY CAST(item_nm AS TEXT), CAST(item_cd AS TEXT)
+                        """,
+                        params,
+                    ).fetchall()
+                    aggregated = self._aggregate_option_rows(rows)
+                    if not aggregated:
+                        continue
+                    items, calc_metrics = self._build_adjusted_option_items(
+                        aggregated=aggregated,
+                        store_id=store_id,
+                    )
+                    if date_idx == 0 and items:
+                        items[0]["note"] = "추천 상위 SKU"
+                    raw_notes = notes_map[date_idx] if date_idx < len(notes_map) else None
+                    reasoning_metrics: list[dict] = [
+                        {"key": "기준일", "value": self._format_basis_date(date_value)},
+                        {"key": "보정 전 주문량", "value": f"{int(round(calc_metrics['total_base_qty']))}개"},
+                        {"key": "추천 주문량", "value": f"{int(round(calc_metrics['total_adjusted_qty']))}개"},
+                    ]
+                    options.append(
+                        {
+                            "option_id": f"opt-{chr(97 + date_idx)}",
+                            "title": labels[date_idx],
+                            "basis": self._format_basis_date(date_value),
+                            "description": f"{descriptions[date_idx]} 최근 7일 판매/재고/유통기한을 반영해 수량을 조정했습니다.",
+                            "recommended": date_idx == 0,
+                            "reasoning_text": raw_notes[0] if raw_notes else "",
+                            "reasoning_metrics": reasoning_metrics,
+                            "special_factors": [
+                                *(raw_notes[1:] if raw_notes else []),
+                                "최근 7일 판매 추세 반영",
+                                "현재 재고 커버리지 반영",
+                                "유통기한 폐기 리스크 반영",
+                            ],
+                            "items": items,
+                        }
+                    )
+                return options
+        except sqlite3.Error:
+            return []
+
     async def list_options(self, store_id: str | None = None, reference_date: str | None = None) -> list[dict]:
+        cache_path = self._resolve_store_cache_db_path(store_id)
+        if cache_path is not None:
+            cache_options = self._build_options_from_store_cache(
+                cache_path=cache_path,
+                store_id=store_id,
+                reference_date=reference_date,
+            )
+            if cache_options:
+                return cache_options
+
         relation = self._resolve_ordering_relation(store_id)
         if self.engine and has_table(self.engine, relation):
             options = self._build_options_from_relation(
@@ -1926,8 +1998,6 @@ class OrderingRepository:
         if not self.engine or not store_id:
             return []
         relation = self._resolve_ordering_relation(store_id)
-        if not has_table(self.engine, relation):
-            return []
         columns = self._table_columns(relation)
         store_column = self._pick_column(columns, ("masked_stor_cd", "store_id", "stor_cd"))
         date_column = self._pick_column(columns, ("dlv_dt", "ord_dt", "sale_dt"))
@@ -1994,15 +2064,20 @@ class OrderingRepository:
                     "sku_name": sku_name,
                     "deadline_at": self._DEFAULT_DEADLINE_TIME,
                     "is_ordered": bool(include_same_day and int(row.get("ordered_today") or 0) > 0),
+                    "_latest_dlv_dt": str(row.get("latest_dlv_dt") or ""),
+                    "_total_ord_qty": self._safe_int(row.get("total_ord_qty") or 0),
                 }
             )
         items.sort(
             key=lambda item: (
                 bool(item.get("is_ordered")),
-                str(item.get("deadline_at") or ""),
+                -self._safe_int(item.get("_latest_dlv_dt")),
+                -self._safe_int(item.get("_total_ord_qty")),
                 str(item.get("sku_name") or ""),
             )
         )
         for index, item in enumerate(items, start=1):
             item["id"] = f"deadline-{index}"
+            item.pop("_latest_dlv_dt", None)
+            item.pop("_total_ord_qty", None)
         return items

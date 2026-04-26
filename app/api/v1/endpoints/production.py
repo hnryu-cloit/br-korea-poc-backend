@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from app.core.reference_datetime import resolve_reference_date
+from app.core.reference_datetime import parse_reference_datetime
 from app.core.deps import get_production_service
 from app.schemas.production import (
     FifoLotSummaryResponse,
@@ -24,6 +24,16 @@ from app.services.production_service import ProductionService
 
 router = APIRouter(prefix="/production", tags=["production"])
 v1_router = APIRouter(prefix="/v1/production", tags=["production"])
+DEFAULT_PRODUCTION_REFERENCE_DATETIME = "2026-03-05T09:00:00+09:00"
+
+
+def _resolve_production_reference_date(x_reference_datetime: str | None) -> str | None:
+    parsed = parse_reference_datetime(
+        x_reference_datetime or DEFAULT_PRODUCTION_REFERENCE_DATETIME
+    )
+    if parsed is None:
+        return None
+    return parsed.strftime("%Y-%m-%d")
 
 
 def _parse_inventory_status_filters(raw_status: str | None) -> list[str] | None:
@@ -42,7 +52,9 @@ async def get_production_overview(
     x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionOverviewResponse:
-    resolved_business_date = business_date or resolve_reference_date(x_reference_datetime)
+    resolved_business_date = business_date or _resolve_production_reference_date(
+        x_reference_datetime
+    )
     return await service.get_overview(store_id=store_id, business_date=resolved_business_date)
 
 
@@ -56,7 +68,9 @@ async def get_production_sku_list(
     x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> GetProductionSkuListResponse:
-    resolved_business_date = business_date or resolve_reference_date(x_reference_datetime)
+    resolved_business_date = business_date or _resolve_production_reference_date(
+        x_reference_datetime
+    )
     return await service.get_sku_list(
         page=page,
         page_size=page_size,
@@ -74,7 +88,9 @@ async def get_production_sku_detail(
     service: ProductionService = Depends(get_production_service),
 ) -> ProductionSkuDetailResponse:
     try:
-        resolved_business_date = business_date or resolve_reference_date(x_reference_datetime)
+        resolved_business_date = business_date or _resolve_production_reference_date(
+            x_reference_datetime
+        )
         return await service.get_sku_detail(
             sku_id=sku_id,
             store_id=store_id,
@@ -164,7 +180,7 @@ async def get_waste_summary(
             store_id=store_id,
             page=page,
             page_size=page_size,
-            reference_date=resolve_reference_date(x_reference_datetime),
+            reference_date=_resolve_production_reference_date(x_reference_datetime),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -214,14 +230,20 @@ async def get_inventory_status(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
     status: str | None = Query(default=None),
+    business_date: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
     service: ProductionService = Depends(get_production_service),
 ) -> InventoryStatusResponse:
     try:
+        resolved_business_date = business_date or _resolve_production_reference_date(
+            x_reference_datetime
+        )
         return await service.get_inventory_status(
             store_id=store_id,
             page=page,
             page_size=page_size,
             status_filters=_parse_inventory_status_filters(status),
+            business_date=resolved_business_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

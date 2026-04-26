@@ -644,7 +644,7 @@ class CampaignRepositoryMixin:
         """mart_campaign_effect_daily 기반 활성/비활성 캠페인 효과 페이로드 산출.
 
         - 기준 기간(date_from~date_to) 내 mart 행이 있으면 '진행 중' 모드.
-        - 기간 내 행이 없으면 종료 직후 가장 최근 90일치 캠페인을 조회해 '비활성' 모드 반환.
+        - 기간 내 행이 없으면 폴백 조회 없이 단일 안내 페이로드(no_active=True) 반환.
         """
         if not self.engine:
             return None
@@ -659,18 +659,33 @@ class CampaignRepositoryMixin:
             return None
 
         active_rows = self._fetch_mart_window(normalized_from, normalized_to)
-        no_active = not active_rows
         window_label_from = normalized_from
         window_label_to = normalized_to
-        if no_active:
-            # 폴백: 가장 최근 90일 캠페인 활동 보여주기
-            fallback_to = self._fetch_latest_mart_dt() or normalized_to
-            fallback_from = self._shift_yyyymmdd(fallback_to, -89)
-            active_rows = self._fetch_mart_window(fallback_from, fallback_to)
-            window_label_from = fallback_from
-            window_label_to = fallback_to
         if not active_rows:
-            return None
+            return {
+                "campaign_code": "-",
+                "campaign_name": "진행 중 캠페인 없음",
+                "benefit_type": "기준 기간 내 활성 캠페인 부재",
+                "discount_cost": 0,
+                "uplift_revenue": 0,
+                "roi_pct": 0.0,
+                "payback_days": None,
+                "active_campaign_count": 0,
+                "no_active_campaigns": True,
+                "avg_lift_ratio": 0.0,
+                "total_sales_during": 0,
+                "top_campaigns": [],
+                "window_from": window_label_from,
+                "window_to": window_label_to,
+                "periods": [
+                    {
+                        "label": "기간 내 캠페인 매출",
+                        "start_date": self._fmt_yyyymmdd(window_label_from),
+                        "end_date": self._fmt_yyyymmdd(window_label_to),
+                        "revenue": 0,
+                    }
+                ],
+            }
 
         # 캠페인 단위 집계
         by_campaign: dict[str, dict] = {}
@@ -743,23 +758,25 @@ class CampaignRepositoryMixin:
             for c in ranked[:5]
         ]
 
-        if no_active:
-            campaign_name = f"진행 중 캠페인 없음 (최근 90일 {active_count}건 참고)"
-        elif active_count == 1 and top:
+        if active_count == 1 and top:
             campaign_name = top["cpi_nm"]
         else:
-            campaign_name = f"{active_count}건 진행 중 (대표: {top['cpi_nm']})" if top else f"{active_count}건"
+            campaign_name = (
+                f"{active_count}건 진행 중 (대표: {top['cpi_nm']})"
+                if top
+                else f"{active_count}건"
+            )
 
         return {
             "campaign_code": top["cpi_cd"] if top else "-",
             "campaign_name": campaign_name,
-            "benefit_type": "기간 내 캠페인 통합" if not no_active else "최근 캠페인 통합",
+            "benefit_type": "기간 내 캠페인 통합",
             "discount_cost": round(total_dc, 0),
             "uplift_revenue": round(total_sales - total_dc, 0),
             "roi_pct": roi_pct,
             "payback_days": None,
             "active_campaign_count": active_count,
-            "no_active_campaigns": no_active,
+            "no_active_campaigns": False,
             "avg_lift_ratio": round(avg_lift, 4),
             "total_sales_during": round(total_sales, 0),
             "top_campaigns": top_campaigns,

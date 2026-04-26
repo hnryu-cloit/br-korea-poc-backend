@@ -70,17 +70,13 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
 
         try:
             with self.engine.connect() as connection:
-                # 2. 필터 내 최소/최대 날짜 조회
+                # 2. 필터 내 최신 날짜 조회
                 date_bounds_row = (
                     connection.execute(
                         text(
-                            f"""
-                            SELECT
-                                MIN(sale_dt) AS min_dt,
-                                MAX(sale_dt) AS max_dt
-                            FROM {item_relation}
-                            WHERE sale_dt IS NOT NULL {store_filter}
-                            """
+                            f"SELECT MAX(sale_dt) AS max_dt "
+                            f"FROM {item_relation} "
+                            f"WHERE sale_dt IS NOT NULL {store_filter}"
                         ),
                         params,
                     )
@@ -165,10 +161,9 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                         )
 
                 # 4. 선택 기간 전체 일자별 집계
-                weekly_rows = (
-                    connection.execute(
-                        text(
-                            f"""
+                if normalized_date_from or normalized_date_to:
+                    weekly_query = text(
+                        f"""
                         SELECT
                             sale_dt,
                             COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
@@ -178,11 +173,31 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                         GROUP BY sale_dt
                         ORDER BY sale_dt ASC
                         """
-                        ),
-                        params,
                     )
-                    .mappings()
-                    .all()
+                else:
+                    weekly_query = text(
+                        f"""
+                        WITH recent_dates AS (
+                            SELECT sale_dt
+                            FROM {item_relation}
+                            WHERE sale_dt IS NOT NULL {store_filter}
+                            GROUP BY sale_dt
+                            ORDER BY sale_dt DESC
+                            LIMIT 7
+                        )
+                        SELECT
+                            i.sale_dt,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(i.{amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(i.{net_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS net_revenue
+                        FROM {item_relation} i
+                        JOIN recent_dates d ON i.sale_dt = d.sale_dt
+                        WHERE 1=1 {store_filter}
+                        GROUP BY i.sale_dt
+                        ORDER BY i.sale_dt ASC
+                        """
+                    )
+                weekly_rows = (
+                    connection.execute(weekly_query, params).mappings().all()
                 )
 
                 result["weekly_data"] = [

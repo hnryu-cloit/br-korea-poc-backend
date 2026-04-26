@@ -34,7 +34,7 @@ from app.services.audit_service import AuditService
 from app.services.explainability_service import create_ready_payload
 
 _KST = timezone(timedelta(hours=9))
-_DEFAULT_DEADLINE_HOUR = 12
+_DEFAULT_DEADLINE_HOUR = 14
 _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
 _DEFAULT_ORDERING_STORE_ID = "POC_010"
@@ -228,7 +228,10 @@ class OrderingService:
     async def _get_ai_deadline_alert(self, store_id: str) -> dict | None:
         if not self.ai_client:
             return None
-        return await self.ai_client.get_ordering_deadline_alert(store_id)
+        get_ordering_deadline_alert = getattr(self.ai_client, "get_ordering_deadline_alert", None)
+        if not callable(get_ordering_deadline_alert):
+            return None
+        return await get_ordering_deadline_alert(store_id)
 
     async def get_deadline_alerts_batch(self, store_ids: list[str]) -> list[dict]:
         """여러 매장의 주문 마감 알림을 일괄 조회합니다."""
@@ -312,12 +315,15 @@ class OrderingService:
         self,
         notification_entry: bool = False,
         store_id: str | None = None,
-        skip_ai: bool = False,
+        skip_ai: bool = True,
         reference_datetime: datetime | None = None,
     ) -> OrderingOptionsResponse:
         normalized_store_id = (store_id or _DEFAULT_ORDERING_STORE_ID).strip() or _DEFAULT_ORDERING_STORE_ID
         business_date = self._today_kst(reference_datetime)
-        options = await self.repository.list_options(store_id=normalized_store_id)
+        options = await self.repository.list_options(
+            store_id=normalized_store_id,
+            reference_date=business_date,
+        )
         arrival_schedule = None
         get_order_arrival_schedule = getattr(self.repository, "get_order_arrival_schedule", None)
         if callable(get_order_arrival_schedule):
@@ -330,10 +336,6 @@ class OrderingService:
             ).strip(),
             "option_summaries": self._build_ai_option_summaries(options),
         }
-        options = await self.repository.list_options(
-            store_id=normalized_store_id,
-            reference_date=business_date,
-        )
         use_ai_ordering = not skip_ai and not self.repository.uses_ordering_join_table(normalized_store_id)
         ai_payload = (
             None
@@ -387,6 +389,8 @@ class OrderingService:
                 sku_id = str(item.get("sku_id") or "").strip()
                 sku_name = str(item.get("sku_name") or "").strip()
                 arrival = schedule_map.get(sku_id) or schedule_map.get(sku_name)
+                if arrival is None:
+                    arrival = arrival_schedule
                 shelf_life_days = shelf_life_map.get(sku_id)
                 if shelf_life_days is None:
                     shelf_life_days = shelf_life_map.get(sku_name)
@@ -407,6 +411,8 @@ class OrderingService:
                 if not sku_name:
                     continue
                 arrival = schedule_map.get(sku_id) or schedule_map.get(sku_name)
+                if arrival is None:
+                    arrival = arrival_schedule
                 deadline_label = self._extract_deadline_label(
                     note=self._safe_str(item.get("note")),
                     arrival=arrival,
@@ -431,10 +437,13 @@ class OrderingService:
         purpose_text = "주문 누락을 방지하고 최적 수량을 선택하세요."
         caution_text = "최종 주문 결정은 점주 권한입니다. 추천 옵션은 보조 자료로만 활용해주세요."
         weather: OrderingWeather | None = None
-        trend_summary = self.repository.get_ordering_trend_summary(
-            store_id=normalized_store_id,
-            reference_date=business_date,
-        )
+        trend_summary = None
+        get_ordering_trend_summary = getattr(self.repository, "get_ordering_trend_summary", None)
+        if callable(get_ordering_trend_summary):
+            trend_summary = get_ordering_trend_summary(
+                store_id=normalized_store_id,
+                reference_date=business_date,
+            )
 
         if ai_payload:
             _dv = ai_payload.get("deadline_minutes")
@@ -470,10 +479,14 @@ class OrderingService:
             deadline = await self.get_deadline(store_id=normalized_store_id, reference_datetime=reference_datetime)
             deadline_at = deadline["deadline"]
             deadline_minutes = deadline["minutes_remaining"]
-        deadline_items = self.repository.get_deadline_items(
-            store_id=normalized_store_id,
-            reference_datetime=reference_datetime,
-        )
+        get_deadline_items = getattr(self.repository, "get_deadline_items", None)
+        if callable(get_deadline_items):
+            resolved_deadline_items = get_deadline_items(
+                store_id=normalized_store_id,
+                reference_datetime=reference_datetime,
+            )
+            if resolved_deadline_items:
+                deadline_items = resolved_deadline_items
 
         return OrderingOptionsResponse(
             deadline_minutes=deadline_minutes,
@@ -596,7 +609,7 @@ class OrderingService:
         schedule_deadline = self._parse_deadline_time(
             self._safe_str((arrival_schedule or {}).get("order_deadline_at"))
         )
-        if schedule_deadline is not None:
+        if schedule_deadline is not None and store_id == _DEFAULT_ORDERING_STORE_ID:
             deadline_hour, deadline_minute = schedule_deadline
 
         now = reference_datetime or _now_kst()

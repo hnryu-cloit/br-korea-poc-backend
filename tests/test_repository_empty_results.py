@@ -633,9 +633,50 @@ async def test_ordering_service_list_options_falls_back_to_store_deadline_items(
 
 
 def test_ordering_repository_get_order_arrival_schedule_map_uses_deterministic_ranking(monkeypatch) -> None:
+    class _FakeOrderArrivalScheduleConnection:
+        def __init__(self) -> None:
+            self.executed_sql: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement, params=None):
+            self.executed_sql.append(str(statement))
+            return _FakeMappingsResult(
+                all_rows=[
+                    {
+                        "item_cd": "700611",
+                        "item_nm": "Bagel",
+                        "order_deadline_at": "12:00",
+                        "arrival_day_offset": "D+1",
+                        "arrival_expected_at": "11:00",
+                        "arrival_bucket": "오전",
+                    }
+                ]
+            )
+
+    class _FakeOrderArrivalScheduleEngine:
+        def __init__(self, connection: _FakeOrderArrivalScheduleConnection) -> None:
+            self._connection = connection
+
+        def connect(self):
+            return self._connection
+
     connection = _FakeOrderArrivalScheduleConnection()
     repository = OrderingRepository(engine=_FakeOrderArrivalScheduleEngine(connection))
     monkeypatch.setattr(ordering_repository_module, "has_table", lambda engine, table_name: table_name == "raw_order_arrival_schedule")
+    result = repository.get_order_arrival_schedule_map(
+        store_id="POC_010",
+        item_codes=["700611"],
+        item_names=["Bagel"],
+    )
+
+    assert result["700611"]["order_deadline_at"] == "12:00"
+    assert result["Bagel"]["arrival_day_offset"] == "D+1"
+    assert "ROW_NUMBER() OVER" in connection.executed_sql[0]
 
 
 def test_ordering_repository_history_prefers_store_cache() -> None:

@@ -63,6 +63,16 @@ def create_ready_payload(
     evidence: list[str] | None = None,
 ) -> ExplainabilityPayload:
     norm_actions, norm_evidence = ensure_non_empty_actions_evidence(actions, evidence)
+    cached = _CACHE.get(trace_id)
+    if isinstance(cached, dict):
+        cached_actions = cached.get("actions") if isinstance(cached.get("actions"), list) else []
+        cached_evidence = cached.get("evidence") if isinstance(cached.get("evidence"), list) else []
+        if (
+            cached.get("status") == "ready"
+            and cached_actions == norm_actions
+            and cached_evidence == norm_evidence
+        ):
+            return ExplainabilityPayload(**cached)
     payload = ExplainabilityPayload(
         status="ready",
         trace_id=trace_id,

@@ -77,12 +77,15 @@ class AnalyticsService:
         metrics_data = await self.repository.get_metrics(
             store_id=store_id, date_from=date_from, date_to=date_to
         )
+        if isinstance(metrics_data, list):
+            return AnalyticsMetricsResponse(items=[])
         response_items = [AnalyticsMetric(**item) for item in metrics_data["items"]]
+        trace_store_id = metrics_data.get("resolved_store_id", store_id)
         return AnalyticsMetricsResponse(
             items=response_items,
             selected_period_total_sales=metrics_data.get("selected_period_total_sales"),
             explainability=create_ready_payload(
-                trace_id=f"analytics-metrics-{store_id or 'all'}",
+                trace_id=f"analytics-metrics-{trace_store_id or 'all'}",
                 actions=["지표 변동이 큰 항목 1개를 선택해 오늘 운영 액션으로 연결하세요."],
                 evidence=[f"조회 지표 수: {len(response_items)}"],
             ),
@@ -356,9 +359,6 @@ class AnalyticsService:
         quarter: str | None = None,
         radius_m: int | None = None,
     ) -> MarketInsightsResponse:
-        if not self.ai_client:
-            raise RuntimeError("상권 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
-
         market = self.get_market_intelligence(
             store_id=store_id,
             gu=gu,
@@ -425,9 +425,6 @@ class AnalyticsService:
         radius_m: int | None = None,
         limit: int = 20,
     ) -> HQMarketInsightsResponse:
-        if not self.ai_client:
-            raise RuntimeError("상권 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
-
         store_rows = self.repository.list_store_candidates(limit=limit)
         branch_snapshots: list[dict] = []
         for row in store_rows:
@@ -575,17 +572,94 @@ class AnalyticsService:
         store_name: str | None,
     ) -> dict:
         if not self.ai_client:
-            raise RuntimeError("상권 인사이트 생성용 AI 클라이언트가 설정되지 않았습니다.")
-        ai_result = await self.ai_client.generate_market_insights(
+            return self._build_market_insights_fallback(
+                audience=audience,
+                scope=scope,
+                market_data=market_data,
+                branch_snapshots=branch_snapshots,
+                store_name=store_name,
+            )
+
+        try:
+            ai_result = await self.ai_client.generate_market_insights(
+                audience=audience,
+                scope=scope,
+                market_data=market_data,
+                branch_snapshots=branch_snapshots,
+                store_name=store_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("상권 인사이트 생성 실패(폴백 사용): %s", exc)
+            return self._build_market_insights_fallback(
+                audience=audience,
+                scope=scope,
+                market_data=market_data,
+                branch_snapshots=branch_snapshots,
+                store_name=store_name,
+            )
+
+        if isinstance(ai_result, dict):
+            return ai_result
+        logger.warning("상권 인사이트 응답 타입 오류(dict 아님), 폴백 사용")
+        return self._build_market_insights_fallback(
             audience=audience,
             scope=scope,
             market_data=market_data,
             branch_snapshots=branch_snapshots,
             store_name=store_name,
         )
-        if not isinstance(ai_result, dict):
-            raise RuntimeError("상권 인사이트 생성에 실패했습니다.")
-        return ai_result
+
+    @staticmethod
+    def _build_market_insights_fallback(
+        *,
+        audience: str,
+        scope: dict,
+        market_data: dict,
+        branch_snapshots: list[dict],
+        store_name: str | None,
+    ) -> dict:
+        summary = "AI 응답 지연으로 기본 상권 인사이트를 제공합니다."
+        if store_name:
+            summary = f"{store_name} 기준으로 {summary}"
+        return {
+            "executive_summary": summary,
+            "key_insights": [
+                {
+                    "title": "최근 데이터 우선 점검",
+                    "description": "최근 7일 매출/유동인구 추이를 우선 확인해 운영 변동을 파악하세요.",
+                    "impact": "medium",
+                }
+            ],
+            "risk_warnings": [
+                {
+                    "title": "외부 생성 장애",
+                    "description": "실시간 AI 생성이 불가해 기본 규칙 기반 요약을 반환했습니다.",
+                    "mitigation": "잠시 후 동일 조건으로 다시 조회하세요.",
+                }
+            ],
+            "action_plan": [
+                {
+                    "priority": 1,
+                    "title": "핵심 지표 점검",
+                    "action": "매출, 주말 비중, 경쟁점 수를 확인하고 이번 주 운영 계획을 재조정합니다.",
+                    "expected_effect": "단기 운영 의사결정 지연을 줄입니다.",
+                }
+            ],
+            "branch_scoreboard": (
+                [
+                    AnalyticsService._to_branch_score(item).model_dump()
+                    for item in branch_snapshots
+                ]
+                if audience == "hq_admin"
+                else []
+            ),
+            "report_markdown": "",
+            "evidence_refs": [
+                f"scope={json.dumps(scope, ensure_ascii=False, sort_keys=True)}",
+                f"branch_count={len(branch_snapshots)}",
+                f"has_estimated_sales={'estimated_sales_summary' in market_data}",
+            ],
+        }
 
     def _schedule_market_insights_refresh(
         self,

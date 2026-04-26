@@ -1190,12 +1190,15 @@ class ProductionRepository(BaseRepository):
         self,
         *,
         store_id: str | None,
-        reference_date: str | None,
+        reference_date: str | None = None,
+        business_date: str | None = None,
         window_days: int = 7,
     ) -> set[str]:
         if not self.engine or not has_table(self.engine, "raw_daily_store_item"):
             return set()
-        target_dt = datetime.strptime(self._normalize_reference_date(reference_date), "%Y%m%d").date()
+        target_dt = datetime.strptime(
+            self._normalize_reference_date(business_date or reference_date), "%Y%m%d"
+        ).date()
         date_from = (target_dt - timedelta(days=window_days - 1)).strftime("%Y%m%d")
         store_filter_sql = "AND CAST(masked_stor_cd AS TEXT) = :store_id" if store_id else ""
         try:
@@ -1233,12 +1236,15 @@ class ProductionRepository(BaseRepository):
         self,
         *,
         store_id: str | None,
-        reference_date: str | None,
+        reference_date: str | None = None,
+        business_date: str | None = None,
         window_days: int = 7,
     ) -> set[str]:
         if not self.engine or not has_table(self.engine, "raw_production_extract"):
             return set()
-        target_dt = datetime.strptime(self._normalize_reference_date(reference_date), "%Y%m%d").date()
+        target_dt = datetime.strptime(
+            self._normalize_reference_date(business_date or reference_date), "%Y%m%d"
+        ).date()
         date_from = (target_dt - timedelta(days=window_days - 1)).strftime("%Y%m%d")
         store_filter_sql = "AND CAST(masked_stor_cd AS TEXT) = :store_id" if store_id else ""
         try:
@@ -1304,18 +1310,181 @@ class ProductionRepository(BaseRepository):
             return set()
         return {str(row).strip() for row in rows if str(row or "").strip()}
 
+    def _fetch_store_production_item_keys(self, store_id: str | None) -> set[str]:
+        return self._fetch_direct_production_item_keys(store_id=store_id)
+
+    def _list_items_from_mart_production_status(
+        self,
+        store_id: str | None,
+        business_date: str | None,
+    ) -> list[dict]:
+        return []
+
+    def _list_items_from_prediction_snapshot(
+        self,
+        store_id: str | None,
+        business_date: str | None,
+    ) -> list[dict]:
+        if (
+            not self.engine
+            or not has_table(self.engine, "production_prediction_snapshots")
+            or not has_table(self.engine, "production_prediction_snapshot_items")
+        ):
+            return []
+        if not hasattr(self.engine, "connect"):
+            return []
+        normalized_business_date = (
+            str(business_date).replace("-", "").strip() if business_date else None
+        )
+        try:
+            with self.engine.connect() as connection:
+                snapshot = None
+                if normalized_business_date:
+                    snapshot = (
+                        connection.execute(
+                            text(
+                                """
+                                SELECT id, target_hour, business_date
+                                FROM production_prediction_snapshots
+                                WHERE masked_stor_cd = :store_id
+                                  AND business_date = :business_date
+                                  AND status = 'completed'
+                                ORDER BY created_at DESC
+                                LIMIT 1
+                                """
+                            ),
+                            {
+                                "store_id": store_id,
+                                "business_date": normalized_business_date,
+                            },
+                        )
+                        .mappings()
+                        .first()
+                    )
+                if not snapshot:
+                    snapshot = (
+                        connection.execute(
+                            text(
+                                """
+                                SELECT id, target_hour, business_date
+                                FROM production_prediction_snapshots
+                                WHERE masked_stor_cd = :store_id
+                                  AND status = 'completed'
+                                ORDER BY business_date DESC, target_hour DESC, created_at DESC
+                                LIMIT 1
+                                """
+                            ),
+                            {"store_id": store_id},
+                        )
+                        .mappings()
+                        .first()
+                    )
+                if not snapshot:
+                    return []
+                rows = (
+                    connection.execute(
+                        text(
+                            """
+                            SELECT
+                                sku_id,
+                                name,
+                                current_stock,
+                                predicted_stock_1h,
+                                forecast_baseline,
+                                recommended_production_qty,
+                                avg_first_production_qty_4w,
+                                avg_first_production_time_4w,
+                                avg_second_production_qty_4w,
+                                avg_second_production_time_4w,
+                                order_confirm_qty,
+                                hourly_sale_qty,
+                                status,
+                                depletion_time,
+                                stockout_expected_at,
+                                alert_message,
+                                confidence,
+                                chance_loss_qty,
+                                chance_loss_amt,
+                                chance_loss_reduction_pct
+                            FROM production_prediction_snapshot_items
+                            WHERE snapshot_id = :snapshot_id
+                            ORDER BY sku_id
+                            """
+                        ),
+                        {"snapshot_id": int(snapshot.get("id") or 0)},
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return []
+
+        items: list[dict] = []
+        for row in rows:
+            first_qty = self._safe_non_negative_int(row.get("avg_first_production_qty_4w"))
+            second_qty = self._safe_non_negative_int(row.get("avg_second_production_qty_4w"))
+            first_time = str(row.get("avg_first_production_time_4w") or "08:00")
+            second_time = str(row.get("avg_second_production_time_4w") or "14:00")
+            items.append(
+                {
+                    "sku_id": str(row.get("sku_id") or ""),
+                    "name": str(row.get("name") or ""),
+                    "current": self._safe_non_negative_int(row.get("current_stock")),
+                    "forecast": self._safe_int(row.get("predicted_stock_1h")),
+                    "order_confirm_qty": self._safe_non_negative_int(row.get("order_confirm_qty")),
+                    "hourly_sale_qty": self._safe_non_negative_int(row.get("hourly_sale_qty")),
+                    "status": str(row.get("status") or "normal"),
+                    "depletion_time": str(row.get("depletion_time") or "-"),
+                    "recommended": self._safe_non_negative_int(row.get("recommended_production_qty")),
+                    "prod1": f"{first_time} / {first_qty}개",
+                    "prod2": f"{second_time} / {second_qty}개",
+                    "stockout_expected_at": str(row.get("stockout_expected_at") or ""),
+                    "alert_message": str(row.get("alert_message") or ""),
+                    "confidence": self._safe_float(row.get("confidence")),
+                    "chance_loss_qty": self._safe_float(row.get("chance_loss_qty")),
+                    "chance_loss_amt": self._safe_float(row.get("chance_loss_amt")),
+                    "chance_loss_reduction_pct": self._safe_float(row.get("chance_loss_reduction_pct")),
+                    "snapshot_business_date": str(snapshot.get("business_date") or ""),
+                    "snapshot_target_hour": self._safe_int(snapshot.get("target_hour")),
+                }
+            )
+        return items
+
     async def list_items(
         self,
         store_id: str | None = None,
         business_date: str | None = None,
         reference_datetime: datetime | None = None,
     ) -> list[dict]:
+        mart_items = self._list_items_from_mart_production_status(
+            store_id=store_id,
+            business_date=business_date,
+        )
+        if mart_items:
+            return mart_items
+
+        snapshot_items = self._list_items_from_prediction_snapshot(
+            store_id=store_id,
+            business_date=business_date,
+        )
+        if snapshot_items:
+            return snapshot_items
+
         production_map: dict[str, dict[str, object]] = {}
         secondary_map: dict[str, dict[str, object]] = {}
         stock_map: dict[str, dict[str, object]] = {}
         sale_map: dict[str, dict[str, object]] = {}
         order_confirm_map: dict[str, dict[str, object]] = {}
         hourly_sale_map: dict[str, dict[str, object]] = {}
+
+        production_reference_date = business_date
+        if business_date:
+            try:
+                production_reference_date = (
+                    datetime.strptime(business_date, "%Y-%m-%d") - timedelta(days=1)
+                ).strftime("%Y%m%d")
+            except ValueError:
+                production_reference_date = business_date
 
         if self.engine and has_table(self.engine, "raw_production_extract"):
             # 4주(28일) 발생일 기준 일평균 수량 집계
@@ -1327,7 +1496,7 @@ class ProductionRepository(BaseRepository):
                 ("prod_qty",),
                 store_id=store_id,
                 window_days=28,
-                reference_date=business_date,
+                reference_date=production_reference_date,
             )
             secondary_map = self._fetch_metric_map(
                 "raw_production_extract",
@@ -1337,7 +1506,7 @@ class ProductionRepository(BaseRepository):
                 ("prod_qty_2", "reprod_qty", "prod_qty_3"),
                 store_id=store_id,
                 window_days=28,
-                reference_date=business_date,
+                reference_date=production_reference_date,
             )
         else:
             logger.warning(
@@ -1380,7 +1549,7 @@ class ProductionRepository(BaseRepository):
                 reference_date=business_date,
             )
 
-        if self.engine and has_table(self.engine, "raw_order_extract"):
+        if self.engine and has_table(self.engine, "raw_order_extract") and not business_date:
             order_confirm_map = self._fetch_metric_map(
                 "raw_order_extract",
                 ("dlv_dt",),
@@ -1406,13 +1575,13 @@ class ProductionRepository(BaseRepository):
 
         recent_production_keys = self._fetch_recent_production_item_keys(
             store_id=store_id,
-            reference_date=business_date,
+            business_date=business_date,
         )
         recent_sales_keys = self._fetch_recent_sales_item_keys(
             store_id=store_id,
-            reference_date=business_date,
+            business_date=business_date,
         )
-        direct_production_keys = self._fetch_direct_production_item_keys(store_id=store_id)
+        direct_production_keys = self._fetch_store_production_item_keys(store_id)
 
         active_keys = recent_production_keys | (recent_sales_keys & direct_production_keys)
         if not active_keys:
@@ -1945,7 +2114,7 @@ class ProductionRepository(BaseRepository):
                            AND sr.item_cd = st.item_cd
                            AND sr.prc_dt = st.prc_dt
                         WHERE sr.masked_stor_cd = :store_id
-                          AND (:business_date IS NULL OR sr.prc_dt <= :business_date)
+                          AND (CAST(:business_date AS TEXT) IS NULL OR sr.prc_dt <= :business_date)
                         ORDER BY sr.item_cd, sr.prc_dt DESC
                     ),
                     filtered AS (
