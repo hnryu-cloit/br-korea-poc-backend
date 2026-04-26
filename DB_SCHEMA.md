@@ -8,6 +8,12 @@
 - 본 세션은 프론트 본사 설정 화면(`Settings Page v3`) 개편 작업으로, 백엔드 DB 스키마 변경은 없습니다.
 - 따라서 `db/migrations/*` 신규 추가/수정 없이 기존 스키마를 유지합니다.
 
+## Session Update (2026-04-26, golden-queries 표시라벨 컬럼)
+
+- `docs/golden-queries.csv`(최종 116건)에 `표시라벨` 컬럼을 추가했습니다. 위치는 `에이전트` 다음입니다.
+- 매출/생산/주문 도메인별 5건씩 총 15건에 짧은 의문형 라벨을 채웠고, 나머지 행은 빈 값입니다. 빈 라벨은 추천 칩 후보에서 자동 제외됩니다.
+- 본 세션에서 DB 마이그레이션 변경은 없으며, 기존 스키마를 그대로 사용합니다. CSV 외 다른 컬럼/필드 의미는 변경되지 않아 AI `golden_query_resolver._load_candidates()` 의 필드 기반 접근에 영향이 없습니다.
+
 ## Session Update (2026-04-23)
 
 - 점주 관점 골든쿼리 문서 자산 `docs/golden-queries-store-owner.csv`를 추가했습니다.
