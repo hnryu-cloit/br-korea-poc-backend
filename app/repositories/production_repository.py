@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 import logging
+import re
+import unicodedata
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
@@ -482,6 +484,14 @@ class ProductionRepository(BaseRepository):
         return item_cd_text or item_nm_text
 
     @staticmethod
+    def _normalize_menu_name_key(value: object) -> str:
+        normalized = unicodedata.normalize("NFKC", str(value or ""))
+        normalized = normalized.replace("\xa0", " ").strip()
+        normalized = re.sub(r"^\[JBOD\]\s*", "", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized.lower()
+
+    @staticmethod
     def _expand_item_keys(item_cd: object, item_nm: object) -> set[str]:
         keys = {str(item_cd or "").strip(), str(item_nm or "").strip()}
         return {key for key in keys if key}
@@ -614,7 +624,12 @@ class ProductionRepository(BaseRepository):
                 continue
             item_nm = item_name_by_key.get(item_key, item_key)
             item_cd = item_cd_by_key.get(item_key, item_key)
-            avg_cost = cls._safe_float(unit_price_map.get(item_cd) or unit_price_map.get(item_nm))
+            normalized_name_key = cls._normalize_menu_name_key(item_nm)
+            avg_cost = cls._safe_float(
+                unit_price_map.get(item_cd)
+                or unit_price_map.get(item_nm)
+                or unit_price_map.get(normalized_name_key)
+            )
             rows.append(
                 {
                     "item_cd": item_cd,
@@ -1656,8 +1671,14 @@ class ProductionRepository(BaseRepository):
 
     @staticmethod
     def _finalize_ranked_rows(ranked_rows: list[dict[str, object]]) -> list[dict]:
+        status_priority = {"danger": 0, "warning": 1, "safe": 2}
         ranked_rows.sort(
-            key=lambda row: (-int(row["_risk_score"]), -int(row["forecast"]), str(row["name"]))
+            key=lambda row: (
+                status_priority.get(str(row.get("status") or "safe"), 3),
+                -int(row["_risk_score"]),
+                -int(row["forecast"]),
+                str(row["name"]),
+            )
         )
 
         now = datetime.now()
@@ -3143,11 +3164,14 @@ class ProductionRepository(BaseRepository):
             for row in unit_price_rows:
                 item_cd = str(row.get("item_cd") or "").strip()
                 item_nm = str(row.get("item_nm") or "").strip()
+                normalized_name_key = self._normalize_menu_name_key(item_nm)
                 avg_unit_price = self._safe_float(row.get("avg_unit_price"))
                 if item_cd and item_cd not in unit_price_map:
                     unit_price_map[item_cd] = avg_unit_price
                 if item_nm and item_nm not in unit_price_map:
                     unit_price_map[item_nm] = avg_unit_price
+                if normalized_name_key and normalized_name_key not in unit_price_map:
+                    unit_price_map[normalized_name_key] = avg_unit_price
 
             return self._compute_expiry_waste_rows(
                 production_rows=[dict(r) for r in production_rows],
@@ -3606,7 +3630,7 @@ class ProductionRepository(BaseRepository):
             page_size=page_size,
             date=date,
         )
-        if mart_result is not None:
+        if mart_result is not None and mart_result[1] > 0:
             return mart_result
         if not self.engine or not has_table(self.engine, "inventory_fifo_lots"):
             return [], 0
