@@ -7,6 +7,7 @@ from app.core.deps import get_sales_service
 from app.schemas.sales import (
     MenuInsightsResponse,
     SalesCampaignEffectResponse,
+    SalesHourlyChannelResponse,
     SalesInsightsResponse,
     SalesPrompt,
     SalesQueryRequest,
@@ -117,6 +118,25 @@ async def get_sales_summary(
             x_reference_datetime, date_from, date_to
         )
         return await service.get_summary(
+            store_id=store_id,
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+        )
+
+
+@router.get("/hourly-channel", response_model=SalesHourlyChannelResponse)
+async def get_sales_hourly_channel(
+    store_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
+    service: SalesService = Depends(get_sales_service),
+) -> SalesHourlyChannelResponse:
+    async with service_error_handler("시간대별 채널 매출 조회"):
+        resolved_date_from, resolved_date_to = resolve_date_range_by_reference(
+            x_reference_datetime, date_from, date_to
+        )
+        return await service.get_hourly_channel(
             store_id=store_id,
             date_from=resolved_date_from,
             date_to=resolved_date_to,
