@@ -127,9 +127,13 @@ class AnalyticsRepository:
         if channel_metrics:
             items.extend(
                 [
-                    channel_metrics["takeout_count"],
-                    channel_metrics["delivery_sales"],
-                    channel_metrics["in_store_pay_count"],
+                    metric
+                    for metric in [
+                        channel_metrics.get("takeout_count"),
+                        channel_metrics.get("delivery_sales"),
+                        channel_metrics.get("in_store_pay_count"),
+                    ]
+                    if metric
                 ]
             )
 
@@ -151,7 +155,8 @@ class AnalyticsRepository:
             "resolved_store_id": resolved_store_id,
         }
         if period and self._is_empty_metrics_payload(payload):
-            return await self.get_metrics(store_id=resolved_store_id)
+            payload["items"] = []
+            payload["selected_period_total_sales"] = None
         return payload
 
     async def get_weather_impact(
@@ -761,6 +766,13 @@ class AnalyticsRepository:
                 "change": delivery_change,
                 "trend": delivery_trend,
                 "detail": f"{period_detail} · {to_share_text(recent_delivery_sales)}",
+            },
+            "in_store_pay_count": {
+            #     "label": "留ㅼ옣 寃곗젣 嫄댁닔",
+            #     "value": f"{int(round(in_store_pay_recent)):,}건",
+            #     "change": in_store_change,
+            #     "trend": in_store_trend,
+            #     "detail": period_detail,
             },
             "lunch_unit_price": {
                 "label": "런치 판매단가\n(~15시)",

@@ -80,6 +80,9 @@ class AnalyticsService:
         if isinstance(metrics_data, list):
             return AnalyticsMetricsResponse(items=[])
         response_items = [AnalyticsMetric(**item) for item in metrics_data["items"]]
+        for item in response_items:
+            if item.label == "\uf9cd\u317c\uc623 \u5bc3\uacd7\uc823 \u5ac4\ub301\ub2d4":
+                item.label = "\ub9e4\uc7a5 \uacb0\uc81c \uac74\uc218"
         trace_store_id = metrics_data.get("resolved_store_id", store_id)
         return AnalyticsMetricsResponse(
             items=response_items,
