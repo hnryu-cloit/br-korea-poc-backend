@@ -54,6 +54,17 @@ NON_PRODUCT_KEYWORDS = (
     "쇼핑백", "포장", "선물포장", "할인", "공용사용컵", "사용컵", "수수료",
     "환불", "교환", "테스트",
 )
+RAW_MATERIAL_NAME_KEYWORDS = (
+    "\ub0c9\uc7a5",
+    "\ub0c9\ub3d9",
+    "\ubc18\uc81c",
+)
+MANUAL_CATEGORY_OVERRIDES = {
+    "\ubca0\ub9ac \uc778 \ub7ec\ube0c": "\ubca0\uc774\ucee4\ub9ac",
+    "\ube45 \uc560\ud50c\uc2dc\ub098\ubaac": "\ubca0\uc774\ucee4\ub9ac",
+    "\uc218\uc90d\uc740 \uc2a4\ub9c8\uc77c": "\ubca0\uc774\ucee4\ub9ac",
+    "\uc218\uc90d\uc740\uc2a4\ub9c8\uc77c": "\ubca0\uc774\ucee4\ub9ac",
+}
 PREFIX_PATTERN = re.compile(r"^\s*\[[^\]]+\]\s*")
 
 
@@ -64,6 +75,10 @@ def categorize(item_nm: str) -> dict:
         parent = PREFIX_PATTERN.sub("", name).strip()
 
     norm = (parent or name).replace(" ", "")
+    override_category = MANUAL_CATEGORY_OVERRIDES.get(name) or (
+        MANUAL_CATEGORY_OVERRIDES.get(parent) if parent else None
+    )
+    is_raw_material = any(keyword in name or keyword in norm for keyword in RAW_MATERIAL_NAME_KEYWORDS)
 
     is_coffee = any(k in norm for k in COFFEE_KEYWORDS)
     is_tea = any(k in norm for k in TEA_KEYWORDS)
