@@ -40,6 +40,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "today_net_revenue": 0.0,
             "weekly_data": [],
             "top_products": [],
+            "group_revenue_share": [],
             "avg_margin_rate": 0.0,
             "avg_net_profit_per_item": 0.0,
             "avg_ticket_size": 0.0,
@@ -240,6 +241,109 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 ]
 
                 # 6. 원가 데이터 기반 평균 마진율·순이익 계산 (raw_production_extract)
+                category_expr = "'기타'"
+                category_join = ""
+                if has_table(self.engine, "mart_item_category_master"):
+                    category_expr = "COALESCE(NULLIF(TRIM(CAST(c.category AS TEXT)), ''), '기타')"
+                    category_join = """
+                        LEFT JOIN (
+                            SELECT
+                                COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '') AS item_nm,
+                                MAX(COALESCE(NULLIF(TRIM(CAST(category AS TEXT)), ''), '기타')) AS category
+                            FROM mart_item_category_master
+                            GROUP BY COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '')
+                        ) c
+                          ON c.item_nm = COALESCE(NULLIF(TRIM(CAST(s.item_nm AS TEXT)), ''), '')
+                    """
+                elif has_table(self.engine, "raw_product_shelf_life"):
+                    category_expr = "COALESCE(NULLIF(TRIM(CAST(c.item_group AS TEXT)), ''), '기타')"
+                    category_join = """
+                        LEFT JOIN (
+                            SELECT
+                                COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '') AS item_nm,
+                                MAX(COALESCE(NULLIF(TRIM(CAST(item_group AS TEXT)), ''), '기타')) AS item_group
+                            FROM raw_product_shelf_life
+                            GROUP BY COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '')
+                        ) c
+                          ON c.item_nm = COALESCE(NULLIF(TRIM(CAST(s.item_nm AS TEXT)), ''), '')
+                    """
+
+                group_rows = (
+                    connection.execute(
+                        text(
+                            f"""
+                        SELECT
+                            {category_expr} AS group_name,
+                            COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(s.{amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS sales
+                        FROM {item_relation} s
+                        {category_join}
+                        WHERE s.sale_dt IS NOT NULL {store_filter}
+                        GROUP BY group_name
+                        ORDER BY sales DESC, group_name ASC
+                        """
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
+                result["group_revenue_share"] = [
+                    {
+                        "name": str(row["group_name"] or "기타"),
+                        "sales": float(row["sales"] or 0),
+                    }
+                    for row in group_rows
+                    if float(row["sales"] or 0) > 0
+                ]
+
+                if (
+                    len(result["group_revenue_share"]) == 1
+                    and str(result["group_revenue_share"][0].get("name") or "") in {"湲고?", "기타"}
+                    and has_table(self.engine, "mart_item_category_master")
+                ):
+                    remapped_group_rows = (
+                        connection.execute(
+                            text(
+                                f"""
+                            SELECT
+                                COALESCE(NULLIF(TRIM(CAST(c.category AS TEXT)), ''), '기타') AS group_name,
+                                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(s.{amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS sales
+                            FROM {item_relation} s
+                            LEFT JOIN LATERAL (
+                                SELECT MAX(COALESCE(NULLIF(TRIM(CAST(m.category AS TEXT)), ''), '기타')) AS category
+                                FROM mart_item_category_master m
+                                WHERE (
+                                    COALESCE(NULLIF(TRIM(CAST(m.item_cd AS TEXT)), ''), '') <> ''
+                                    AND COALESCE(NULLIF(TRIM(CAST(m.item_cd AS TEXT)), ''), '') =
+                                        COALESCE(NULLIF(TRIM(CAST(s.item_cd AS TEXT)), ''), '')
+                                )
+                                OR COALESCE(NULLIF(TRIM(CAST(m.item_nm AS TEXT)), ''), '') =
+                                   COALESCE(NULLIF(TRIM(CAST(s.item_nm AS TEXT)), ''), '')
+                                OR (
+                                    COALESCE(NULLIF(TRIM(CAST(m.parent_item_nm AS TEXT)), ''), '') <> ''
+                                    AND COALESCE(NULLIF(TRIM(CAST(m.parent_item_nm AS TEXT)), ''), '') =
+                                        COALESCE(NULLIF(TRIM(CAST(s.item_nm AS TEXT)), ''), '')
+                                )
+                            ) c ON TRUE
+                            WHERE s.sale_dt IS NOT NULL {store_filter}
+                            GROUP BY group_name
+                            ORDER BY sales DESC, group_name ASC
+                            """
+                            ),
+                            params,
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    result["group_revenue_share"] = [
+                        {
+                            "name": str(row["group_name"] or "기타"),
+                            "sales": float(row["sales"] or 0),
+                        }
+                        for row in remapped_group_rows
+                        if float(row["sales"] or 0) > 0
+                    ]
+
                 margin_target_dt = normalized_date_to or max_dt
                 margin_row = self._get_sales_margin_snapshot(
                     connection=connection,

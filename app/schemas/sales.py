@@ -141,12 +141,18 @@ class SalesProductItem(BaseModel):
     qty: float
 
 
+class SalesGroupRevenueShareItem(BaseModel):
+    name: str
+    sales: float
+
+
 class SalesSummaryResponse(BaseModel):
     data_date: Optional[str] = None
     today_revenue: float = 0.0
     today_net_revenue: float = 0.0
     weekly_data: list[SalesWeeklyItem] = Field(default_factory=list)
     top_products: list[SalesProductItem] = Field(default_factory=list)
+    group_revenue_share: list[SalesGroupRevenueShareItem] = Field(default_factory=list)
     avg_margin_rate: float = 0.0
     avg_net_profit_per_item: float = 0.0
     avg_ticket_size: float = 0.0
