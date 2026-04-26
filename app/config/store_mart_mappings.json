@@ -1,4 +1,175 @@
 {
+  "POC_001": {
+    "analytics": {
+      "daily_table": "mart_poc_001_analytics_daily",
+      "hourly_table": "mart_poc_001_analytics_hourly",
+      "deadline_table": "mart_poc_001_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_001_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_001_production_inventory_status",
+      "waste_daily_table": "mart_poc_001_production_waste_daily",
+      "waste_monthly_table": "mart_poc_001_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_002": {
+    "analytics": {
+      "daily_table": "mart_poc_002_analytics_daily",
+      "hourly_table": "mart_poc_002_analytics_hourly",
+      "deadline_table": "mart_poc_002_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_002_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_002_production_inventory_status",
+      "waste_daily_table": "mart_poc_002_production_waste_daily",
+      "waste_monthly_table": "mart_poc_002_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_003": {
+    "analytics": {
+      "daily_table": "mart_poc_003_analytics_daily",
+      "hourly_table": "mart_poc_003_analytics_hourly",
+      "deadline_table": "mart_poc_003_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_003_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_003_production_inventory_status",
+      "waste_daily_table": "mart_poc_003_production_waste_daily",
+      "waste_monthly_table": "mart_poc_003_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_004": {
+    "analytics": {
+      "daily_table": "mart_poc_004_analytics_daily",
+      "hourly_table": "mart_poc_004_analytics_hourly",
+      "deadline_table": "mart_poc_004_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_004_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_004_production_inventory_status",
+      "waste_daily_table": "mart_poc_004_production_waste_daily",
+      "waste_monthly_table": "mart_poc_004_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_005": {
+    "analytics": {
+      "daily_table": "mart_poc_005_analytics_daily",
+      "hourly_table": "mart_poc_005_analytics_hourly",
+      "deadline_table": "mart_poc_005_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_005_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_005_production_inventory_status",
+      "waste_daily_table": "mart_poc_005_production_waste_daily",
+      "waste_monthly_table": "mart_poc_005_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_006": {
+    "analytics": {
+      "daily_table": "mart_poc_006_analytics_daily",
+      "hourly_table": "mart_poc_006_analytics_hourly",
+      "deadline_table": "mart_poc_006_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_006_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_006_production_inventory_status",
+      "waste_daily_table": "mart_poc_006_production_waste_daily",
+      "waste_monthly_table": "mart_poc_006_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_007": {
+    "analytics": {
+      "daily_table": "mart_poc_007_analytics_daily",
+      "hourly_table": "mart_poc_007_analytics_hourly",
+      "deadline_table": "mart_poc_007_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_007_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_007_production_inventory_status",
+      "waste_daily_table": "mart_poc_007_production_waste_daily",
+      "waste_monthly_table": "mart_poc_007_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_008": {
+    "analytics": {
+      "daily_table": "mart_poc_008_analytics_daily",
+      "hourly_table": "mart_poc_008_analytics_hourly",
+      "deadline_table": "mart_poc_008_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_008_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_008_production_inventory_status",
+      "waste_daily_table": "mart_poc_008_production_waste_daily",
+      "waste_monthly_table": "mart_poc_008_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_009": {
+    "analytics": {
+      "daily_table": "mart_poc_009_analytics_daily",
+      "hourly_table": "mart_poc_009_analytics_hourly",
+      "deadline_table": "mart_poc_009_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_009_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_009_production_inventory_status",
+      "waste_daily_table": "mart_poc_009_production_waste_daily",
+      "waste_monthly_table": "mart_poc_009_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
   "POC_010": {
     "analytics": {
       "daily_table": "mart_poc_010_analytics_daily",
@@ -6,13 +177,450 @@
       "deadline_table": "mart_poc_010_analytics_deadline"
     },
     "ordering": {
-      "options_join_table": "mart_ordering_join_poc_010",
+      "options_join_table": "mart_poc_010_ordering_join",
       "weather_table": "mart_store_weather_daily"
     },
     "production": {
       "inventory_status_table": "mart_poc_010_production_inventory_status",
       "waste_daily_table": "mart_poc_010_production_waste_daily",
       "waste_monthly_table": "mart_poc_010_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_011": {
+    "analytics": {
+      "daily_table": "mart_poc_011_analytics_daily",
+      "hourly_table": "mart_poc_011_analytics_hourly",
+      "deadline_table": "mart_poc_011_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_011_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_011_production_inventory_status",
+      "waste_daily_table": "mart_poc_011_production_waste_daily",
+      "waste_monthly_table": "mart_poc_011_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_012": {
+    "analytics": {
+      "daily_table": "mart_poc_012_analytics_daily",
+      "hourly_table": "mart_poc_012_analytics_hourly",
+      "deadline_table": "mart_poc_012_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_012_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_012_production_inventory_status",
+      "waste_daily_table": "mart_poc_012_production_waste_daily",
+      "waste_monthly_table": "mart_poc_012_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_013": {
+    "analytics": {
+      "daily_table": "mart_poc_013_analytics_daily",
+      "hourly_table": "mart_poc_013_analytics_hourly",
+      "deadline_table": "mart_poc_013_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_013_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_013_production_inventory_status",
+      "waste_daily_table": "mart_poc_013_production_waste_daily",
+      "waste_monthly_table": "mart_poc_013_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_014": {
+    "analytics": {
+      "daily_table": "mart_poc_014_analytics_daily",
+      "hourly_table": "mart_poc_014_analytics_hourly",
+      "deadline_table": "mart_poc_014_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_014_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_014_production_inventory_status",
+      "waste_daily_table": "mart_poc_014_production_waste_daily",
+      "waste_monthly_table": "mart_poc_014_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_015": {
+    "analytics": {
+      "daily_table": "mart_poc_015_analytics_daily",
+      "hourly_table": "mart_poc_015_analytics_hourly",
+      "deadline_table": "mart_poc_015_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_015_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_015_production_inventory_status",
+      "waste_daily_table": "mart_poc_015_production_waste_daily",
+      "waste_monthly_table": "mart_poc_015_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_016": {
+    "analytics": {
+      "daily_table": "mart_poc_016_analytics_daily",
+      "hourly_table": "mart_poc_016_analytics_hourly",
+      "deadline_table": "mart_poc_016_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_016_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_016_production_inventory_status",
+      "waste_daily_table": "mart_poc_016_production_waste_daily",
+      "waste_monthly_table": "mart_poc_016_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_017": {
+    "analytics": {
+      "daily_table": "mart_poc_017_analytics_daily",
+      "hourly_table": "mart_poc_017_analytics_hourly",
+      "deadline_table": "mart_poc_017_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_017_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_017_production_inventory_status",
+      "waste_daily_table": "mart_poc_017_production_waste_daily",
+      "waste_monthly_table": "mart_poc_017_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_018": {
+    "analytics": {
+      "daily_table": "mart_poc_018_analytics_daily",
+      "hourly_table": "mart_poc_018_analytics_hourly",
+      "deadline_table": "mart_poc_018_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_018_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_018_production_inventory_status",
+      "waste_daily_table": "mart_poc_018_production_waste_daily",
+      "waste_monthly_table": "mart_poc_018_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_019": {
+    "analytics": {
+      "daily_table": "mart_poc_019_analytics_daily",
+      "hourly_table": "mart_poc_019_analytics_hourly",
+      "deadline_table": "mart_poc_019_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_019_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_019_production_inventory_status",
+      "waste_daily_table": "mart_poc_019_production_waste_daily",
+      "waste_monthly_table": "mart_poc_019_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_020": {
+    "analytics": {
+      "daily_table": "mart_poc_020_analytics_daily",
+      "hourly_table": "mart_poc_020_analytics_hourly",
+      "deadline_table": "mart_poc_020_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_020_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_020_production_inventory_status",
+      "waste_daily_table": "mart_poc_020_production_waste_daily",
+      "waste_monthly_table": "mart_poc_020_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_021": {
+    "analytics": {
+      "daily_table": "mart_poc_021_analytics_daily",
+      "hourly_table": "mart_poc_021_analytics_hourly",
+      "deadline_table": "mart_poc_021_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_021_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_021_production_inventory_status",
+      "waste_daily_table": "mart_poc_021_production_waste_daily",
+      "waste_monthly_table": "mart_poc_021_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_022": {
+    "analytics": {
+      "daily_table": "mart_poc_022_analytics_daily",
+      "hourly_table": "mart_poc_022_analytics_hourly",
+      "deadline_table": "mart_poc_022_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_022_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_022_production_inventory_status",
+      "waste_daily_table": "mart_poc_022_production_waste_daily",
+      "waste_monthly_table": "mart_poc_022_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_023": {
+    "analytics": {
+      "daily_table": "mart_poc_023_analytics_daily",
+      "hourly_table": "mart_poc_023_analytics_hourly",
+      "deadline_table": "mart_poc_023_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_023_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_023_production_inventory_status",
+      "waste_daily_table": "mart_poc_023_production_waste_daily",
+      "waste_monthly_table": "mart_poc_023_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_024": {
+    "analytics": {
+      "daily_table": "mart_poc_024_analytics_daily",
+      "hourly_table": "mart_poc_024_analytics_hourly",
+      "deadline_table": "mart_poc_024_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_024_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_024_production_inventory_status",
+      "waste_daily_table": "mart_poc_024_production_waste_daily",
+      "waste_monthly_table": "mart_poc_024_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_025": {
+    "analytics": {
+      "daily_table": "mart_poc_025_analytics_daily",
+      "hourly_table": "mart_poc_025_analytics_hourly",
+      "deadline_table": "mart_poc_025_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_025_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_025_production_inventory_status",
+      "waste_daily_table": "mart_poc_025_production_waste_daily",
+      "waste_monthly_table": "mart_poc_025_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_026": {
+    "analytics": {
+      "daily_table": "mart_poc_026_analytics_daily",
+      "hourly_table": "mart_poc_026_analytics_hourly",
+      "deadline_table": "mart_poc_026_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_026_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_026_production_inventory_status",
+      "waste_daily_table": "mart_poc_026_production_waste_daily",
+      "waste_monthly_table": "mart_poc_026_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_027": {
+    "analytics": {
+      "daily_table": "mart_poc_027_analytics_daily",
+      "hourly_table": "mart_poc_027_analytics_hourly",
+      "deadline_table": "mart_poc_027_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_027_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_027_production_inventory_status",
+      "waste_daily_table": "mart_poc_027_production_waste_daily",
+      "waste_monthly_table": "mart_poc_027_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_028": {
+    "analytics": {
+      "daily_table": "mart_poc_028_analytics_daily",
+      "hourly_table": "mart_poc_028_analytics_hourly",
+      "deadline_table": "mart_poc_028_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_028_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_028_production_inventory_status",
+      "waste_daily_table": "mart_poc_028_production_waste_daily",
+      "waste_monthly_table": "mart_poc_028_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_029": {
+    "analytics": {
+      "daily_table": "mart_poc_029_analytics_daily",
+      "hourly_table": "mart_poc_029_analytics_hourly",
+      "deadline_table": "mart_poc_029_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_029_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_029_production_inventory_status",
+      "waste_daily_table": "mart_poc_029_production_waste_daily",
+      "waste_monthly_table": "mart_poc_029_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_030": {
+    "analytics": {
+      "daily_table": "mart_poc_030_analytics_daily",
+      "hourly_table": "mart_poc_030_analytics_hourly",
+      "deadline_table": "mart_poc_030_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_030_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_030_production_inventory_status",
+      "waste_daily_table": "mart_poc_030_production_waste_daily",
+      "waste_monthly_table": "mart_poc_030_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_031": {
+    "analytics": {
+      "daily_table": "mart_poc_031_analytics_daily",
+      "hourly_table": "mart_poc_031_analytics_hourly",
+      "deadline_table": "mart_poc_031_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_031_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_031_production_inventory_status",
+      "waste_daily_table": "mart_poc_031_production_waste_daily",
+      "waste_monthly_table": "mart_poc_031_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_032": {
+    "analytics": {
+      "daily_table": "mart_poc_032_analytics_daily",
+      "hourly_table": "mart_poc_032_analytics_hourly",
+      "deadline_table": "mart_poc_032_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_032_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_032_production_inventory_status",
+      "waste_daily_table": "mart_poc_032_production_waste_daily",
+      "waste_monthly_table": "mart_poc_032_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  },
+  "POC_033": {
+    "analytics": {
+      "daily_table": "mart_poc_033_analytics_daily",
+      "hourly_table": "mart_poc_033_analytics_hourly",
+      "deadline_table": "mart_poc_033_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_poc_033_ordering_join",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_033_production_inventory_status",
+      "waste_daily_table": "mart_poc_033_production_waste_daily",
+      "waste_monthly_table": "mart_poc_033_production_waste_monthly"
     },
     "sales": {
       "margin_daily_table": "mart_sales_margin_daily"
