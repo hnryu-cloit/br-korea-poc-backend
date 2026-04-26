@@ -749,7 +749,7 @@ class AnalyticsRepository:
         takeout_sales_recent = max(recent_online_sales - recent_delivery_sales, 0.0)
         return {
             "takeout_count": {
-                "label": "투고 매출액",
+                "label": "오프라인+투고 매출액",
                 "value": f"₩{int(round(takeout_sales_recent)):,}",
                 "change": takeout_change,
                 "trend": takeout_trend,
@@ -761,13 +761,6 @@ class AnalyticsRepository:
                 "change": delivery_change,
                 "trend": delivery_trend,
                 "detail": f"{period_detail} · {to_share_text(recent_delivery_sales)}",
-            },
-            "in_store_pay_count": {
-                "label": "홀 방문 고객",
-                "value": f"{int(round(in_store_pay_recent)):,}건",
-                "change": in_store_change,
-                "trend": in_store_trend,
-                "detail": f"{period_detail} · 배달/해피오더 제외",
             },
             "lunch_unit_price": {
                 "label": "런치 판매단가(~15시)",
