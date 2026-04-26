@@ -7,6 +7,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+from app.repositories.sales.golden_prompt_repository import list_golden_prompts
 from app.repositories.sales_repository import SalesRepository
 from app.schemas.sales import (
     MenuInsightsResponse,
@@ -198,6 +199,9 @@ class SalesService:
         if not context_prompts:
             context_prompts = self._build_prompt_fallbacks(store_id=store_id)
 
+        golden_prompts = list_golden_prompts(domain)
+        context_prompts = self._merge_golden_prompts(golden_prompts, context_prompts)
+
         if not self.ai_client:
             return [SalesPrompt(**prompt) for prompt in context_prompts]
 
@@ -214,7 +218,27 @@ class SalesService:
         )
         if not ai_prompts:
             return [SalesPrompt(**prompt) for prompt in context_prompts]
-        return [SalesPrompt(**prompt) for prompt in ai_prompts]
+        merged_with_golden = self._merge_golden_prompts(golden_prompts, ai_prompts)
+        return [SalesPrompt(**prompt) for prompt in merged_with_golden]
+
+    @staticmethod
+    def _merge_golden_prompts(
+        golden_prompts: list[dict[str, str]],
+        context_prompts: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        if not golden_prompts:
+            return context_prompts
+        merged: list[dict[str, str]] = []
+        seen_keys: set[str] = set()
+        for prompt in [*golden_prompts, *context_prompts]:
+            key = f"{prompt.get('label', '')}|{prompt.get('prompt', '')}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged.append(prompt)
+            if len(merged) >= 10:
+                break
+        return merged
 
     def _build_prompt_fallbacks(self, store_id: str | None = None) -> list[dict[str, str]]:
         store = store_id or "POC_001"
