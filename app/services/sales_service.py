@@ -11,6 +11,8 @@ from app.repositories.sales_repository import SalesRepository
 from app.schemas.sales import (
     MenuInsightsResponse,
     SalesCampaignEffectResponse,
+    SalesHourlyChannelItem,
+    SalesHourlyChannelResponse,
     SalesInsightMetric,
     SalesInsightSection,
     SalesInsightsResponse,
