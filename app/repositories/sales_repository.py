@@ -223,7 +223,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                         WHERE sale_dt IS NOT NULL {store_filter}
                         GROUP BY item_nm
                         ORDER BY sales DESC, qty DESC
-                        LIMIT 6
+                        LIMIT 10
                         """
                         ),
                         params,
