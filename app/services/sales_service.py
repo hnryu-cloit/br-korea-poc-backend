@@ -721,6 +721,60 @@ class SalesService:
             explainability=explainability,
         )
 
+    async def get_hourly_channel(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> SalesHourlyChannelResponse:
+        """시간대별 채널 매출(오프라인+투고 / 배달) 및 판매건수 응답 구성"""
+        rows = await self.repository.get_hourly_channel(
+            store_id=store_id, date_from=date_from, date_to=date_to
+        )
+
+        # 0~23시 버킷 초기화
+        buckets: dict[int, dict[str, float]] = {
+            hour: {
+                "offline_sales": 0.0,
+                "delivery_sales": 0.0,
+                "offline_qty": 0.0,
+                "delivery_qty": 0.0,
+            }
+            for hour in range(24)
+        }
+        for row in rows:
+            hour = int(row.get("hour") or 0)
+            if hour < 0 or hour > 23:
+                continue
+            channel = str(row.get("channel") or "")
+            sales = float(row.get("sales") or 0.0)
+            qty = float(row.get("qty") or 0.0)
+            bucket = buckets[hour]
+            if "온라인" in channel:
+                bucket["delivery_sales"] += sales
+                bucket["delivery_qty"] += qty
+            else:
+                bucket["offline_sales"] += sales
+                bucket["offline_qty"] += qty
+
+        items = [
+            SalesHourlyChannelItem(
+                hour=hour,
+                offline_sales=bucket["offline_sales"],
+                delivery_sales=bucket["delivery_sales"],
+                offline_qty=bucket["offline_qty"],
+                delivery_qty=bucket["delivery_qty"],
+                total_qty=bucket["offline_qty"] + bucket["delivery_qty"],
+            )
+            for hour, bucket in sorted(buckets.items())
+        ]
+        return SalesHourlyChannelResponse(
+            items=items,
+            filtered_store_id=store_id,
+            filtered_date_from=date_from,
+            filtered_date_to=date_to,
+        )
+
     async def get_summary(
         self,
         store_id: str | None = None,
