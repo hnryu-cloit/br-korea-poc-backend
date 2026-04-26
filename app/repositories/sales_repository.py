@@ -279,6 +279,133 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
 
         return result
 
+    async def get_category_revenue_raw(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """카테고리 분류 전 단계: item_nm 기준 매출/수량을 그대로 반환."""
+        if not self.engine:
+            raise RuntimeError("sales database engine is not configured")
+        if not has_table(self.engine, "raw_daily_store_item"):
+            return []
+
+        normalized_date_from = date_from.replace("-", "") if date_from else None
+        normalized_date_to = date_to.replace("-", "") if date_to else None
+
+        where_parts = ["sale_dt IS NOT NULL"]
+        params: dict = {}
+        if store_id:
+            where_parts.append("masked_stor_cd = :store_id")
+            params["store_id"] = store_id
+        if normalized_date_from:
+            where_parts.append("sale_dt >= :date_from")
+            params["date_from"] = normalized_date_from
+        if normalized_date_to:
+            where_parts.append("sale_dt <= :date_to")
+            params["date_to"] = normalized_date_to
+
+        sql = text(
+            f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '기타') AS item_nm,
+                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)), 0) AS sales,
+                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(sale_qty AS TEXT), ''), '0') AS NUMERIC)), 0) AS qty
+            FROM raw_daily_store_item
+            WHERE {" AND ".join(where_parts)}
+            GROUP BY item_nm
+            """
+        )
+        try:
+            with self.engine.connect() as connection:
+                rows = connection.execute(sql, params).mappings().all()
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "Failed to load category revenue rows (store_id=%s, date_from=%s, date_to=%s): %s",
+                store_id,
+                date_from,
+                date_to,
+                exc,
+            )
+            raise RuntimeError("카테고리 매출 집계 중 DB 오류가 발생했습니다.") from exc
+
+        return [
+            {
+                "item_nm": str(row["item_nm"]),
+                "sales": float(row["sales"] or 0),
+                "qty": float(row["qty"] or 0),
+            }
+            for row in rows
+        ]
+
+    async def get_hourly_channel(
+        self,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """시간대(0~23)별 온/오프라인 채널 매출과 판매 건수 집계.
+
+        - 오프라인+투고: ho_chnl_div = '오프라인'
+        - 배달: ho_chnl_div = '온라인'
+        """
+        if not self.engine:
+            raise RuntimeError("sales database engine is not configured")
+        if not has_table(self.engine, "raw_daily_store_online"):
+            return []
+
+        normalized_date_from = date_from.replace("-", "") if date_from else None
+        normalized_date_to = date_to.replace("-", "") if date_to else None
+
+        where_parts = ["sale_dt IS NOT NULL", "tmzon_div IS NOT NULL"]
+        params: dict = {}
+        if store_id:
+            where_parts.append("masked_stor_cd = :store_id")
+            params["store_id"] = store_id
+        if normalized_date_from:
+            where_parts.append("sale_dt >= :date_from")
+            params["date_from"] = normalized_date_from
+        if normalized_date_to:
+            where_parts.append("sale_dt <= :date_to")
+            params["date_to"] = normalized_date_to
+
+        sql = text(
+            f"""
+            SELECT
+                CAST(tmzon_div AS INTEGER) AS hour,
+                COALESCE(NULLIF(TRIM(CAST(ho_chnl_div AS TEXT)), ''), '기타') AS channel,
+                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)), 0) AS sales,
+                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)), 0) AS qty
+            FROM raw_daily_store_online
+            WHERE {" AND ".join(where_parts)}
+            GROUP BY hour, channel
+            ORDER BY hour
+            """
+        )
+        try:
+            with self.engine.connect() as connection:
+                rows = connection.execute(sql, params).mappings().all()
+        except SQLAlchemyError as exc:
+            logger.exception(
+                "Failed to load hourly channel sales (store_id=%s, date_from=%s, date_to=%s): %s",
+                store_id,
+                date_from,
+                date_to,
+                exc,
+            )
+            raise RuntimeError("시간대별 채널 매출 집계 중 DB 오류가 발생했습니다.") from exc
+
+        return [
+            {
+                "hour": int(row["hour"] or 0),
+                "channel": str(row["channel"]),
+                "sales": float(row["sales"] or 0),
+                "qty": float(row["qty"] or 0),
+            }
+            for row in rows
+        ]
+
     def _get_sales_margin_snapshot(
         self,
         *,

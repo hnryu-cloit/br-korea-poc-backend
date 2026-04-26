@@ -161,3 +161,20 @@ class SalesCampaignEffectResponse(BaseModel):
     metrics: list[SalesInsightMetric] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
     explainability: ExplainabilityPayload | None = None
+
+
+class SalesHourlyChannelItem(BaseModel):
+    hour: int  # 0~23 시간대
+    offline_sales: float = 0.0  # 오프라인+투고 매출액
+    delivery_sales: float = 0.0  # 배달 매출액
+    offline_qty: float = 0.0  # 오프라인+투고 판매건수
+    delivery_qty: float = 0.0  # 배달 판매건수
+    total_qty: float = 0.0  # 전체 판매건수
+
+
+class SalesHourlyChannelResponse(BaseModel):
+    items: list[SalesHourlyChannelItem] = Field(default_factory=list)
+    filtered_store_id: Optional[str] = None
+    filtered_date_from: Optional[str] = None
+    filtered_date_to: Optional[str] = None
+    explainability: ExplainabilityPayload | None = None
