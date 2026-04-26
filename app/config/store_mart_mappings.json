@@ -1,0 +1,21 @@
+{
+  "POC_010": {
+    "analytics": {
+      "daily_table": "mart_poc_010_analytics_daily",
+      "hourly_table": "mart_poc_010_analytics_hourly",
+      "deadline_table": "mart_poc_010_analytics_deadline"
+    },
+    "ordering": {
+      "options_join_table": "mart_ordering_join_poc_010",
+      "weather_table": "mart_store_weather_daily"
+    },
+    "production": {
+      "inventory_status_table": "mart_poc_010_production_inventory_status",
+      "waste_daily_table": "mart_poc_010_production_waste_daily",
+      "waste_monthly_table": "mart_poc_010_production_waste_monthly"
+    },
+    "sales": {
+      "margin_daily_table": "mart_sales_margin_daily"
+    }
+  }
+}
