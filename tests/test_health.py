@@ -246,6 +246,11 @@ def test_ordering_history_insights_requires_store_id() -> None:
     assert response.status_code == 422
 
 
+def test_ordering_history_charts_requires_store_id() -> None:
+    response = client.get("/api/ordering/history/charts")
+    assert response.status_code == 422
+
+
 def test_dashboard_notices() -> None:
     response = client.get("/api/dashboard/notices")
     assert response.status_code == 200

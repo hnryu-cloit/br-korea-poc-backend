@@ -19,7 +19,7 @@ class _DummyOrderingRepository:
         self,
         *,
         store_id: str,
-        limit: int,
+        limit: int | None,
         date_from: str | None,
         date_to: str | None,
         item_nm: str | None,
@@ -99,7 +99,7 @@ class _DateFilteringOrderingRepository(_DummyOrderingRepository):
         self,
         *,
         store_id: str,
-        limit: int,
+        limit: int | None,
         date_from: str | None,
         date_to: str | None,
         item_nm: str | None,
@@ -132,8 +132,8 @@ class _DateFilteringOrderingRepository(_DummyOrderingRepository):
             filtered_items = [item for item in filtered_items if str(item["dlv_dt"]) <= date_to]
         return {
             **payload,
-            "items": filtered_items[:limit],
-            "total_count": len(filtered_items[:limit]),
+            "items": filtered_items[:limit] if limit is not None else filtered_items,
+            "total_count": len(filtered_items[:limit] if limit is not None else filtered_items),
         }
 
 
