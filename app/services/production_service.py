@@ -198,6 +198,9 @@ class ProductionService:
 
     @classmethod
     def _recommended_qty_from_row(cls, raw: dict) -> int:
+        explicit_recommended = cls._safe_int(raw.get("recommended"))
+        if explicit_recommended > 0:
+            return explicit_recommended
         _, p1_qty = cls._parse_prod(str(raw.get("prod1") or ""))
         return max(p1_qty, 0)
 
@@ -208,10 +211,13 @@ class ProductionService:
         if raw.get("chance_loss_reduction_pct") is not None:
             return cls._safe_int(raw.get("chance_loss_reduction_pct"))
         current_stock = max(cls._safe_int(raw.get("current")), 0)
-        forecast = max(cls._safe_int(raw.get("forecast")), 0)
+        predicted_sales_1h = max(
+            cls._safe_int(raw.get("predicted_sales_1h", raw.get("forecast"))),
+            0,
+        )
         recommended_qty = max(cls._recommended_qty_from_row(raw), 0)
-        shortage_without = max(forecast - current_stock, 0)
-        shortage_with = max(forecast - (current_stock + recommended_qty), 0)
+        shortage_without = max(predicted_sales_1h - current_stock, 0)
+        shortage_with = max(predicted_sales_1h - (current_stock + recommended_qty), 0)
         prevented_units = max(shortage_without - shortage_with, 0)
         return prevented_units * 1200
 
@@ -360,10 +366,14 @@ class ProductionService:
 
         current = int(raw.get("current", 0))
         forecast = int(raw.get("forecast", 0))
+        predicted_sales_1h = cls._safe_int(raw.get("predicted_sales_1h", forecast))
 
         # 실데이터 기반 판매 속도: 예상판매량 / 현재고 비율
-        if current > 0 and forecast > 0:
-            velocity = round(min(3.0, max(0.5, forecast / current)), 1)
+        explicit_velocity = cls._safe_float(raw.get("sales_velocity"))
+        if explicit_velocity > 0:
+            velocity = round(min(3.0, max(0.5, explicit_velocity)), 1)
+        elif current > 0 and predicted_sales_1h > 0:
+            velocity = round(min(3.0, max(0.5, predicted_sales_1h / current)), 1)
         else:
             velocity = 1.2 if raw["status"] != "safe" else 0.9
 
@@ -371,12 +381,18 @@ class ProductionService:
         if raw.get("alert_message"):
             alert_msg = str(raw["alert_message"])
         elif raw["status"] == "danger":
-            hours = max(1, int(round(current / max(forecast / 8.0, 0.1))))
+            hours = max(1, int(round(current / max(predicted_sales_1h / 8.0, 0.1))))
             alert_msg = f"현재 재고 {current}개, 약 {hours}시간 이내 소진 예상. 즉시 생산이 필요합니다."
         elif raw["status"] == "warning":
             alert_msg = f"현재 재고 {current}개, 예상 판매량 {forecast}개. 생산 준비가 필요합니다."
         else:
             alert_msg = "현재 재고가 안정적입니다."
+
+        if raw["status"] == "warning" and not raw.get("alert_message"):
+            alert_msg = (
+                f"?꾩옱 ?ш퀬 {current}媛? ?덉긽 ?먮ℓ??{predicted_sales_1h}媛? "
+                "?앹궛 以鍮꾧? ?꾩슂?⑸땲??"
+            )
 
         recommended_qty = cls._recommended_qty_from_row(raw)
         chance_loss_amt = cls._chance_loss_amount_from_row(raw)
@@ -418,6 +434,7 @@ class ProductionService:
             image_url=cls._resolve_image_url(str(raw["name"])),
             current_stock=raw["current"],
             forecast_stock_1h=raw["forecast"],
+            predicted_sales_1h=cls._safe_int(raw.get("predicted_sales_1h")),
             avg_first_production_qty_4w=p1_qty,
             avg_first_production_time_4w=p1_time,
             avg_second_production_qty_4w=p2_qty,
@@ -425,7 +442,7 @@ class ProductionService:
             status=raw["status"],
             chance_loss_saving_pct=chance_loss_amount,
             recommended_production_qty=recommended_qty,
-            chance_loss_basis_text="추천 생산 수량은 최근 4주 평균 1차 생산량이며, 찬스 로스 절감액은 현재 재고와 추천 생산 수량으로 1시간 수요 예측의 부족분을 얼마나 줄였는지 기준으로 계산했습니다.",
+            chance_loss_basis_text=str(raw.get("chance_loss_basis_text") or "추천 생산 수량은 최근 4주 평균 생산량과 1시간 후 예측 재고를 반영해 계산했습니다."),
             decision=decision,
             depletion_eta_minutes=60 if raw["status"] != "safe" else None,
             tags=decision.tags,
@@ -631,6 +648,7 @@ class ProductionService:
             image_url=target.image_url,
             current_stock=target.current_stock,
             forecast_stock_1h=target.forecast_stock_1h,
+            predicted_sales_1h=target.predicted_sales_1h,
             recommended_qty=target.recommended_production_qty,
             chance_loss_saving_pct=target.chance_loss_saving_pct,
             chance_loss_basis_text=target.chance_loss_basis_text,
@@ -1351,6 +1369,15 @@ class ProductionService:
             page_size=page_size,
             date=date,
         )
+        summary_rows = rows
+        if total > len(rows):
+            summary_rows, _ = self.repository.get_fifo_lot_summary(
+                store_id=store_id,
+                lot_type=lot_type,
+                page=1,
+                page_size=max(total, 1),
+                date=date,
+            )
 
         items = [
             FifoLotItem(
@@ -1368,10 +1395,26 @@ class ProductionService:
             )
             for r in rows
         ]
+        summary_items = [
+            FifoLotItem(
+                item_nm=r["item_nm"],
+                lot_type=r["lot_type"],
+                shelf_life_days=r.get("shelf_life_days"),
+                last_lot_date=str(r["last_lot_date"]) if r.get("last_lot_date") else None,
+                total_initial_qty=float(r.get("total_initial_qty") or 0),
+                total_consumed_qty=float(r.get("total_consumed_qty") or 0),
+                total_wasted_qty=float(r.get("total_wasted_qty") or 0),
+                active_remaining_qty=float(r.get("active_remaining_qty") or 0),
+                active_lot_count=int(r.get("active_lot_count") or 0),
+                sold_out_lot_count=int(r.get("sold_out_lot_count") or 0),
+                expired_lot_count=int(r.get("expired_lot_count") or 0),
+            )
+            for r in summary_rows
+        ]
 
-        total_wasted = sum(i.total_wasted_qty for i in items)
-        total_active = sum(i.active_remaining_qty for i in items)
-        items_with_waste = sum(1 for i in items if i.total_wasted_qty > 0)
+        total_wasted = sum(i.total_wasted_qty for i in summary_items)
+        total_active = sum(i.active_remaining_qty for i in summary_items)
+        items_with_waste = sum(1 for i in summary_items if i.total_wasted_qty > 0)
 
         total_pages = max(1, math.ceil(total / page_size))
         return FifoLotSummaryResponse(

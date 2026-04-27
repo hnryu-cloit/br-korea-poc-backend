@@ -1215,6 +1215,34 @@ async def test_production_service_uses_repository_recommended_qty_first() -> Non
 
 
 @pytest.mark.asyncio
+async def test_production_service_preserves_negative_forecast_stock() -> None:
+    class _Repo:
+        async def list_items(self, store_id=None, business_date=None, reference_datetime=None):
+            return [
+                {
+                    "sku_id": "SKU-NEG",
+                    "name": "테스트 머핀",
+                    "current": 3,
+                    "forecast": -2,
+                    "predicted_sales_1h": 5,
+                    "status": "danger",
+                    "depletion_time": "10:00",
+                    "recommended": 4,
+                    "prod1": "08:00 / 6개",
+                    "prod2": "14:00 / 2개",
+                    "chance_loss_amt": 4800,
+                }
+            ]
+
+    service = ProductionService(repository=_Repo())
+
+    response = await service.get_sku_list(store_id="POC_010")
+
+    assert response.items[0].forecast_stock_1h == -2
+    assert response.items[0].predicted_sales_1h == 5
+
+
+@pytest.mark.asyncio
 async def test_production_service_overview_sums_chance_loss_amount_as_currency() -> None:
     class _Repo:
         async def list_items(self, store_id=None, business_date=None, reference_datetime=None):
@@ -1515,6 +1543,73 @@ async def test_production_service_waste_summary_supports_pagination(monkeypatch)
     assert response.summary["monthly_total_disuse_amount"] == 33000
     assert response.monthly_top_items[0].item_nm == "월간 글레이즈드"
     assert response.monthly_top_items[0].confirmed_disuse_qty == 7
+
+
+class _FifoSummaryRepository:
+    def get_fifo_lot_summary(self, *, page: int, page_size: int, **kwargs):
+        all_rows = [
+            {
+                "item_nm": "Prod A",
+                "lot_type": "production",
+                "shelf_life_days": 1,
+                "last_lot_date": "2026-03-04",
+                "total_initial_qty": 20,
+                "total_consumed_qty": 8,
+                "total_wasted_qty": 12,
+                "active_remaining_qty": 0,
+                "active_lot_count": 0,
+                "sold_out_lot_count": 0,
+                "expired_lot_count": 1,
+            },
+            {
+                "item_nm": "Prod B",
+                "lot_type": "production",
+                "shelf_life_days": 1,
+                "last_lot_date": "2026-03-04",
+                "total_initial_qty": 30,
+                "total_consumed_qty": 10,
+                "total_wasted_qty": 20,
+                "active_remaining_qty": 0,
+                "active_lot_count": 0,
+                "sold_out_lot_count": 0,
+                "expired_lot_count": 1,
+            },
+            {
+                "item_nm": "Delivery A",
+                "lot_type": "delivery",
+                "shelf_life_days": 30,
+                "last_lot_date": "2026-03-04",
+                "total_initial_qty": 15,
+                "total_consumed_qty": 5,
+                "total_wasted_qty": 0,
+                "active_remaining_qty": 10,
+                "active_lot_count": 1,
+                "sold_out_lot_count": 0,
+                "expired_lot_count": 0,
+            },
+        ]
+        start = max(0, (page - 1) * page_size)
+        end = start + page_size
+        return all_rows[start:end], len(all_rows)
+
+
+@pytest.mark.asyncio
+async def test_production_service_fifo_summary_uses_all_rows_not_current_page() -> None:
+    service = ProductionService(repository=_FifoSummaryRepository())
+
+    response = await service.get_fifo_lot_summary(
+        store_id="POC_010",
+        lot_type=None,
+        page=1,
+        page_size=2,
+        date="2026-03-05",
+    )
+
+    assert response.pagination.total_items == 3
+    assert len(response.items) == 2
+    assert response.summary["items_with_waste"] == 2
+    assert response.summary["total_wasted_qty"] == 32
+    assert response.summary["total_active_qty"] == 10
 
 
 def test_production_service_recommended_qty_prefers_repository_recommended_value() -> None:
