@@ -190,3 +190,20 @@ class OrderingHistoryInsightsResponse(BaseModel):
     retrieved_contexts: list[str] = []
     confidence: float | None = None
     explainability: ExplainabilityPayload | None = None
+
+
+class OrderingHistoryDailyTrendPoint(BaseModel):
+    dlv_dt: str
+    ord_qty: int
+    confrm_qty: int
+
+
+class OrderingHistoryManualCountPoint(BaseModel):
+    dlv_dt: str
+    manual_count: int
+
+
+class OrderingHistoryChartsResponse(BaseModel):
+    daily_trend: list[OrderingHistoryDailyTrendPoint]
+    manual_by_day: list[OrderingHistoryManualCountPoint]
+    explainability: ExplainabilityPayload | None = None
