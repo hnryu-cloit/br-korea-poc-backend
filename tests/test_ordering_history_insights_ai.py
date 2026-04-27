@@ -346,6 +346,74 @@ def test_ordering_history_insights_sorts_anomalies_by_severity() -> None:
     assert [anomaly.severity for anomaly in response.anomalies] == ["high", "medium", "low"]
 
 
+def test_ordering_history_insights_caps_anomalies_at_four() -> None:
+    class _ManyAnomaliesAIClient:
+        async def generate_ordering_history_insights(self, **_: object) -> dict | None:
+            return {
+                "kpis": [
+                    {"key": "auto_rate", "label": "Auto", "value": "50%", "tone": "primary"},
+                ],
+                "anomalies": [
+                    {
+                        "id": f"high-{idx}",
+                        "severity": "high",
+                        "kind": "ordering_high",
+                        "message": f"High severity anomaly {idx}",
+                        "recommended_action": "Act now",
+                        "related_items": [],
+                    }
+                    for idx in range(5)
+                ],
+                "top_changed_items": [],
+                "sources": [],
+                "retrieved_contexts": [],
+                "confidence": 0.7,
+            }
+
+    service = OrderingService(
+        repository=_DummyOrderingRepository(),
+        ai_client=_ManyAnomaliesAIClient(),
+    )
+    cache_path = Path(__file__).resolve().parents[1] / "data" / "ordering-history-insights-cap-test-cache.json"
+    if cache_path.exists():
+        cache_path.unlink()
+    service.history_insights_cache_path = cache_path
+
+    response = asyncio.run(service.get_history_insights(store_id="POC_002"))
+
+    assert len(response.anomalies) == 4
+    assert [anomaly.id for anomaly in response.anomalies] == ["high-0", "high-1", "high-2", "high-3"]
+
+
+def test_deterministic_history_insights_creates_multiple_change_anomalies() -> None:
+    summary_stats = {
+        "auto_rate": 0.5,
+        "manual_rate": 0.5,
+        "avg_order_qty": 12.0,
+        "confirm_gap_count": 0,
+        "top_changed_items_preview": [
+            {"item_nm": "A", "avg_ord_qty": 10.0, "latest_ord_qty": 16, "change_ratio": 0.6},
+            {"item_nm": "B", "avg_ord_qty": 20.0, "latest_ord_qty": 27, "change_ratio": 0.35},
+            {"item_nm": "C", "avg_ord_qty": 15.0, "latest_ord_qty": 12, "change_ratio": -0.2},
+            {"item_nm": "D", "avg_ord_qty": 30.0, "latest_ord_qty": 34, "change_ratio": 0.1333},
+        ],
+    }
+
+    response = OrderingService._build_deterministic_history_insights(
+        store_id="POC_010",
+        summary_stats=summary_stats,
+    )
+
+    assert [anomaly.id for anomaly in response.anomalies] == [
+        "top-changed-item-1",
+        "top-changed-item-2",
+        "top-changed-item-3",
+    ]
+    assert [anomaly.severity for anomaly in response.anomalies] == ["high", "medium", "low"]
+    assert response.anomalies[0].message == "A 발주량이 평균 10.0개에서 최근 16개로 60.0% 증가했습니다."
+    assert response.anomalies[2].message == "C 발주량이 평균 15.0개에서 최근 12개로 20.0% 감소했습니다."
+
+
 def test_ordering_history_insights_skips_ai_for_join_table_store() -> None:
     ai_client = _DummyAIClient()
     service = OrderingService(

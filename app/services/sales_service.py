@@ -774,6 +774,14 @@ class SalesService:
             sales = float(row.get("sales") or 0.0)
             qty = float(row.get("qty") or 0.0)
             bucket = buckets[hour]
+            normalized_channel = channel.replace(" ", "")
+            if "배달" in normalized_channel:
+                bucket["delivery_sales"] += sales
+                bucket["delivery_qty"] += qty
+                continue
+            bucket["offline_sales"] += sales
+            bucket["offline_qty"] += qty
+            continue
             if "온라인" in channel:
                 bucket["delivery_sales"] += sales
                 bucket["delivery_qty"] += qty

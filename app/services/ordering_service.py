@@ -17,9 +17,12 @@ from app.schemas.ordering import (
     OrderingDeadlineItem,
     OrderingHistoryAnomalyItem,
     OrderingHistoryChangedItem,
+    OrderingHistoryChartsResponse,
+    OrderingHistoryDailyTrendPoint,
     OrderingHistoryItem,
     OrderingHistoryInsightKpi,
     OrderingHistoryInsightsResponse,
+    OrderingHistoryManualCountPoint,
     OrderingHistoryResponse,
     OrderingOptionsResponse,
     OrderingWeather,
@@ -41,6 +44,10 @@ _DEFAULT_DEADLINE_MINUTE = 0
 _ALERT_THRESHOLD_MINUTES = 20
 _DEFAULT_ORDERING_STORE_ID = "POC_010"
 _DEFAULT_ORDERING_HISTORY_REFERENCE = datetime(2026, 3, 5, 9, 0, 0)
+_ORDERING_CHANGE_ANOMALY_HIGH_THRESHOLD = 0.5
+_ORDERING_CHANGE_ANOMALY_MEDIUM_THRESHOLD = 0.3
+_ORDERING_CHANGE_ANOMALY_LOW_THRESHOLD = 0.2
+_ORDERING_CHANGE_ANOMALY_MAX_ITEMS = 3
 
 
 def _now_kst() -> datetime:
@@ -204,6 +211,29 @@ class OrderingService:
         if weather is None or not business_date:
             return False
         return str(weather.forecast_date).replace("-", "") == str(business_date).replace("-", "")
+
+    @staticmethod
+    def _normalize_region_label(value: str | None) -> str:
+        text = (value or "").strip()
+        if not text:
+            return ""
+        for suffix in ("특별시", "광역시", "특별자치시", "특별자치도", "자치시", "자치도", "도", "시"):
+            if text.endswith(suffix):
+                text = text[: -len(suffix)]
+                break
+        return text.strip()
+
+    def _matches_store_region(self, weather: OrderingWeather | None, store_id: str | None) -> bool:
+        if weather is None or not store_id:
+            return True
+        resolver = getattr(self.repository, "_resolve_store_sido", None)
+        if not callable(resolver):
+            return True
+        store_region = self._normalize_region_label(self._safe_str(resolver(store_id)))
+        weather_region = self._normalize_region_label(weather.region)
+        if not store_region or not weather_region:
+            return True
+        return store_region == weather_region
 
     def _require_history_store_id(self, store_id: str | None) -> str:
         normalized = (store_id or "").strip()
@@ -534,6 +564,8 @@ class OrderingService:
             trend_summary = self._safe_str(ai_payload.get("trend_summary") or ai_payload.get("reasoning"))
             if weather is not None and not self._matches_business_date(weather, business_date):
                 weather = None
+            if weather is not None and not self._matches_store_region(weather, normalized_store_id):
+                weather = None
 
         if trend_summary is None:
             if arrival_schedule:
@@ -685,7 +717,7 @@ class OrderingService:
         schedule_deadline = self._parse_deadline_time(
             self._safe_str((arrival_schedule or {}).get("order_deadline_at"))
         )
-        if schedule_deadline is not None and store_id == _DEFAULT_ORDERING_STORE_ID:
+        if schedule_deadline is not None:
             deadline_hour, deadline_minute = schedule_deadline
 
         now = reference_datetime or _now_kst()
@@ -827,6 +859,43 @@ class OrderingService:
                     f"조회 건수: {data['total_count']}",
                     "주문/납품 기준 데이터: raw_order_arrival_schedule",
                     "SKU 유통기한 기준 데이터: raw_product_shelf_life",
+                ],
+            ),
+        )
+
+    def get_history_charts(
+        self,
+        *,
+        store_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        item_nm: str | None = None,
+        is_auto: bool | None = None,
+        reference_datetime: datetime | None = None,
+    ) -> OrderingHistoryChartsResponse:
+        normalized_store_id = self._require_history_store_id(store_id)
+        resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
+        data = self.repository.get_history_chart_series(
+            store_id=normalized_store_id,
+            date_from=date_from,
+            date_to=date_to,
+            item_nm=item_nm,
+            is_auto=is_auto,
+            reference_datetime=resolved_reference_datetime,
+        )
+        return OrderingHistoryChartsResponse(
+            daily_trend=[
+                OrderingHistoryDailyTrendPoint(**item) for item in data.get("daily_trend", [])
+            ],
+            manual_by_day=[
+                OrderingHistoryManualCountPoint(**item) for item in data.get("manual_by_day", [])
+            ],
+            explainability=create_ready_payload(
+                trace_id=f"ordering-history-charts-{normalized_store_id}",
+                actions=["발주 이력 차트는 페이지 목록이 아닌 기간 전체 집계 결과를 사용합니다."],
+                evidence=[
+                    f"일별 추이 포인트: {len(data.get('daily_trend', []))}",
+                    f"수동 발주 포인트: {len(data.get('manual_by_day', []))}",
                 ],
             ),
         )
@@ -1000,7 +1069,122 @@ class OrderingService:
         ]
 
         anomalies: list[OrderingHistoryAnomalyItem] = []
-        if changed_items_preview:
+        for index, item in enumerate(changed_items_preview, start=1):
+            change_ratio = float(item.get("change_ratio") or 0.0)
+            abs_change_ratio = abs(change_ratio)
+            if abs_change_ratio < _ORDERING_CHANGE_ANOMALY_LOW_THRESHOLD:
+                continue
+
+            latest_qty = int(item.get("latest_ord_qty") or 0)
+            baseline_qty = float(item.get("avg_ord_qty") or 0.0)
+            direction = "증가" if change_ratio > 0 else "감소"
+            if abs_change_ratio >= _ORDERING_CHANGE_ANOMALY_HIGH_THRESHOLD:
+                severity = "high"
+            elif abs_change_ratio >= _ORDERING_CHANGE_ANOMALY_MEDIUM_THRESHOLD:
+                severity = "medium"
+            else:
+                severity = "low"
+
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id=f"top-changed-item-{index}",
+                    severity=severity,
+                    kind="ordering_change",
+                    message=(
+                        f"{item.get('item_nm')} 발주량이 평균 {baseline_qty:.1f}개에서 "
+                        f"최근 {latest_qty}개로 {abs_change_ratio * 100:.1f}% {direction}했습니다."
+                    ),
+                    recommended_action="해당 품목의 최근 판매 추이와 사용 패턴을 함께 보고 발주 기준을 조정하세요.",
+                    related_items=[str(item.get('item_nm'))],
+                )
+            )
+            if len(anomalies) >= _ORDERING_CHANGE_ANOMALY_MAX_ITEMS:
+                break
+
+        if confirm_gap_count > 0:
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id="confirm-gap",
+                    severity="medium",
+                    kind="confirm_gap",
+                    message=f"주문수량과 확정수량 차이가 큰 발주 건이 {confirm_gap_count}건 있습니다.",
+                    recommended_action="확정수량 차이가 반복되는 품목은 발주 기준을 조정하세요.",
+                    related_items=[],
+                )
+            )
+
+        return OrderingHistoryInsightsResponse(
+            kpis=kpis,
+            anomalies=[
+                OrderingHistoryAnomalyItem(**anomaly)
+                for anomaly in OrderingService._sort_history_anomalies(
+                    [anomaly.model_dump() for anomaly in anomalies]
+                )
+            ],
+            top_changed_items=[
+                OrderingHistoryChangedItem(**item)
+                for item in changed_items_preview[: min(len(changed_items_preview), 5)]
+            ],
+            sources=["ordering_history_summary_stats"],
+            retrieved_contexts=["deterministic_fallback"],
+            confidence=0.95,
+        )
+
+        kpis = [
+            OrderingHistoryInsightKpi(
+                key="auto_rate",
+                label="자동 발주 비율",
+                value=f"{auto_rate * 100:.1f}%",
+                tone="primary",
+            ),
+            OrderingHistoryInsightKpi(
+                key="manual_rate",
+                label="수동 발주 비율",
+                value=f"{manual_rate * 100:.1f}%",
+                tone="warning",
+            ),
+            OrderingHistoryInsightKpi(
+                key="avg_order_qty",
+                label="평균 발주 수량",
+                value=f"{avg_order_qty:.1f}개",
+                tone="default",
+            ),
+        ]
+
+        anomalies: list[OrderingHistoryAnomalyItem] = []
+        for index, item in enumerate(changed_items_preview, start=1):
+            change_ratio = float(item.get("change_ratio") or 0.0)
+            abs_change_ratio = abs(change_ratio)
+            if abs_change_ratio < _ORDERING_CHANGE_ANOMALY_LOW_THRESHOLD:
+                continue
+
+            latest_qty = int(item.get("latest_ord_qty") or 0)
+            baseline_qty = float(item.get("avg_ord_qty") or 0.0)
+            direction = "利앷?" if change_ratio > 0 else "媛먯냼"
+            if abs_change_ratio >= _ORDERING_CHANGE_ANOMALY_HIGH_THRESHOLD:
+                severity = "high"
+            elif abs_change_ratio >= _ORDERING_CHANGE_ANOMALY_MEDIUM_THRESHOLD:
+                severity = "medium"
+            else:
+                severity = "low"
+
+            anomalies.append(
+                OrderingHistoryAnomalyItem(
+                    id=f"top-changed-item-{index}",
+                    severity=severity,
+                    kind="ordering_change",
+                    message=(
+                        f"{item.get('item_nm')} 諛쒖＜?됱씠 ?됯퇏 {baseline_qty:.1f}媛쒖뿉??"
+                        f"理쒓렐 {latest_qty}媛쒕줈 {abs_change_ratio * 100:.1f}% {direction}?덉뒿?덈떎."
+                    ),
+                    recommended_action="?대떦 ?덈ぉ??理쒓렐 ?먮ℓ 異붿씠? ?ъ슜?됱쓣 ?댁썙 諛쒖＜ ?됱쓣 ?ш쾶 議곗젙?섏꽭??",
+                    related_items=[str(item.get("item_nm"))],
+                )
+            )
+            if len(anomalies) >= _ORDERING_CHANGE_ANOMALY_MAX_ITEMS:
+                break
+
+        if False and changed_items_preview:
             top_item = changed_items_preview[0]
             change_ratio = float(top_item.get("change_ratio") or 0.0)
             latest_qty = int(top_item.get("latest_ord_qty") or 0)
@@ -1039,7 +1223,7 @@ class OrderingService:
                 for anomaly in OrderingService._sort_history_anomalies(
                     [anomaly.model_dump() for anomaly in anomalies]
                 )
-            ][:8],
+            ][:4],
             top_changed_items=[
                 OrderingHistoryChangedItem(**item)
                 for item in changed_items_preview
@@ -1071,8 +1255,6 @@ class OrderingService:
         reference_datetime: datetime | None = None,
     ) -> OrderingHistoryInsightsResponse:
         normalized_store_id = self._require_history_store_id(store_id)
-        if not self.ai_client:
-            raise RuntimeError("AI service is unavailable")
         resolved_reference_datetime = self._resolve_history_reference_datetime(reference_datetime)
 
         data = self.repository.get_history_filtered(
@@ -1109,14 +1291,11 @@ class OrderingService:
             recent_date_from=date_from,
             recent_date_to=date_to,
         )
-        if self.repository.uses_ordering_join_table(normalized_store_id):
+        if self.repository.uses_ordering_join_table(normalized_store_id) or not self.ai_client:
             return self._build_deterministic_history_insights(
                 store_id=normalized_store_id,
                 summary_stats=summary_stats,
             )
-
-        if not self.ai_client:
-            raise RuntimeError("AI service is unavailable")
 
         filters = {
             "date_from": date_from,
@@ -1161,7 +1340,7 @@ class OrderingService:
                 anomalies=[
                     OrderingHistoryAnomalyItem(**anomaly)
                     for anomaly in self._sort_history_anomalies(anomaly_payloads)
-                ][:8],
+                ][:4],
                 top_changed_items=[
                     OrderingHistoryChangedItem(**item)
                     for item in (summary_stats.get("top_changed_items_preview") or [])
