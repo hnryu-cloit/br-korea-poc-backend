@@ -3166,12 +3166,12 @@ class ProductionRepository(BaseRepository):
                 item_nm = str(row.get("item_nm") or "").strip()
                 normalized_name_key = self._normalize_menu_name_key(item_nm)
                 avg_unit_price = self._safe_float(row.get("avg_unit_price"))
-                if item_cd and item_cd not in unit_price_map:
-                    unit_price_map[item_cd] = avg_unit_price
-                if item_nm and item_nm not in unit_price_map:
-                    unit_price_map[item_nm] = avg_unit_price
-                if normalized_name_key and normalized_name_key not in unit_price_map:
-                    unit_price_map[normalized_name_key] = avg_unit_price
+                for key in (item_cd, item_nm, normalized_name_key):
+                    if not key:
+                        continue
+                    current_price = self._safe_float(unit_price_map.get(key))
+                    if key not in unit_price_map or (current_price <= 0 and avg_unit_price > 0):
+                        unit_price_map[key] = avg_unit_price
 
             return self._compute_expiry_waste_rows(
                 production_rows=[dict(r) for r in production_rows],

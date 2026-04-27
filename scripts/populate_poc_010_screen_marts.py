@@ -153,11 +153,14 @@ def populate_waste_daily(connection, *, store_id: str, start_date: str, end_date
     for row in unit_price_rows:
         item_cd = str(row.get("item_cd") or "").strip()
         item_nm = str(row.get("item_nm") or "").strip()
+        normalized_name_key = repository._normalize_menu_name_key(item_nm)
         avg_unit_price = repository._safe_float(row.get("avg_unit_price"))
-        if item_cd and item_cd not in unit_price_map:
-            unit_price_map[item_cd] = avg_unit_price
-        if item_nm and item_nm not in unit_price_map:
-            unit_price_map[item_nm] = avg_unit_price
+        for key in (item_cd, item_nm, normalized_name_key):
+            if not key:
+                continue
+            current_price = repository._safe_float(unit_price_map.get(key))
+            if key not in unit_price_map or (current_price <= 0 and avg_unit_price > 0):
+                unit_price_map[key] = avg_unit_price
 
     upsert_sql = load_queries("poc_010_production_waste_daily_upsert.sql")[0]
     inserted = 0

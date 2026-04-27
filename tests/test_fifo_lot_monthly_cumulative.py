@@ -128,6 +128,60 @@ def test_fifo_lot_summary_returns_empty_on_first_day_of_month() -> None:
     assert total == 0
 
 
+def test_fifo_lot_summary_falls_back_to_inventory_table_when_mart_is_empty() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE inventory_fifo_lots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    masked_stor_cd TEXT NOT NULL,
+                    item_cd TEXT,
+                    item_nm TEXT NOT NULL,
+                    lot_type TEXT NOT NULL,
+                    lot_date DATE NOT NULL,
+                    expiry_date DATE,
+                    shelf_life_days INTEGER,
+                    initial_qty NUMERIC NOT NULL DEFAULT 0,
+                    consumed_qty NUMERIC NOT NULL DEFAULT 0,
+                    wasted_qty NUMERIC NOT NULL DEFAULT 0,
+                    unit_cost NUMERIC NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO inventory_fifo_lots (
+                    masked_stor_cd, item_cd, item_nm, lot_type, lot_date, expiry_date,
+                    shelf_life_days, initial_qty, consumed_qty, wasted_qty, status
+                ) VALUES
+                    ('POC_010', 'SKU-001', 'Glazed', 'production', '2026-03-10', '2026-03-11', 1, 10, 3, 2, 'expired')
+                """
+            )
+        )
+
+    repository = ProductionRepository(engine=engine)
+    repository._get_fifo_lot_summary_from_inventory_mart = lambda **_kwargs: ([], 0)  # type: ignore[method-assign]
+    repository._fetch_direct_production_item_keys = lambda **_kwargs: {"SKU-001"}  # type: ignore[method-assign]
+
+    rows, total = repository.get_fifo_lot_summary(
+        store_id="POC_010",
+        page=1,
+        page_size=20,
+        date="2026-03-31",
+    )
+
+    assert total == 1
+    assert rows[0]["item_nm"] == "Glazed"
+    assert rows[0]["lot_type"] == "production"
+    assert rows[0]["total_wasted_qty"] == 2.0
+
+
 def test_fifo_lot_summary_normalizes_item_type_using_store_production_items() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
