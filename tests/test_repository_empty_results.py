@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 
 from app.repositories import ordering_repository as ordering_repository_module
+from app.repositories import production_repository as production_repository_module
 from app.repositories.ordering_repository import OrderingRepository
 from app.repositories.production_repository import ProductionRepository
 from app.services.ordering_service import OrderingService
@@ -87,6 +88,33 @@ async def test_ordering_repository_list_options_prefers_store_cache() -> None:
     assert len(options) == 3
     assert options[0]["basis"] == "2026-02-26"
     assert options[0]["items"][0]["sku_name"] == "Bagel"
+
+
+def test_production_waste_rows_fallbacks_when_mart_table_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = ProductionRepository(engine=_FakeWasteFallbackEngine())
+
+    monkeypatch.setattr(
+        repository,
+        "_production_waste_daily_mart_table",
+        lambda store_id: "mart_poc_010_production_waste_daily",
+    )
+    monkeypatch.setattr(
+        production_repository_module,
+        "has_table",
+        lambda engine, table_name: False,
+    )
+
+    rows = repository.get_production_waste_rows(
+        store_id="POC_010",
+        date_from="20260203",
+        date_to="20260304",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["item_cd"] == "SKU_1"
+    assert rows[0]["item_nm"] == "Test Waste Item"
+    assert rows[0]["total_waste_qty"] == 10
+    assert rows[0]["total_waste_amount"] == 1000
 
 
 class _FakeScalarResult:
@@ -262,6 +290,48 @@ class _FakeDeadlineItemsEngine:
 
     def connect(self):
         return self._connection
+
+
+class _FakeWasteFallbackConnection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "FROM mart_poc_010_production_waste_daily" in sql:
+            return _FakeMappingsResult(all_rows=[])
+        if "FROM raw_production_extract p" in sql:
+            return _FakeMappingsResult(
+                all_rows=[
+                    {
+                        "prod_dt": "20260203",
+                        "item_cd": "SKU_1",
+                        "item_nm": "Test Waste Item",
+                        "produced_qty": 10,
+                    }
+                ]
+            )
+        if "FROM core_daily_item_sales s" in sql:
+            return _FakeMappingsResult(all_rows=[])
+        if "AVG(actual_sale_amt / NULLIF(sale_qty, 0)) AS avg_unit_price" in sql:
+            return _FakeMappingsResult(
+                all_rows=[
+                    {
+                        "item_cd": "SKU_1",
+                        "item_nm": "Test Waste Item",
+                        "avg_unit_price": 100,
+                    }
+                ]
+            )
+        raise AssertionError(f"Unexpected SQL executed: {sql}")
+
+
+class _FakeWasteFallbackEngine:
+    def connect(self):
+        return _FakeWasteFallbackConnection()
 
 
 class _FakeOrderingTrendConnection:

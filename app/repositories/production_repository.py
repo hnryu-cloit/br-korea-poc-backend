@@ -3059,11 +3059,15 @@ class ProductionRepository(BaseRepository):
                         .mappings()
                         .all()
                     )
-            except SQLAlchemyError:
-                return []
-            return [dict(row) for row in rows]
-        if self._production_waste_daily_mart_configured(store_id):
-            return []
+                mart_rows = [dict(row) for row in rows]
+                if mart_rows:
+                    return mart_rows
+            except SQLAlchemyError as exc:
+                logger.warning(
+                    "get_production_waste_rows mart query failed, falling back to raw FIFO: store_id=%s error=%s",
+                    store_id,
+                    exc,
+                )
         try:
             target_start = self._parse_yyyymmdd(date_from)
             lookback_start = (target_start - timedelta(days=60)).strftime("%Y%m%d")
