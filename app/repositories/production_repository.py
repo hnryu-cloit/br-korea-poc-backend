@@ -2053,15 +2053,18 @@ class ProductionRepository(BaseRepository):
     @staticmethod
     def _resolve_active_item_keys(
         *,
-        recent_sales_keys: set[str],
         recent_production_keys: set[str],
         direct_production_keys: set[str],
     ) -> set[str]:
         # 생산 현황 조회 대상:
-        # 1) 최근 7일 내 생산 이력이 있는 제품
-        # 2) 최근 7일 내 매출 이력이 있으면서 해당 지점 생산 대상인 제품
+        # 1) 해당 지점 생산 대상 제품 목록이 있으면 그 목록을 기준으로 보고
+        # 2) 그중 최근 7일 내 실제 생산 이력이 있는 SKU만 포함한다.
+        # 3) 생산 대상 목록이 비어 있는 매장은 최근 7일 생산 이력 SKU로 폴백한다.
+        recent_keys = set(recent_production_keys)
         direct_keys = set(direct_production_keys)
-        return set(recent_production_keys) | (set(recent_sales_keys) & direct_keys)
+        if direct_keys:
+            return recent_keys & direct_keys
+        return recent_keys
 
     @staticmethod
     def _normalize_reference_date(value: str | None) -> str:
@@ -2267,17 +2270,12 @@ class ProductionRepository(BaseRepository):
         normalized_business_date = (
             str(business_date).replace("-", "").strip() if business_date else None
         )
-        recent_sales_keys = self._fetch_recent_sales_item_keys(
-            store_id=store_id,
-            business_date=business_date,
-        )
         recent_production_keys = self._fetch_recent_production_item_keys(
             store_id=store_id,
             business_date=business_date,
         )
         direct_production_keys = self._fetch_store_production_item_keys(store_id)
         active_keys = self._resolve_active_item_keys(
-            recent_sales_keys=recent_sales_keys,
             recent_production_keys=recent_production_keys,
             direct_production_keys=direct_production_keys,
         )
@@ -2712,14 +2710,9 @@ class ProductionRepository(BaseRepository):
             store_id=store_id,
             business_date=business_date,
         )
-        recent_sales_keys = self._fetch_recent_sales_item_keys(
-            store_id=store_id,
-            business_date=business_date,
-        )
         direct_production_keys = self._fetch_store_production_item_keys(store_id)
 
         active_keys = self._resolve_active_item_keys(
-            recent_sales_keys=recent_sales_keys,
             recent_production_keys=recent_production_keys,
             direct_production_keys=direct_production_keys,
         )

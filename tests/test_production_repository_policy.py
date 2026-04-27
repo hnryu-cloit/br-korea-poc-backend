@@ -324,11 +324,19 @@ def test_build_inventory_metric_row_uses_inventory_snapshot_for_stock_rate() -> 
     assert row["stk_rt"] == -0.2
 
 
-def test_resolve_active_item_keys_keeps_sales_items_only_when_store_can_produce_them() -> None:
+def test_resolve_active_item_keys_keeps_only_recently_produced_store_targets() -> None:
     active_keys = ProductionRepository._resolve_active_item_keys(
-        recent_sales_keys={"SKU_A", "Americano", "SKU_B", "Latte"},
         recent_production_keys={"SKU_C", "Bagel"},
         direct_production_keys={"SKU_A", "Americano", "SKU_D", "Muffin"},
     )
 
-    assert active_keys == {"SKU_A", "Americano", "SKU_C", "Bagel"}
+    assert active_keys == set()
+
+
+def test_resolve_active_item_keys_falls_back_to_recent_production_when_target_list_missing() -> None:
+    active_keys = ProductionRepository._resolve_active_item_keys(
+        recent_production_keys={"SKU_C", "Bagel"},
+        direct_production_keys=set(),
+    )
+
+    assert active_keys == {"SKU_C", "Bagel"}
