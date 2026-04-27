@@ -13,6 +13,7 @@ OpenAPI 호출 형식:
 페이지네이션은 START_INDEX/END_INDEX 1000행 단위 반복.
 """
 from __future__ import annotations
+from _runner import run_main
 
 import argparse
 import os
@@ -363,4 +364,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_main(main)

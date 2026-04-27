@@ -1,5 +1,6 @@
 import os
 import sys
+from _runner import run_main
 
 import pandas as pd
 
@@ -24,4 +25,4 @@ def load_store_prod_item():
 
 
 if __name__ == "__main__":
-    load_store_prod_item()
+    run_main(load_store_prod_item)

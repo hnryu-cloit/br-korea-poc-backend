@@ -1,4 +1,5 @@
 from __future__ import annotations
+from _runner import run_main
 
 import sys
 from pathlib import Path
@@ -135,4 +136,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_main(main)

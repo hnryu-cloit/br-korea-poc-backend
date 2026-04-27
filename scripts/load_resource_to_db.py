@@ -1,9 +1,13 @@
 from __future__ import annotations
+from _runner import run_main
 
-print("SCRIPT STARTING")
+print("SCRIPT STARTING", flush=True)
+import argparse
 import csv
 import json
+import logging
 import sys
+import traceback
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.infrastructure.db.connection import get_database_engine, get_safe_database_url
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("load_resource")
 
 # Migration은 raw/운영 테이블을 만들고, 이 스크립트는 manifest 정의대로
 # resource 파일을 해당 테이블에 적재한다.
@@ -99,6 +110,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
         source_path = (backend_root / relative_path).resolve()
         source_file = str(source_path.relative_to(settings.project_root))
         table = dataset["table"]
+        logger.info("→ loading table=%s file=%s loader=%s", table, source_file, dataset["loader"])
         connection.execute(
             text(f'DELETE FROM "{table}" WHERE source_file = :source_file'),
             {"source_file": source_file},
@@ -183,6 +195,11 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
         except Exception as exc:
             status = "failed"
             message = str(exc)
+            logger.error("✗ FAILED table=%s file=%s err=%s", table, source_file, message)
+            logger.error("traceback:\n%s", traceback.format_exc())
+
+        if status == "success":
+            logger.info("✓ done table=%s rows=%d sheet=%s", table, row_count, source_sheet)
 
         connection.execute(
             text(
@@ -205,6 +222,9 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                 "message": message,
             },
         )
+
+        if status == "failed":
+            raise RuntimeError(f"dataset load failed: table={table} file={source_file}: {message}")
 
 
 def populate_store_clusters(connection: Any) -> int:
@@ -449,19 +469,28 @@ def populate_fifo_lots_for_store(connection: Any, store_cd: str) -> tuple[int, i
 
 
 def main() -> None:
-    print("Starting main...")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--start-from",
+        type=int,
+        default=0,
+        help="manifest dataset index(0-base)부터 시작 (이전까지는 건너뜀, 디버깅용)",
+    )
+    args = parser.parse_args()
+
+    logger.info("Starting load_resource_to_db (start_from=%d)", args.start_from)
     manifest = json.loads(settings.manifest_path.read_text(encoding="utf-8"))
-    print(f"Manifest loaded from {settings.manifest_path}")
+    logger.info("Manifest loaded from %s (datasets=%d)", settings.manifest_path, len(manifest["datasets"]))
     engine = get_database_engine()
-    print(f"Engine created: {engine}")
+    logger.info("Engine created: %s", engine)
     if engine is None:
         raise RuntimeError(
             "PostgreSQL driver is not installed. Install psycopg before loading resource data."
         )
 
-    print("Beginning transaction...")
+    logger.info("==== Phase 1: manifest dataset 적재 시작 ====")
     with engine.begin() as connection:
-        print("Transaction started. Inserting ingestion_run...")
+        logger.info("Transaction started. Inserting ingestion_run...")
         run_id = connection.execute(
             text(
                 """
@@ -478,9 +507,15 @@ def main() -> None:
         ).scalar_one()
 
         try:
-            for dataset in manifest["datasets"]:
+            for idx, dataset in enumerate(manifest["datasets"]):
+                if idx < args.start_from:
+                    logger.info("[%d/%d] SKIP table=%s (start_from=%d)", idx, len(manifest["datasets"]), dataset["table"], args.start_from)
+                    continue
+                logger.info("[%d/%d] dataset start table=%s", idx, len(manifest["datasets"]), dataset["table"])
                 load_dataset(connection, dataset, run_id)
+            logger.info("==== Phase 1.5: store_clusters 파생 ====")
             cluster_row_count = populate_store_clusters(connection)
+            logger.info("store_clusters populated rows=%d", cluster_row_count)
             connection.execute(
                 text(
                     """
@@ -518,6 +553,8 @@ def main() -> None:
                 },
             )
         except Exception as exc:
+            logger.error("Phase 1 FAILED run_id=%s err=%s", run_id, exc)
+            logger.error("traceback:\n%s", traceback.format_exc())
             connection.execute(
                 text(
                     """
@@ -535,21 +572,36 @@ def main() -> None:
             )
             raise
 
-    print(f"Loaded resource data into {get_safe_database_url()}")
+    logger.info("Loaded resource data into %s", get_safe_database_url())
 
     # Phase 2: FIFO Lot 적재 — 점포별 별도 트랜잭션
-    print("Phase 2: FIFO lot population per store...")
+    logger.info("==== Phase 2: FIFO lot population per store ====")
     store_codes = get_fifo_store_codes(engine)
     total_prod = total_deliv = 0
+    failed_stores: list[tuple[str, str]] = []
     for idx, store_cd in enumerate(store_codes, 1):
-        with engine.begin() as conn:
-            prod_cnt, deliv_cnt = populate_fifo_lots_for_store(conn, store_cd)
-        total_prod += prod_cnt
-        total_deliv += deliv_cnt
-        print(f"  [{idx}/{len(store_codes)}] {store_cd}: prod={prod_cnt}, deliv={deliv_cnt}")
+        try:
+            with engine.begin() as conn:
+                prod_cnt, deliv_cnt = populate_fifo_lots_for_store(conn, store_cd)
+            total_prod += prod_cnt
+            total_deliv += deliv_cnt
+            logger.info("  [%d/%d] %s: prod=%d, deliv=%d", idx, len(store_codes), store_cd, prod_cnt, deliv_cnt)
+        except Exception as exc:
+            failed_stores.append((store_cd, str(exc)))
+            logger.error("  [%d/%d] %s FAILED: %s", idx, len(store_codes), store_cd, exc)
+            logger.error("traceback:\n%s", traceback.format_exc())
 
-    print(f"FIFO lots complete — stores={len(store_codes)}, production={total_prod}, delivery={total_deliv}")
+    logger.info(
+        "FIFO lots complete — stores=%d, ok=%d, failed=%d, production=%d, delivery=%d",
+        len(store_codes), len(store_codes) - len(failed_stores), len(failed_stores),
+        total_prod, total_deliv,
+    )
+    if failed_stores:
+        logger.error("Failed stores summary:")
+        for store_cd, err in failed_stores:
+            logger.error("  - %s: %s", store_cd, err)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
-    main()
+    run_main(main)

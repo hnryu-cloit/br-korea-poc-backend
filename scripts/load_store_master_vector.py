@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from _runner import run_main
 
 import pandas as pd
 import psycopg
@@ -98,4 +99,4 @@ def load_store_master():
 
 
 if __name__ == "__main__":
-    load_store_master()
+    run_main(load_store_master)

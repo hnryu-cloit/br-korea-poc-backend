@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from _runner import run_main
 
 import pandas as pd
 from sqlalchemy import text
@@ -100,4 +101,4 @@ def load_all_data():
 
 
 if __name__ == "__main__":
-    load_all_data()
+    run_main(load_all_data)

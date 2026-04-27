@@ -2,6 +2,7 @@ import csv
 import os
 import sys
 from io import StringIO
+from _runner import run_main
 
 import pandas as pd
 
@@ -143,4 +144,4 @@ def load_data():
 
 
 if __name__ == "__main__":
-    load_data()
+    run_main(load_data)

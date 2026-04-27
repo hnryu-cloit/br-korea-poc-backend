@@ -1,4 +1,5 @@
 from __future__ import annotations
+from _runner import run_main
 
 from datetime import datetime
 from pathlib import Path
@@ -57,4 +58,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_main(main)

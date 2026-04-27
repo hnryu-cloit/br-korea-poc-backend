@@ -1,4 +1,5 @@
 import psycopg
+from _runner import run_main
 
 
 def check_vector():
@@ -11,4 +12,4 @@ def check_vector():
 
 
 if __name__ == "__main__":
-    check_vector()
+    run_main(check_vector)

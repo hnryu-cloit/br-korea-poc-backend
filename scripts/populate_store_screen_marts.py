@@ -1,4 +1,5 @@
 from __future__ import annotations
+from _runner import run_main
 
 import argparse
 import sys
@@ -372,4 +373,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_main(main)

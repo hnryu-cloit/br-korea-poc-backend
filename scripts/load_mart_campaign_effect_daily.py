@@ -8,6 +8,7 @@ sales_lift_ratio = (캠페인 일자 매출 - baseline) / baseline.
 """
 
 from __future__ import annotations
+from _runner import run_main
 
 import logging
 import sys
@@ -222,4 +223,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_main(main)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from _runner import run_main
 
 import os
 import re
@@ -50,4 +51,4 @@ def reset_db():
 
 
 if __name__ == "__main__":
-    reset_db()
+    run_main(reset_db)
