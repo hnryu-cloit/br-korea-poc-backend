@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS mart_poc_010_analytics_daily;
+DROP TABLE IF EXISTS mart_poc_010_analytics_hourly;
+DROP TABLE IF EXISTS mart_poc_010_analytics_deadline;
+DROP TABLE IF EXISTS mart_poc_010_production_inventory_status;
+DROP TABLE IF EXISTS mart_poc_010_production_waste_daily;
+DROP TABLE IF EXISTS mart_poc_010_production_waste_monthly;
+DROP TABLE IF EXISTS mart_production_status;
+DROP TABLE IF EXISTS mart_ordering_join_poc_010;
+DROP TABLE IF EXISTS mart_sales_margin_daily;
+DROP TABLE IF EXISTS production_prediction_snapshot_items;
+DROP TABLE IF EXISTS production_prediction_snapshots;
