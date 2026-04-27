@@ -116,13 +116,22 @@ class AnalyticsRepository:
         items: list[dict] = []
         sales_metrics = self._get_sales_metrics(store_id=resolved_store_id, period=period)
         selected_period_total_sales = None
+        selected_period_prior_total_sales = None
+        selected_period_actual_total_sales = None
+        selected_period_prior_actual_total_sales = None
         if sales_metrics:
             selected_period_total_sales = sales_metrics.get("total_sales_amount")
+            selected_period_prior_total_sales = sales_metrics.get("prior_total_sales_amount")
+            selected_period_actual_total_sales = sales_metrics.get("actual_total_sales_amount")
+            selected_period_prior_actual_total_sales = sales_metrics.get(
+                "prior_actual_total_sales_amount"
+            )
 
         channel_metrics = self._get_channel_metrics(
             store_id=resolved_store_id,
             period=period,
-            total_sales_amount=selected_period_total_sales,
+            total_sales_amount=selected_period_actual_total_sales,
+            prior_total_sales_amount=selected_period_prior_actual_total_sales,
         )
         if channel_metrics:
             items.extend(
@@ -528,11 +537,16 @@ class AnalyticsRepository:
 
         return float(row["recent_count"] or 0), float(row["prior_count"] or 0)
 
+    @staticmethod
+    def _resolve_offline_takeout_sales(total_sales: float | None, delivery_sales: float | None) -> float:
+        return max(float(total_sales or 0) - float(delivery_sales or 0), 0.0)
+
     def _get_channel_metrics(
         self,
         store_id: str | None,
         period: dict[str, str] | None,
         total_sales_amount: float | None = None,
+        prior_total_sales_amount: float | None = None,
     ) -> dict | None:
         if not self.engine:
             return None
@@ -547,6 +561,10 @@ class AnalyticsRepository:
         )
         sales_expr = "CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)"
         order_expr = "CAST(COALESCE(NULLIF(CAST(ord_cnt AS TEXT), ''), '0') AS NUMERIC)"
+        offline_channel_condition = "COALESCE(ho_chnl_div, '') = '오프라인'"
+        online_channel_condition = "COALESCE(ho_chnl_div, '') LIKE '온라인%'"
+        online_delivery_condition = "COALESCE(ho_chnl_div, '') LIKE '온라인-배달%'"
+        online_takeout_condition = "COALESCE(ho_chnl_div, '') LIKE '온라인-픽업%'"
         delivery_condition = "COALESCE(ho_chnl_div, '') LIKE '%배달%'"
         takeout_condition = (
             "COALESCE(ho_chnl_div, '') LIKE '%픽업%' "
@@ -571,10 +589,10 @@ class AnalyticsRepository:
                 daily AS (
                     SELECT
                         sale_dt,
-                        SUM(CASE WHEN ho_chnl_div = '' THEN ord_cnt_num ELSE 0 END) AS offline_orders,
-                        SUM(sale_amt_num) AS online_sales,
-                        SUM(CASE WHEN {delivery_condition} THEN sale_amt_num ELSE 0 END) AS delivery_sales,
-                        SUM(CASE WHEN {takeout_condition} THEN ord_cnt_num ELSE 0 END) AS takeout_orders,
+                        SUM(CASE WHEN {offline_channel_condition} THEN ord_cnt_num ELSE 0 END) AS offline_orders,
+                        SUM(CASE WHEN {online_channel_condition} THEN sale_amt_num ELSE 0 END) AS online_sales,
+                        SUM(CASE WHEN {online_delivery_condition} THEN sale_amt_num ELSE 0 END) AS delivery_sales,
+                        SUM(CASE WHEN {online_takeout_condition} THEN ord_cnt_num ELSE 0 END) AS takeout_orders,
                         SUM(CASE WHEN hour_div <= 15 THEN sale_amt_num ELSE 0 END) AS lunch_sales,
                         SUM(CASE WHEN hour_div <= 15 THEN ord_cnt_num ELSE 0 END) AS lunch_orders,
                         SUM(CASE WHEN hour_div > 15 AND hour_div < 17 THEN sale_amt_num ELSE 0 END) AS swing_sales,
@@ -625,10 +643,10 @@ class AnalyticsRepository:
                 daily AS (
                     SELECT
                         sale_dt,
-                        SUM(CASE WHEN ho_chnl_div = '' THEN ord_cnt_num ELSE 0 END) AS offline_orders,
-                        SUM(sale_amt_num) AS online_sales,
-                        SUM(CASE WHEN {delivery_condition} THEN sale_amt_num ELSE 0 END) AS delivery_sales,
-                        SUM(CASE WHEN {takeout_condition} THEN ord_cnt_num ELSE 0 END) AS takeout_orders,
+                        SUM(CASE WHEN {offline_channel_condition} THEN ord_cnt_num ELSE 0 END) AS offline_orders,
+                        SUM(CASE WHEN {online_channel_condition} THEN sale_amt_num ELSE 0 END) AS online_sales,
+                        SUM(CASE WHEN {online_delivery_condition} THEN sale_amt_num ELSE 0 END) AS delivery_sales,
+                        SUM(CASE WHEN {online_takeout_condition} THEN ord_cnt_num ELSE 0 END) AS takeout_orders,
                         SUM(CASE WHEN hour_div <= 15 THEN sale_amt_num ELSE 0 END) AS lunch_sales,
                         SUM(CASE WHEN hour_div <= 15 THEN ord_cnt_num ELSE 0 END) AS lunch_orders,
                         SUM(CASE WHEN hour_div > 15 AND hour_div < 17 THEN sale_amt_num ELSE 0 END) AS swing_sales,
@@ -736,7 +754,15 @@ class AnalyticsRepository:
         dinner_recent_unit_price = unit_price(recent_dinner_sales, recent_dinner_orders)
         dinner_prior_unit_price = unit_price(prior_dinner_sales, prior_dinner_orders)
 
-        takeout_change, takeout_trend = fmt_change(recent_takeout_orders, prior_takeout_orders)
+        offline_takeout_sales_recent = self._resolve_offline_takeout_sales(
+            total_sales_amount, recent_delivery_sales
+        )
+        offline_takeout_sales_prior = self._resolve_offline_takeout_sales(
+            prior_total_sales_amount, prior_delivery_sales
+        )
+        takeout_change, takeout_trend = fmt_change(
+            offline_takeout_sales_recent, offline_takeout_sales_prior
+        )
         delivery_change, delivery_trend = fmt_change(recent_delivery_sales, prior_delivery_sales)
         in_store_change, in_store_trend = fmt_change(in_store_pay_recent, in_store_pay_prior)
         lunch_change, lunch_trend = fmt_change(lunch_recent_unit_price, lunch_prior_unit_price)
@@ -751,7 +777,7 @@ class AnalyticsRepository:
                 return "전체 매출액 중 0.0%"
             return f"전체 매출액 중 {(amount / base_total_sales) * 100:.1f}%"
 
-        takeout_sales_recent = max(recent_online_sales - recent_delivery_sales, 0.0)
+        takeout_sales_recent = offline_takeout_sales_recent
         return {
             "takeout_count": {
                 "label": "오프라인+투고 매출액",
@@ -805,13 +831,17 @@ class AnalyticsRepository:
 
         store_filter, store_params = self._build_store_filter(store_id)
         amt_expr = "CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC)"
+        actual_amt_expr = "CAST(COALESCE(NULLIF(CAST(actual_sale_amt AS TEXT), ''), '0') AS NUMERIC)"
 
         if period:
             params: dict[str, str] = {**store_params, **period}
             query = text(
                 f"""
                 WITH daily AS (
-                    SELECT sale_dt, SUM({amt_expr}) AS total_sales
+                    SELECT
+                        sale_dt,
+                        SUM({amt_expr}) AS total_sales,
+                        SUM({actual_amt_expr}) AS actual_total_sales
                     FROM raw_daily_store_item
                     {store_filter}
                     GROUP BY sale_dt
@@ -828,6 +858,8 @@ class AnalyticsRepository:
                 SELECT
                     COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN total_sales END), 0) AS recent_total_sales,
                     COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN total_sales END), 0) AS prior_total_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN actual_total_sales END), 0) AS recent_actual_total_sales,
+                    COALESCE(SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN actual_total_sales END), 0) AS prior_actual_total_sales,
                     COALESCE((SELECT SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN coffee_sales END) FROM coffee), 0) AS recent_coffee_sales,
                     COALESCE((SELECT SUM(CASE WHEN sale_dt BETWEEN :prior_from AND :prior_to THEN coffee_sales END) FROM coffee), 0) AS prior_coffee_sales,
                     COALESCE((SELECT SUM(CASE WHEN sale_dt BETWEEN :recent_from AND :recent_to THEN total_sales END) FROM coffee), 0) AS recent_total_sales_dup,
@@ -842,13 +874,18 @@ class AnalyticsRepository:
                 WITH daily AS (
                     SELECT
                         sale_dt,
-                        SUM({amt_expr}) AS total_sales
+                        SUM({amt_expr}) AS total_sales,
+                        SUM({actual_amt_expr}) AS actual_total_sales
                     FROM raw_daily_store_item
                     {store_filter}
                     GROUP BY sale_dt
                 ),
                 ranked AS (
-                    SELECT sale_dt, total_sales, ROW_NUMBER() OVER (ORDER BY sale_dt DESC) AS rn
+                    SELECT
+                        sale_dt,
+                        total_sales,
+                        actual_total_sales,
+                        ROW_NUMBER() OVER (ORDER BY sale_dt DESC) AS rn
                     FROM daily
                 ),
                 coffee AS (
@@ -871,6 +908,8 @@ class AnalyticsRepository:
                 SELECT
                     COALESCE(SUM(CASE WHEN rn <= 7 THEN total_sales END), 0) AS recent_total_sales,
                     COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN total_sales END), 0) AS prior_total_sales,
+                    COALESCE(SUM(CASE WHEN rn <= 7 THEN actual_total_sales END), 0) AS recent_actual_total_sales,
+                    COALESCE(SUM(CASE WHEN rn > 7 AND rn <= 14 THEN actual_total_sales END), 0) AS prior_actual_total_sales,
                     COALESCE((SELECT recent_coffee_sales FROM coffee), 0) AS recent_coffee_sales,
                     COALESCE((SELECT prior_coffee_sales FROM coffee), 0) AS prior_coffee_sales,
                     COALESCE((SELECT recent_total_sales FROM coffee), 0) AS recent_total_sales_dup,
@@ -884,6 +923,8 @@ class AnalyticsRepository:
 
         recent_total_sales = float(summary["recent_total_sales"] or 0)
         prior_total_sales = float(summary["prior_total_sales"] or 0)
+        recent_actual_total_sales = float(summary["recent_actual_total_sales"] or 0)
+        prior_actual_total_sales = float(summary["prior_actual_total_sales"] or 0)
         recent_coffee_sales = float(summary["recent_coffee_sales"] or 0)
         prior_coffee_sales = float(summary["prior_coffee_sales"] or 0)
         coffee_recent_total = float(summary["recent_total_sales_dup"] or 0)
@@ -931,6 +972,9 @@ class AnalyticsRepository:
                 "detail": "커피 계열 매출 비중",
             },
             "total_sales_amount": round(recent_total_sales, 0),
+            "prior_total_sales_amount": round(prior_total_sales, 0),
+            "actual_total_sales_amount": round(recent_actual_total_sales, 0),
+            "prior_actual_total_sales_amount": round(prior_actual_total_sales, 0),
         }
 
     def _get_discount_metrics(
