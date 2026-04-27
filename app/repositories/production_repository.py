@@ -1706,7 +1706,7 @@ class ProductionRepository(BaseRepository):
             predicted_sales_1h = max(0, current // 2)
         current = max(0, current)
         predicted_sales_1h = max(0, predicted_sales_1h)
-        forecast = max(current - predicted_sales_1h, 0)
+        forecast = current - predicted_sales_1h
 
         order_pressure = order_confirm_qty >= max(1, int(round(predicted_sales_1h * 0.8)))
         velocity_pressure = hourly_sale_qty >= max(1, int(round(predicted_sales_1h * 0.8)))
@@ -2115,7 +2115,7 @@ class ProductionRepository(BaseRepository):
 
             predicted_sales_1h = int(round(avg_sales_by_hour.get(reference_hour, 0.0) * sales_velocity))
             predicted_sales_1h = max(predicted_sales_1h, 0)
-            forecast_stock_1h = max(current_stock - predicted_sales_1h, 0)
+            forecast_stock_1h = current_stock - predicted_sales_1h
 
             remaining_stock = float(current_stock)
             stockout_hour: int | None = None
@@ -2686,10 +2686,7 @@ class ProductionRepository(BaseRepository):
             first_time = str(row.get("avg_first_production_time_4w") or "08:00")
             second_time = str(row.get("avg_second_production_time_4w") or "14:00")
             current_stock = self._safe_non_negative_int(row.get("current_stock"))
-            forecast_stock_1h = min(
-                current_stock,
-                max(self._safe_int(row.get("predicted_stock_1h")), 0),
-            )
+            forecast_stock_1h = self._safe_int(row.get("predicted_stock_1h"))
             items.append(
                 {
                     "sku_id": str(row.get("sku_id") or ""),

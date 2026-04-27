@@ -61,6 +61,7 @@ class ProductionSkuItem(BaseModel):
     image_url: str | None = None
     current_stock: int
     forecast_stock_1h: int
+    predicted_sales_1h: int
     avg_first_production_qty_4w: int
     avg_first_production_time_4w: str
     avg_second_production_qty_4w: int
@@ -100,6 +101,7 @@ class ProductionSkuDetailResponse(BaseModel):
     image_url: str | None = None
     current_stock: int
     forecast_stock_1h: int
+    predicted_sales_1h: int
     recommended_qty: int
     chance_loss_saving_pct: int
     chance_loss_basis_text: str
