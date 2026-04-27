@@ -2196,6 +2196,7 @@ class ProductionRepository(BaseRepository):
     @staticmethod
     def _resolve_active_item_keys(
         *,
+        recent_sales_keys: set[str],
         recent_production_keys: set[str],
         direct_production_keys: set[str],
     ) -> set[str]:
@@ -2203,11 +2204,12 @@ class ProductionRepository(BaseRepository):
         # 1) 해당 지점 생산 대상 제품 목록이 있으면 그 목록을 기준으로 보고
         # 2) 그중 최근 7일 내 실제 생산 이력이 있는 SKU만 포함한다.
         # 3) 생산 대상 목록이 비어 있는 매장은 최근 7일 생산 이력 SKU로 폴백한다.
-        recent_keys = set(recent_production_keys)
+        recent_keys = set(recent_sales_keys) | set(recent_production_keys)
+        recent_production_only_keys = set(recent_production_keys)
         direct_keys = set(direct_production_keys)
         if direct_keys:
             return recent_keys & direct_keys
-        return recent_keys
+        return recent_production_only_keys
 
     @staticmethod
     def _normalize_reference_date(value: str | None) -> str:
@@ -2401,6 +2403,7 @@ class ProductionRepository(BaseRepository):
         self,
         store_id: str | None,
         business_date: str | None,
+        active_keys: set[str] | None = None,
         reference_datetime: datetime | None = None,
     ) -> list[dict]:
         if not self.engine or not hasattr(self.engine, "connect"):
@@ -2413,16 +2416,6 @@ class ProductionRepository(BaseRepository):
         normalized_business_date = (
             str(business_date).replace("-", "").strip() if business_date else None
         )
-        recent_production_keys = self._fetch_recent_production_item_keys(
-            store_id=store_id,
-            business_date=business_date,
-        )
-        direct_production_keys = self._fetch_store_production_item_keys(store_id)
-        active_keys = self._resolve_active_item_keys(
-            recent_production_keys=recent_production_keys,
-            direct_production_keys=direct_production_keys,
-        )
-
         try:
             with self.engine.connect() as connection:
                 if normalized_business_date:
@@ -2509,7 +2502,7 @@ class ProductionRepository(BaseRepository):
         for row in rows:
             sku_id = str(row.get("item_cd") or "").strip()
             name = str(row.get("item_nm") or "").strip()
-            if active_keys and sku_id not in active_keys and name not in active_keys:
+            if active_keys is not None and sku_id not in active_keys and name not in active_keys:
                 continue
 
             current_stock = self._safe_non_negative_int(row.get("total_stock"))
@@ -2584,6 +2577,7 @@ class ProductionRepository(BaseRepository):
         self,
         store_id: str | None,
         business_date: str | None,
+        active_keys: set[str] | None = None,
     ) -> list[dict]:
         if (
             not self.engine
@@ -2681,6 +2675,10 @@ class ProductionRepository(BaseRepository):
 
         items: list[dict] = []
         for row in rows:
+            sku_id = str(row.get("sku_id") or "")
+            name = str(row.get("name") or "")
+            if active_keys is not None and sku_id not in active_keys and name not in active_keys:
+                continue
             first_qty = self._safe_non_negative_int(row.get("avg_first_production_qty_4w"))
             second_qty = self._safe_non_negative_int(row.get("avg_second_production_qty_4w"))
             first_time = str(row.get("avg_first_production_time_4w") or "08:00")
@@ -2689,8 +2687,8 @@ class ProductionRepository(BaseRepository):
             forecast_stock_1h = self._safe_int(row.get("predicted_stock_1h"))
             items.append(
                 {
-                    "sku_id": str(row.get("sku_id") or ""),
-                    "name": str(row.get("name") or ""),
+                    "sku_id": sku_id,
+                    "name": name,
                     "current": current_stock,
                     "forecast": forecast_stock_1h,
                     "predicted_sales_1h": max(current_stock - forecast_stock_1h, 0),
@@ -2719,9 +2717,25 @@ class ProductionRepository(BaseRepository):
         business_date: str | None = None,
         reference_datetime: datetime | None = None,
     ) -> list[dict]:
+        recent_sales_keys = self._fetch_recent_sales_item_keys(
+            store_id=store_id,
+            business_date=business_date,
+        )
+        recent_production_keys = self._fetch_recent_production_item_keys(
+            store_id=store_id,
+            business_date=business_date,
+        )
+        direct_production_keys = self._fetch_store_production_item_keys(store_id)
+        active_keys = self._resolve_active_item_keys(
+            recent_sales_keys=recent_sales_keys,
+            recent_production_keys=recent_production_keys,
+            direct_production_keys=direct_production_keys,
+        )
+
         mart_items = self._list_items_from_mart_production_status(
             store_id=store_id,
             business_date=business_date,
+            active_keys=active_keys,
         )
         if mart_items:
             return self._enrich_items_with_historical_metrics(
@@ -2734,6 +2748,7 @@ class ProductionRepository(BaseRepository):
         snapshot_items = self._list_items_from_prediction_snapshot(
             store_id=store_id,
             business_date=business_date,
+            active_keys=active_keys,
         )
         if snapshot_items:
             return self._enrich_items_with_historical_metrics(
@@ -2845,17 +2860,6 @@ class ProductionRepository(BaseRepository):
                 window_days=7,
                 reference_date=business_date,
             )
-
-        recent_production_keys = self._fetch_recent_production_item_keys(
-            store_id=store_id,
-            business_date=business_date,
-        )
-        direct_production_keys = self._fetch_store_production_item_keys(store_id)
-
-        active_keys = self._resolve_active_item_keys(
-            recent_production_keys=recent_production_keys,
-            direct_production_keys=direct_production_keys,
-        )
 
         items = self._build_new_items(
             production_map,

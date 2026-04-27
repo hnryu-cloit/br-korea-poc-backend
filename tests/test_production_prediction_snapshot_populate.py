@@ -21,6 +21,7 @@ def test_build_ranked_row_keeps_first_and_second_production_distinct() -> None:
 
 def test_resolve_active_item_keys_limits_production_status_scope() -> None:
     active_keys = ProductionRepository._resolve_active_item_keys(
+        recent_sales_keys={"SALES_ONLY", "BOTH"},
         recent_production_keys={"PROD_ONLY", "BOTH"},
         direct_production_keys={"BOTH", "OTHER_DIRECT"},
     )

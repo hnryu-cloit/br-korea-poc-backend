@@ -1156,9 +1156,9 @@ async def test_production_repository_clamps_negative_stock_qty_to_zero_for_curre
 @pytest.mark.asyncio
 async def test_production_repository_prefers_completed_prediction_snapshot(monkeypatch) -> None:
     repository = ProductionRepository(engine=object())
-    repository._list_items_from_mart_production_status = lambda store_id, business_date: []  # type: ignore[method-assign]
+    repository._list_items_from_mart_production_status = lambda store_id, business_date, active_keys=None: []  # type: ignore[method-assign]
 
-    repository._list_items_from_prediction_snapshot = lambda store_id, business_date: [  # type: ignore[method-assign]
+    repository._list_items_from_prediction_snapshot = lambda store_id, business_date, active_keys=None: [  # type: ignore[method-assign]
         {
             "sku_id": "SKU_SNAPSHOT",
             "name": "Snapshot Item",
@@ -1192,8 +1192,11 @@ async def test_production_repository_uses_latest_completed_snapshot_when_busines
         "app.repositories.production_repository.has_table",
         lambda engine, table_name: table_name in {"production_prediction_snapshots", "production_prediction_snapshot_items"},
     )
-    repository._list_items_from_mart_production_status = lambda store_id, business_date: []  # type: ignore[method-assign]
+    repository._list_items_from_mart_production_status = lambda store_id, business_date, active_keys=None: []  # type: ignore[method-assign]
     repository._resolve_store_cache_db_path = lambda store_id: None  # type: ignore[method-assign]
+    repository._fetch_recent_production_item_keys = lambda store_id, business_date=None, window_days=7: {"SKU_SNAPSHOT"}  # type: ignore[method-assign]
+    repository._fetch_recent_sales_item_keys = lambda store_id, business_date=None, window_days=7: set()  # type: ignore[method-assign]
+    repository._fetch_store_production_item_keys = lambda store_id: set()  # type: ignore[method-assign]
 
     items = await repository.list_items(store_id="POC_010")
 
@@ -1208,7 +1211,7 @@ async def test_production_repository_uses_latest_completed_snapshot_when_busines
 async def test_production_repository_prefers_mart_production_status_before_snapshot() -> None:
     repository = ProductionRepository(engine=object())
 
-    repository._list_items_from_mart_production_status = lambda store_id, business_date: [  # type: ignore[method-assign]
+    repository._list_items_from_mart_production_status = lambda store_id, business_date, active_keys=None: [  # type: ignore[method-assign]
         {
             "sku_id": "SKU_MART",
             "name": "Mart Item",
@@ -1226,7 +1229,7 @@ async def test_production_repository_prefers_mart_production_status_before_snaps
             "snapshot_target_hour": 12,
         }
     ]  # type: ignore[return-value]
-    repository._list_items_from_prediction_snapshot = lambda store_id, business_date: [  # type: ignore[method-assign]
+    repository._list_items_from_prediction_snapshot = lambda store_id, business_date, active_keys=None: [  # type: ignore[method-assign]
         {
             "sku_id": "SKU_SNAPSHOT",
             "name": "Snapshot Item",

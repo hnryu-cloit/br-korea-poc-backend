@@ -96,6 +96,40 @@ def test_build_new_items_keeps_zero_current_when_inventory_row_exists_but_stock_
     assert item["prod1"] == "08:00 / 6개"
 
 
+def test_resolve_recommended_qty_from_chance_loss_rounds_to_near_historical_batch() -> None:
+    recommended_qty = ProductionRepository._resolve_recommended_qty_from_chance_loss(
+        chance_loss_qty=18.2,
+        avg_first_qty=20,
+        avg_second_qty=12,
+        reference_hour=9,
+    )
+
+    assert recommended_qty == 20
+
+
+def test_resolve_recommended_qty_from_chance_loss_keeps_required_qty_when_historical_batch_is_too_large() -> None:
+    recommended_qty = ProductionRepository._resolve_recommended_qty_from_chance_loss(
+        chance_loss_qty=3.1,
+        avg_first_qty=20,
+        avg_second_qty=12,
+        reference_hour=9,
+    )
+
+    assert recommended_qty == 4
+
+
+def test_blend_hourly_sales_baseline_uses_weighted_peer_signal() -> None:
+    blended = ProductionRepository._blend_hourly_sales_baseline(10.0, 20.0)
+
+    assert blended == 13.0
+
+
+def test_blend_hourly_sales_baseline_falls_back_to_peer_when_local_missing() -> None:
+    blended = ProductionRepository._blend_hourly_sales_baseline(0.0, 6.0)
+
+    assert blended == 6.0
+
+
 class _ScalarResult:
     def __init__(self, value):
         self._value = value
@@ -326,15 +360,17 @@ def test_build_inventory_metric_row_uses_inventory_snapshot_for_stock_rate() -> 
 
 def test_resolve_active_item_keys_keeps_only_recently_produced_store_targets() -> None:
     active_keys = ProductionRepository._resolve_active_item_keys(
+        recent_sales_keys={"SKU_A", "Americano"},
         recent_production_keys={"SKU_C", "Bagel"},
         direct_production_keys={"SKU_A", "Americano", "SKU_D", "Muffin"},
     )
 
-    assert active_keys == set()
+    assert active_keys == {"SKU_A", "Americano"}
 
 
 def test_resolve_active_item_keys_falls_back_to_recent_production_when_target_list_missing() -> None:
     active_keys = ProductionRepository._resolve_active_item_keys(
+        recent_sales_keys={"SKU_A", "Americano"},
         recent_production_keys={"SKU_C", "Bagel"},
         direct_production_keys=set(),
     )
