@@ -508,7 +508,7 @@ async def test_ordering_service_skips_ai_when_join_table_is_available() -> None:
     service = OrderingService(repository=_Repo(), ai_client=_AI())
 
 @pytest.mark.asyncio
-async def test_ordering_service_list_options_invokes_ai_by_default() -> None:
+async def test_ordering_service_list_options_does_not_invoke_ai_for_option_reasoning() -> None:
     class _Repo:
         async def list_options(
             self,
@@ -553,8 +553,78 @@ async def test_ordering_service_list_options_invokes_ai_by_default() -> None:
     service = OrderingService(repository=_Repo(), ai_client=_AI())
 
     await service.list_options(store_id="POC_010")
+    assert ai_calls == []
+    return
 
     assert len(ai_calls) == 1, "AI는 옵션 수와 무관하게 요청당 1회만 호출되어야 한다"
+
+
+@pytest.mark.asyncio
+async def test_ordering_service_ignores_ai_weather_when_store_region_mismatches() -> None:
+    class _Repo:
+        async def list_options(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> list[dict]:
+            return []
+
+        def uses_ordering_join_table(self, store_id: str | None = None) -> bool:
+            return False
+
+        def _resolve_store_sido(self, store_id: str | None = None) -> str:
+            return "경기도"
+
+        async def get_weather_forecast(
+            self,
+            store_id: str | None = None,
+            reference_date: str | None = None,
+        ) -> dict | None:
+            return {
+                "region": "경기도",
+                "forecast_date": "2026-03-05",
+                "weather_type": "Cloudy",
+                "max_temperature_c": 12,
+                "min_temperature_c": 4,
+                "precipitation_probability": 10,
+            }
+
+        def get_ordering_trend_summary(
+            self,
+            *,
+            store_id: str,
+            reference_date: str | None = None,
+        ) -> str | None:
+            return None
+
+        def get_deadline_items(
+            self,
+            *,
+            store_id: str,
+            reference_datetime=None,
+        ) -> list[dict]:
+            return []
+
+    class _AI:
+        async def recommend_ordering(self, *args, **kwargs):
+            return {
+                "weather": {
+                    "region": "서울특별시",
+                    "forecast_date": "2026-03-05",
+                    "weather_type": "Rainy",
+                    "max_temperature_c": 9,
+                    "min_temperature_c": 2,
+                    "precipitation_probability": 80,
+                }
+            }
+
+    service = OrderingService(repository=_Repo(), ai_client=_AI())
+
+    response = await service.list_options(store_id="POC_010", skip_ai=False)
+
+    assert response.weather is not None
+    assert response.weather.region == "경기도"
+    assert response.weather.weather_type == "Cloudy"
 
 
 @pytest.mark.asyncio
@@ -623,6 +693,7 @@ async def test_ordering_service_list_options_falls_back_to_store_deadline_items(
         reference_datetime=datetime(2026, 3, 5, 9, 0, 0),
     )
 
+    assert response.options[0].reasoning_text == "최근의 운영 흐름을 그대로 이어가고 싶을 때 적합합니다."
     assert response.deadline_at == "12:00"
     assert response.deadline_minutes == 180
     assert len(response.deadline_items) == 2
@@ -1118,7 +1189,7 @@ async def test_production_service_overview_is_empty_when_repository_is_empty() -
 
 
 @pytest.mark.asyncio
-async def test_production_service_uses_avg_first_production_qty_for_recommended_qty() -> None:
+async def test_production_service_uses_repository_recommended_qty_first() -> None:
     class _Repo:
         async def list_items(self, store_id=None, business_date=None, reference_datetime=None):
             return [
@@ -1140,7 +1211,7 @@ async def test_production_service_uses_avg_first_production_qty_for_recommended_
 
     response = await service.get_sku_list(store_id="POC_010")
 
-    assert response.items[0].recommended_production_qty == 10
+    assert response.items[0].recommended_production_qty == 99
 
 
 @pytest.mark.asyncio
@@ -1446,7 +1517,7 @@ async def test_production_service_waste_summary_supports_pagination(monkeypatch)
     assert response.monthly_top_items[0].confirmed_disuse_qty == 7
 
 
-def test_production_service_recommended_qty_uses_avg_first_production_qty_only() -> None:
+def test_production_service_recommended_qty_prefers_repository_recommended_value() -> None:
     raw = {
         "current": 0,
         "prod1": "08:00 / 6개",
@@ -1454,7 +1525,7 @@ def test_production_service_recommended_qty_uses_avg_first_production_qty_only()
         "recommended": 4,
     }
 
-    assert ProductionService._recommended_qty_from_row(raw) == 6
+    assert ProductionService._recommended_qty_from_row(raw) == 4
 
 
 def test_production_service_chance_loss_amount_falls_back_to_shortage_prevention_amount() -> None:

@@ -291,21 +291,21 @@ class OrderingService:
 
     def _merge_option_payloads(self, option: dict, ai_option: dict | None = None, index: int = 0) -> dict:
         fallback_id = option.get("option_id") or f"opt-{chr(97 + index)}"
-        ai_reasoning = OrderingService._safe_str(ai_option.get("reasoning_text") if ai_option else None)
         option_basis = OrderingService._safe_str(option.get("basis"))
+        resolved_option_id = (
+            OrderingService._safe_str(ai_option.get("option_id") if ai_option else None) or fallback_id
+        )
         merged = {
-            "option_id": OrderingService._safe_str(ai_option.get("option_id") if ai_option else None) or fallback_id,
+            "option_id": resolved_option_id,
             "title": OrderingService._safe_str(ai_option.get("title") if ai_option else None) or option.get("title") or f"추천안 {index + 1}",
             "basis": option_basis or OrderingService._safe_str(ai_option.get("basis") if ai_option else None) or "-",
             "description": OrderingService._safe_str(ai_option.get("description") if ai_option else None) or option.get("description") or "",
             "recommended": bool((ai_option or {}).get("recommended", option.get("recommended", index == 0))),
-            "reasoning_text": ai_reasoning,
+            "reasoning_text": self._fixed_option_reasoning_text(resolved_option_id, index),
             "reasoning_metrics": option.get("reasoning_metrics") or [],
             "special_factors": option.get("special_factors") or [],
             "items": option.get("items") or [],
         }
-        if not merged["reasoning_text"]:
-            merged["reasoning_text"] = self._compose_metric_reasoning(merged, index)
         if not merged["reasoning_metrics"]:
             total_qty = sum(item.get("quantity", 0) for item in merged["items"])
             if total_qty:
@@ -314,6 +314,15 @@ class OrderingService:
                     self._metric("line_count", f"{len(merged['items'])}개 SKU"),
                 ]
         return merged
+
+    @staticmethod
+    def _fixed_option_reasoning_text(option_id: str | None, index: int) -> str:
+        normalized_option_id = str(option_id or "").strip().lower()
+        if normalized_option_id == "opt-a" or index == 0:
+            return "최근의 운영 흐름을 그대로 이어가고 싶을 때 적합합니다."
+        if normalized_option_id == "opt-b" or index == 1:
+            return "최근의 일시적인 변동성을 제외하고 안정적으로 발주하고 싶을 때 선택하세요."
+        return "월간 단위의 시즌 변화를 확인하며 결정하고 싶을 때 이 옵션을 추천드려요."
 
     @staticmethod
     def _metric_value(metrics: list[dict], key: str) -> str:
@@ -442,18 +451,7 @@ class OrderingService:
             ).strip(),
             "option_summaries": self._build_ai_option_summaries(options),
         }
-        use_ai_ordering = not skip_ai and not self.repository.uses_ordering_join_table(normalized_store_id)
-        ai_payload = (
-            None
-            if skip_ai
-            else await self._get_ai_ordering_recommendation(
-                store_id=normalized_store_id,
-                current_date=business_date,
-                current_context=ai_current_context,
-            )
-            if not use_ai_ordering
-            else await self._get_ai_ordering_recommendation(store_id=normalized_store_id, current_date=business_date)
-        )
+        ai_payload = None
         ai_options = (ai_payload or {}).get("options") or []
         merged_options = [
             self._merge_option_payloads(option, ai_options[index] if index < len(ai_options) else None, index=index)
