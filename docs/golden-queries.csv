@@ -233,8 +233,8 @@ LIMIT 10;","SELECT csr.item_cd, csr.item_nm, SUM(CASE WHEN csr.stk_rt < 0 THEN A
 FROM
     raw_stock_rate
 WHERE
-    -- 쿼리 실행 시점의 시스템 날짜를 'YYYYMMDD' 형태의 텍스트로 변환하여 적용
-    prc_dt = :reference_dt
+    masked_stor_cd = :store_id
+    AND prc_dt = :reference_dt
 GROUP BY
     stock_rate_range
 ORDER BY
@@ -2178,14 +2178,20 @@ GROUP BY
 ORDER BY
     day_index ASC;","전월 vs 이번 달 요일별 납품 건수 변화를 비교하고, 납품 패턴이 변화한 원인(발주 시점 변경, 센터 일정 변경 등)을 추정하여 제시",,
 046-001-,2026-03-05 15:00 (KST),주문 관리,남은 납품 일정 알려줘,이번 주 남은 납품 예정일이 언제야?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",요일은 dlv_dt에서 추출; 실시간 납품 상태 변경 반영 불가,"SELECT DISTINCT
-    dlv_dt AS delivery_date,                                      -- 납품(배송) 예정 일자
-    TO_CHAR(TO_DATE(dlv_dt, 'YYYYMMDD'), 'TMDay') AS day_of_week  -- 요일명
+    dlv_dt AS delivery_date,
+    TO_CHAR(TO_DATE(dlv_dt, 'YYYYMMDD'), 'TMDay') AS day_of_week
 FROM
     raw_order_extract
 WHERE
     masked_stor_cd = :store_id
-    AND dlv_dt BETWEEN :tomorrow_date AND :weekend_date           -- 오늘 이후부터 주말까지의 기간 지정
-    AND CAST(ord_qty AS NUMERIC) > 0                              -- 점주가 실제 발주(주문)한 유효 건
+    -- 기준일 다음 날부터 이번 주 일요일까지의 납품 예정일 조회
+    AND dlv_dt > :reference_dt
+    AND dlv_dt <= TO_CHAR(
+        TO_DATE(:reference_dt, 'YYYYMMDD')
+        + ((7 - EXTRACT(ISODOW FROM TO_DATE(:reference_dt, 'YYYYMMDD')))::int) * INTERVAL '1 day',
+        'YYYYMMDD'
+    )
+    AND CAST(NULLIF(ord_qty,'') AS NUMERIC) > 0
 ORDER BY
     dlv_dt ASC;","SELECT DISTINCT
     dlv_dt AS delivery_date,
@@ -5962,3 +5968,178 @@ WHERE s.masked_stor_cd = 'POC_001'
   )
 ORDER BY 
     spike_qty DESC;",즉시 실행 액션: 예외건은 자동추천에서 분리 후 점주 수동확정. 근거: 품목별 평균 대비 2배 이상 발주 탐지,,
+069-001-,2026-03-05 09:00 (KST),주문 관리,다음 발주 조정 후보,다음 발주에서 조정해야 할 품목을 알려줘.,✅,"raw_order_extract.ord_qty, ord_rec_qty, confrm_qty, dlv_dt",추천량·실발주·확정량 편차를 종합하여 차기 발주 보정 후보 산출,"WITH recent_orders AS (
+    SELECT
+        item_cd,
+        MAX(item_nm) AS item_nm,
+        SUM(NULLIF(ord_rec_qty,'')::numeric) AS rec_qty_7d,
+        SUM(NULLIF(ord_qty,'')::numeric)     AS ord_qty_7d,
+        SUM(NULLIF(confrm_qty,'')::numeric)  AS confrm_qty_7d
+    FROM raw_order_extract
+    WHERE masked_stor_cd = :store_id
+      AND dlv_dt >= TO_CHAR(TO_DATE(:reference_dt,'YYYYMMDD') - INTERVAL '6 days', 'YYYYMMDD')
+      AND dlv_dt <= :reference_dt
+    GROUP BY item_cd
+)
+SELECT
+    item_cd,
+    item_nm,
+    rec_qty_7d                                                                AS recommended_qty_7d,
+    ord_qty_7d                                                                AS actual_order_qty_7d,
+    confrm_qty_7d                                                             AS confirmed_qty_7d,
+    (ord_qty_7d - rec_qty_7d)                                                 AS rec_vs_order_gap,
+    (ord_qty_7d - confrm_qty_7d)                                              AS order_vs_confrm_gap,
+    CASE
+        WHEN rec_qty_7d > 0 AND ABS(ord_qty_7d - rec_qty_7d) / NULLIF(rec_qty_7d, 0) >= 0.30
+            THEN '추천 대비 30%+ 이탈 — 차기 발주 재검토'
+        WHEN ord_qty_7d > 0 AND (ord_qty_7d - confrm_qty_7d) / NULLIF(ord_qty_7d, 0) >= 0.10
+            THEN '확정률 90% 미만 — 미출 보충 필요'
+        WHEN rec_qty_7d = 0 AND ord_qty_7d > 0
+            THEN '추천 데이터 없음 — 패턴 재학습 필요'
+        ELSE '안정'
+    END                                                                        AS adjustment_reason,
+    -- 우선순위(편차 합계)
+    (COALESCE(ABS(ord_qty_7d - rec_qty_7d), 0)
+     + COALESCE(ord_qty_7d - confrm_qty_7d, 0))                                AS priority_score
+FROM recent_orders
+WHERE
+    -- 추천 대비 30% 이상 이탈했거나, 미출이 발생한 품목만 노출
+    (rec_qty_7d > 0 AND ABS(ord_qty_7d - rec_qty_7d) / NULLIF(rec_qty_7d, 0) >= 0.30)
+    OR (ord_qty_7d > 0 AND (ord_qty_7d - confrm_qty_7d) > 0)
+ORDER BY priority_score DESC NULLS LAST
+LIMIT 15;","WITH recent_orders AS (
+    SELECT
+        item_cd, MAX(item_nm) AS item_nm,
+        SUM(NULLIF(ord_rec_qty,'')::numeric) AS rec_qty_7d,
+        SUM(NULLIF(ord_qty,'')::numeric)     AS ord_qty_7d,
+        SUM(NULLIF(confrm_qty,'')::numeric)  AS confrm_qty_7d
+    FROM raw_order_extract
+    WHERE masked_stor_cd = 'POC_010'
+      AND dlv_dt BETWEEN '20260227' AND '20260305'
+    GROUP BY item_cd
+)
+SELECT
+    item_cd, item_nm, rec_qty_7d, ord_qty_7d, confrm_qty_7d,
+    (ord_qty_7d - rec_qty_7d) AS rec_vs_order_gap,
+    (ord_qty_7d - confrm_qty_7d) AS order_vs_confrm_gap
+FROM recent_orders
+WHERE (rec_qty_7d > 0 AND ABS(ord_qty_7d - rec_qty_7d) / NULLIF(rec_qty_7d,0) >= 0.30)
+   OR (ord_qty_7d > 0 AND (ord_qty_7d - confrm_qty_7d) > 0)
+ORDER BY ABS(ord_qty_7d - rec_qty_7d) DESC NULLS LAST
+LIMIT 15;","최근 7일 발주 데이터에서 추천량 대비 30% 이상 이탈했거나 확정률이 90% 미만인 품목을 차기 발주 조정 후보로 제시하고, 각 품목의 조정 사유와 우선순위를 함께 보여줍니다.",ordering.next_order_adjustment,다음 발주 조정|다음 발주 보정|발주 조정 필요|재발주 보정|차기 발주 보정|발주 권고 수정|발주 수정 후보|다음 발주에서 손볼 품목|발주 다시 짜야 할 품목
+076-002-,2026-03-05 09:00 (KST),주문 관리,발주 누락 반복 패턴,최근 발주 누락이 반복되는 패턴이 있나요?,✅,"raw_order_extract.dlv_dt, ord_qty",60일 발주 이력에서 7일 이상 공백이 2회 이상인 품목을 누락 의심으로 추출,"WITH item_orders AS (
+    SELECT
+        item_cd, MAX(item_nm) AS item_nm,
+        TO_DATE(dlv_dt,'YYYYMMDD') AS order_date
+    FROM raw_order_extract
+    WHERE masked_stor_cd = :store_id
+      AND dlv_dt >= TO_CHAR(TO_DATE(:reference_dt,'YYYYMMDD') - INTERVAL '60 days', 'YYYYMMDD')
+      AND dlv_dt <= :reference_dt
+      AND CAST(NULLIF(ord_qty,'') AS NUMERIC) > 0
+    GROUP BY item_cd, dlv_dt
+), gaps AS (
+    SELECT
+        item_cd, item_nm, order_date,
+        (order_date - LAG(order_date) OVER (PARTITION BY item_cd ORDER BY order_date))::int AS gap_days
+    FROM item_orders
+), summary AS (
+    SELECT
+        item_cd, MAX(item_nm) AS item_nm,
+        ROUND(AVG(gap_days)::numeric, 1)                            AS avg_gap_days,
+        MAX(gap_days)                                                AS max_gap_days,
+        COUNT(*) FILTER (WHERE gap_days >= 7)                        AS long_gap_count,
+        COUNT(*)                                                     AS interval_count
+    FROM gaps
+    WHERE gap_days IS NOT NULL
+    GROUP BY item_cd
+    HAVING COUNT(*) FILTER (WHERE gap_days >= 7) >= 2
+)
+SELECT
+    item_cd, item_nm,
+    avg_gap_days, max_gap_days,
+    long_gap_count                                                  AS missed_intervals,
+    interval_count                                                  AS total_intervals,
+    ROUND(long_gap_count * 100.0 / NULLIF(interval_count,0), 1)     AS miss_rate_pct
+FROM summary
+ORDER BY miss_rate_pct DESC NULLS LAST, max_gap_days DESC
+LIMIT 15;","WITH item_orders AS (
+    SELECT
+        item_cd, MAX(item_nm) AS item_nm,
+        TO_DATE(dlv_dt,'YYYYMMDD') AS order_date
+    FROM raw_order_extract
+    WHERE masked_stor_cd = 'POC_010'
+      AND dlv_dt >= TO_CHAR(TO_DATE('20260305','YYYYMMDD') - INTERVAL '60 days', 'YYYYMMDD')
+      AND dlv_dt <= '20260305'
+      AND CAST(NULLIF(ord_qty,'') AS NUMERIC) > 0
+    GROUP BY item_cd, dlv_dt
+), gaps AS (
+    SELECT
+        item_cd, item_nm, order_date,
+        (order_date - LAG(order_date) OVER (PARTITION BY item_cd ORDER BY order_date))::int AS gap_days
+    FROM item_orders
+), summary AS (
+    SELECT
+        item_cd, MAX(item_nm) AS item_nm,
+        ROUND(AVG(gap_days)::numeric, 1)                            AS avg_gap_days,
+        MAX(gap_days)                                                AS max_gap_days,
+        COUNT(*) FILTER (WHERE gap_days >= 7)                        AS long_gap_count,
+        COUNT(*)                                                     AS interval_count
+    FROM gaps
+    WHERE gap_days IS NOT NULL
+    GROUP BY item_cd
+    HAVING COUNT(*) FILTER (WHERE gap_days >= 7) >= 2
+)
+SELECT
+    item_cd, item_nm,
+    avg_gap_days, max_gap_days,
+    long_gap_count                                                  AS missed_intervals,
+    interval_count                                                  AS total_intervals,
+    ROUND(long_gap_count * 100.0 / NULLIF(interval_count,0), 1)     AS miss_rate_pct
+FROM summary
+ORDER BY miss_rate_pct DESC NULLS LAST, max_gap_days DESC
+LIMIT 15;",최근 60일 동안 7일 이상 발주 공백이 반복된 품목을 빈도와 비율로 정리해 발주 누락 의심 후보를 제시합니다.,ordering.repeated_missed_orders,발주 누락 반복|발주 공백 반복|발주 빠진 패턴|발주 누락 패턴|반복 발주 누락|발주 안 나간 품목
+110-002-,2026-03-05 09:00 (KST),매출 관리,월말 매출 추정,이번 달 이 페이스면 얼마 남아?,✅,"core_channel_sales.sale_amt, sale_dt",월누계 매출과 경과일수로 일평균 산출 후 잔여일 매출 추정,"WITH this_month AS (
+    SELECT
+        SUM(NULLIF(sale_amt,'')::numeric) AS month_to_date_amt,
+        COUNT(DISTINCT sale_dt)           AS days_so_far
+    FROM core_channel_sales
+    WHERE masked_stor_cd = :store_id
+      AND sale_dt >= TO_CHAR(DATE_TRUNC('month', TO_DATE(:reference_dt,'YYYYMMDD')), 'YYYYMMDD')
+      AND sale_dt <= :reference_dt
+), month_meta AS (
+    SELECT
+        EXTRACT(DAY FROM
+            (DATE_TRUNC('month', TO_DATE(:reference_dt,'YYYYMMDD')) + INTERVAL '1 month' - INTERVAL '1 day')
+        )::int AS days_in_month
+)
+SELECT
+    t.month_to_date_amt                                            AS mtd_amount,
+    t.days_so_far                                                  AS days_elapsed,
+    m.days_in_month                                                AS days_in_month,
+    ROUND(t.month_to_date_amt / NULLIF(t.days_so_far,0), 0)        AS daily_avg_amt,
+    ROUND((t.month_to_date_amt / NULLIF(t.days_so_far,0)) * m.days_in_month, 0) AS projected_month_total,
+    ROUND((t.month_to_date_amt / NULLIF(t.days_so_far,0)) * (m.days_in_month - t.days_so_far), 0) AS projected_remaining,
+    (m.days_in_month - t.days_so_far)                              AS days_remaining
+FROM this_month t CROSS JOIN month_meta m;","WITH this_month AS (
+    SELECT
+        SUM(NULLIF(sale_amt,'')::numeric) AS month_to_date_amt,
+        COUNT(DISTINCT sale_dt)           AS days_so_far
+    FROM core_channel_sales
+    WHERE masked_stor_cd = 'POC_010'
+      AND sale_dt >= TO_CHAR(DATE_TRUNC('month', TO_DATE('20260305','YYYYMMDD')), 'YYYYMMDD')
+      AND sale_dt <= '20260305'
+), month_meta AS (
+    SELECT
+        EXTRACT(DAY FROM
+            (DATE_TRUNC('month', TO_DATE('20260305','YYYYMMDD')) + INTERVAL '1 month' - INTERVAL '1 day')
+        )::int AS days_in_month
+)
+SELECT
+    t.month_to_date_amt                                            AS mtd_amount,
+    t.days_so_far                                                  AS days_elapsed,
+    m.days_in_month                                                AS days_in_month,
+    ROUND(t.month_to_date_amt / NULLIF(t.days_so_far,0), 0)        AS daily_avg_amt,
+    ROUND((t.month_to_date_amt / NULLIF(t.days_so_far,0)) * m.days_in_month, 0) AS projected_month_total,
+    ROUND((t.month_to_date_amt / NULLIF(t.days_so_far,0)) * (m.days_in_month - t.days_so_far), 0) AS projected_remaining,
+    (m.days_in_month - t.days_so_far)                              AS days_remaining
+FROM this_month t CROSS JOIN month_meta m;",이번 달 누계 매출과 일평균을 바탕으로 월말까지 남은 예상 매출을 추정합니다.,sales.month_pace_projection,이번 달 페이스|월말 매출 추정|이번 달 남은 매출|월간 페이스|월말까지 얼마|이번 달 매출 예측
