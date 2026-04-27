@@ -288,6 +288,16 @@ async def get_summary(self, store_id: str | None = None) -> dict:
 
 ---
 
+## DB 마이그레이션 파일명 규칙
+
+* prefix는 **`YYYYMMDD_HHMMSS_`** 형식의 timestamp.
+* 새 마이그레이션 만들 때: `date +%Y%m%d_%H%M%S` 찍어 그대로 prefix 사용.
+* 형식: `<timestamp>_<동사>_<대상>.sql` (예: `20260427_220500_add_store_id_to_mart_xxx.sql`).
+* 정수 prefix(`0001_`, `0002_`, ...)는 사용 금지 — 두 명이 동시에 작업하면 같은 번호로 충돌한다.
+* `migrate_db.py`는 알파벳순으로 SQL을 적용하며, timestamp prefix는 **시간순 = 알파벳순 = 의존 적용 순서**가 자동으로 일치하도록 보장한다.
+
+---
+
 ## 최종 정리
 
 > endpoint는 얇게, 비즈니스 로직은 service로, DB 접근은 repository로, 타입은 schema로.
