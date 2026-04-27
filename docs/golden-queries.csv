@@ -6242,3 +6242,64 @@ ORDER BY
     END,
     priority_score DESC NULLS LAST
 LIMIT 15;",주문 마감 전 점주가 확인해야 할 3가지 체크포인트(추천 누락·미확정 잔량·추천 이탈)를 우선순위 정리하여 즉시 조치할 품목 목록으로 제시합니다.,ordering.pre_close_checklist,주문 마감 전 점검|마감 전 체크|발주 마감 점검|마감 점검|마감 전 확인 사항|주문 마감 점검|주문 마감 전 포인트|마감 전 핵심 항목
+105-002-,2026-03-05 09:00 (KST),매출 관리,상품별 전월 대비 매출 비교,상품별 전월 대비 매출 금액 비교해줘,✅,"core_daily_item_sales.actual_sale_amt, item_cd, sale_dt",전월/이번 달 동일 기간 매출 합산 후 품목별 변동폭과 트렌드 분류,"WITH per_period AS (
+    SELECT
+        item_cd,
+        MAX(item_nm) AS item_nm,
+        SUM(CASE WHEN sale_dt BETWEEN :last_month_start AND :last_month_end
+                 THEN actual_sale_amt ELSE 0 END) AS last_month_amt,
+        SUM(CASE WHEN sale_dt BETWEEN :this_month_start AND :this_month_end
+                 THEN actual_sale_amt ELSE 0 END) AS this_month_amt
+    FROM core_daily_item_sales
+    WHERE masked_stor_cd = :store_id
+      AND sale_dt BETWEEN :last_month_start AND :this_month_end
+    GROUP BY item_cd
+)
+SELECT
+    item_cd,
+    item_nm,
+    last_month_amt,
+    this_month_amt,
+    (this_month_amt - last_month_amt)                                              AS amt_change,
+    ROUND(((this_month_amt - last_month_amt) / NULLIF(last_month_amt, 0)) * 100, 1) AS change_rate_pct,
+    CASE
+        WHEN last_month_amt = 0 AND this_month_amt > 0 THEN '신규/재개'
+        WHEN this_month_amt = 0 AND last_month_amt > 0 THEN '판매 중단'
+        WHEN this_month_amt >= last_month_amt * 1.10  THEN '증가'
+        WHEN this_month_amt <= last_month_amt * 0.90  THEN '감소'
+        ELSE '유지'
+    END                                                                            AS trend
+FROM per_period
+WHERE last_month_amt > 0 OR this_month_amt > 0
+ORDER BY ABS(this_month_amt - last_month_amt) DESC
+LIMIT 20;","WITH per_period AS (
+    SELECT
+        item_cd,
+        MAX(item_nm) AS item_nm,
+        SUM(CASE WHEN sale_dt BETWEEN '20260201' AND '20260228'
+                 THEN actual_sale_amt ELSE 0 END) AS last_month_amt,
+        SUM(CASE WHEN sale_dt BETWEEN '20260301' AND '20260305'
+                 THEN actual_sale_amt ELSE 0 END) AS this_month_amt
+    FROM core_daily_item_sales
+    WHERE masked_stor_cd = 'POC_010'
+      AND sale_dt BETWEEN '20260201' AND '20260305'
+    GROUP BY item_cd
+)
+SELECT
+    item_cd,
+    item_nm,
+    last_month_amt,
+    this_month_amt,
+    (this_month_amt - last_month_amt)                                              AS amt_change,
+    ROUND(((this_month_amt - last_month_amt) / NULLIF(last_month_amt, 0)) * 100, 1) AS change_rate_pct,
+    CASE
+        WHEN last_month_amt = 0 AND this_month_amt > 0 THEN '신규/재개'
+        WHEN this_month_amt = 0 AND last_month_amt > 0 THEN '판매 중단'
+        WHEN this_month_amt >= last_month_amt * 1.10  THEN '증가'
+        WHEN this_month_amt <= last_month_amt * 0.90  THEN '감소'
+        ELSE '유지'
+    END                                                                            AS trend
+FROM per_period
+WHERE last_month_amt > 0 OR this_month_amt > 0
+ORDER BY ABS(this_month_amt - last_month_amt) DESC
+LIMIT 20;",품목별 전월 대비 이번 달 매출 변동을 금액·비율과 함께 트렌드(증가/감소/유지/신규/중단) 라벨로 정리합니다.,sales.product_mom_comparison,상품별 전월 대비|품목별 전월 대비|품목 전월 비교|상품 전월 비교|월간 매출 비교|전월 대비 매출|월별 품목 매출 차이|상품 매출 변동|품목별 매출 추이

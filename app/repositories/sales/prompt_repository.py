@@ -816,8 +816,17 @@ class PromptRepositoryMixin:
                 ],
             }
 
-        # C-08: 상품별 매출 비교 — '품목' 단독 매칭은 위 재고 분기에서 이미 처리됨
-        if self.engine and any(kw in prompt for kw in ("상품", "제품", "품목")):
+        # C-08: 상품별 매출 랭킹 — 비교/추이/변화형 질문에는 발동 금지
+        comparison_kws = (
+            "전월", "지난달", "전주", "지난주", "전년", "작년", "동월", "동요일",
+            "대비", "비교", "추이", "변화", "증감", "차이", "감소", "증가",
+        )
+        is_comparison_intent = any(kw in prompt for kw in comparison_kws)
+        if (
+            self.engine
+            and any(kw in prompt for kw in ("상품", "제품", "품목"))
+            and not is_comparison_intent
+        ):
             item = self._query_item_ranking()
             if item:
                 return item
