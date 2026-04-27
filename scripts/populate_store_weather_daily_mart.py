@@ -63,10 +63,10 @@ def main() -> None:
                 ELSE '맑음'
             END AS weather_type,
             COALESCE(w.avg_temp_c, 0) AS avg_temp_c,
-            NULL::NUMERIC AS max_temp_c,
-            NULL::NUMERIC AS min_temp_c,
+            w.max_temp_c AS max_temp_c,
+            w.min_temp_c AS min_temp_c,
             COALESCE(w.precipitation_mm, 0) AS precipitation_mm,
-            NULL::NUMERIC AS precipitation_probability_max,
+            w.precipitation_probability_max AS precipitation_probability_max,
             :updated_at AS generated_at,
             :updated_at AS updated_at
         FROM raw_store_master s

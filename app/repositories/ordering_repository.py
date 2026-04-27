@@ -319,14 +319,7 @@ class OrderingRepository:
 
     @staticmethod
     def _normalize_weather_reference_date(reference_date: str | None) -> str | None:
-        normalized = OrderingRepository._normalize_yyyymmdd(reference_date)
-        if not normalized:
-            return None
-        if normalized > _STORE_WEATHER_END_DT:
-            return _STORE_WEATHER_END_DT
-        if normalized < _STORE_WEATHER_START_DT:
-            return _STORE_WEATHER_START_DT
-        return normalized
+        return OrderingRepository._normalize_yyyymmdd(reference_date)
 
     @staticmethod
     def _classify_weather_type(avg_temp_c: float | int | None, precipitation_mm: float | int | None) -> str:
@@ -523,8 +516,6 @@ class OrderingRepository:
         )
         if weather_from_mart is not None:
             return weather_from_mart
-        if self._weather_mart_configured(store_id):
-            return None
         return self._get_weather_for_reference_date(
             store_id=store_id,
             reference_date=reference_date,

@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.infrastructure.db.connection import get_database_engine, get_safe_database_url
 
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+DEFAULT_START_DATE = "2025-03-11"
+DEFAULT_END_DATE = "2026-03-10"
 
 SIDO_COORDINATES: dict[str, tuple[float, float]] = {
     "서울특별시": (37.5665, 126.9780),
@@ -43,13 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--start-date",
         type=str,
-        default=(date.today() - timedelta(days=30)).isoformat(),
+        default=DEFAULT_START_DATE,
         help="수집 시작일(YYYY-MM-DD), 기본값: 30일 전",
     )
     parser.add_argument(
         "--end-date",
         type=str,
-        default=(date.today() - timedelta(days=1)).isoformat(),
+        default=DEFAULT_END_DATE,
         help="수집 종료일(YYYY-MM-DD), 기본값: 어제",
     )
     parser.add_argument(
@@ -100,17 +102,32 @@ def fetch_weather_rows(
     precipitations = hourly.get("precipitation") or []
 
     daily_buckets: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"temp_sum": 0.0, "temp_count": 0.0, "precipitation_sum": 0.0}
+        lambda: {
+            "temp_sum": 0.0,
+            "temp_count": 0.0,
+            "temp_max": float("-inf"),
+            "temp_min": float("inf"),
+            "precipitation_sum": 0.0,
+            "precipitation_hours": 0.0,
+            "hour_count": 0.0,
+        }
     )
     for hour, temp, rain in zip(hours, temperatures, precipitations):
         hour_text = str(hour)
         day_text = hour_text.split("T", 1)[0]
         bucket = daily_buckets[day_text]
+        bucket["hour_count"] += 1.0
         if temp is not None:
-            bucket["temp_sum"] += float(temp)
+            temp_value = float(temp)
+            bucket["temp_sum"] += temp_value
             bucket["temp_count"] += 1.0
+            bucket["temp_max"] = max(bucket["temp_max"], temp_value)
+            bucket["temp_min"] = min(bucket["temp_min"], temp_value)
         if rain is not None:
-            bucket["precipitation_sum"] += float(rain)
+            rain_value = float(rain)
+            bucket["precipitation_sum"] += rain_value
+            if rain_value > 0:
+                bucket["precipitation_hours"] += 1.0
 
     rows: list[dict[str, object]] = []
     for day_text in sorted(daily_buckets):
@@ -119,12 +136,22 @@ def fetch_weather_rows(
         avg_temp_c = (
             bucket["temp_sum"] / bucket["temp_count"] if bucket["temp_count"] else 0.0
         )
+        max_temp_c = bucket["temp_max"] if bucket["temp_count"] else avg_temp_c
+        min_temp_c = bucket["temp_min"] if bucket["temp_count"] else avg_temp_c
+        precipitation_probability_max = (
+            int(round((bucket["precipitation_hours"] / bucket["hour_count"]) * 100))
+            if bucket["hour_count"]
+            else 0
+        )
         rows.append(
             {
                 "weather_dt": day_date.strftime("%Y%m%d"),
                 "sido": sido,
                 "avg_temp_c": round(avg_temp_c, 2),
+                "max_temp_c": round(max_temp_c, 2),
+                "min_temp_c": round(min_temp_c, 2),
                 "precipitation_mm": round(bucket["precipitation_sum"], 2),
+                "precipitation_probability_max": precipitation_probability_max,
                 "source_provider": "open-meteo-hourly-aggregated",
                 "loaded_at": datetime.now(),
             }
@@ -140,14 +167,19 @@ def upsert_rows(rows: list[dict[str, object]]) -> int:
     upsert_sql = text(
         """
         INSERT INTO raw_weather_daily(
-            weather_dt, sido, avg_temp_c, precipitation_mm, source_provider, loaded_at
+            weather_dt, sido, avg_temp_c, max_temp_c, min_temp_c, precipitation_mm,
+            precipitation_probability_max, source_provider, loaded_at
         ) VALUES (
-            :weather_dt, :sido, :avg_temp_c, :precipitation_mm, :source_provider, :loaded_at
+            :weather_dt, :sido, :avg_temp_c, :max_temp_c, :min_temp_c, :precipitation_mm,
+            :precipitation_probability_max, :source_provider, :loaded_at
         )
         ON CONFLICT (weather_dt, sido)
         DO UPDATE SET
             avg_temp_c = EXCLUDED.avg_temp_c,
+            max_temp_c = EXCLUDED.max_temp_c,
+            min_temp_c = EXCLUDED.min_temp_c,
             precipitation_mm = EXCLUDED.precipitation_mm,
+            precipitation_probability_max = EXCLUDED.precipitation_probability_max,
             source_provider = EXCLUDED.source_provider,
             loaded_at = EXCLUDED.loaded_at
         """

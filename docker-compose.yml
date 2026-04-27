@@ -56,6 +56,22 @@ services:
       load:
         condition: service_completed_successfully
 
+  weather-mart-populate:
+    build:
+      context: .
+    container_name: br-korea-weather-mart-populate
+    command:
+      [
+        "sh",
+        "-c",
+        "python scripts/populate_store_weather_daily_mart.py || echo '[WARN] populate_store_weather_daily_mart.py failed; backend startup will continue.' >&2",
+      ]
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc
+    depends_on:
+      weather-load:
+        condition: service_completed_successfully
+
   stockout-populate:
     build:
       context: .
@@ -155,6 +171,8 @@ services:
       - STORE_CACHE_STORE_IDS=POC_010
     depends_on:
       weather-load:
+        condition: service_completed_successfully
+      weather-mart-populate:
         condition: service_completed_successfully
       stockout-populate:
         condition: service_completed_successfully
