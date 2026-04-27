@@ -1257,7 +1257,7 @@ class OrderingService:
 
         data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
-            limit=limit,
+            limit=None,
             date_from=date_from,
             date_to=date_to,
             item_nm=item_nm,
@@ -1272,7 +1272,7 @@ class OrderingService:
                 comparison_date_from = (parsed_date_from - timedelta(days=28)).isoformat()
         comparison_data = self.repository.get_history_filtered(
             store_id=normalized_store_id,
-            limit=max(limit, 500),
+            limit=None,
             date_from=comparison_date_from,
             date_to=date_to,
             item_nm=item_nm,

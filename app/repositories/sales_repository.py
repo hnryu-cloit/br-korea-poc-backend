@@ -46,6 +46,13 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             "avg_ticket_size": 0.0,
             "avg_ticket_index": 0.0,
             "estimated_today_profit": 0.0,
+            "core_revenue": 0.0,
+            "core_net_revenue": 0.0,
+            "core_margin_rate": 0.0,
+            "core_avg_ticket_size": 0.0,
+            "core_avg_ticket_index": 0.0,
+            "core_estimated_profit": 0.0,
+            "core_menu_count": 0,
         }
 
         # 1. 사용할 테이블·컬럼 결정
@@ -160,6 +167,63 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                             ),
                             1,
                         )
+
+                core_start_dt = normalized_date_from or max_dt
+                core_end_dt = normalized_date_to or max_dt
+                core_row = (
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT
+                                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS revenue,
+                                COALESCE(SUM(CAST(COALESCE(NULLIF(CAST({net_col} AS TEXT), ''), '0') AS NUMERIC)), 0) AS net_revenue,
+                                COUNT(
+                                    DISTINCT CASE
+                                        WHEN COALESCE(CAST(COALESCE(NULLIF(CAST({amt_col} AS TEXT), ''), '0') AS NUMERIC), 0) > 0
+                                        THEN COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '')
+                                        ELSE NULL
+                                    END
+                                ) AS menu_count
+                            FROM {item_relation}
+                            WHERE sale_dt >= :core_start_dt
+                              AND sale_dt <= :core_end_dt
+                              {store_filter}
+                            """
+                        ),
+                        {
+                            **params,
+                            "core_start_dt": core_start_dt,
+                            "core_end_dt": core_end_dt,
+                        },
+                    )
+                    .mappings()
+                    .first()
+                )
+                if core_row:
+                    result["core_revenue"] = float(core_row["revenue"] or 0)
+                    result["core_net_revenue"] = float(core_row["net_revenue"] or 0)
+                    result["core_menu_count"] = int(core_row["menu_count"] or 0)
+
+                core_order_count = self._get_order_count_for_period(
+                    connection=connection,
+                    store_id=store_id,
+                    start_date=core_start_dt,
+                    end_date=core_end_dt,
+                )
+                if core_order_count > 0 and result["core_revenue"] > 0:
+                    result["core_avg_ticket_size"] = round(result["core_revenue"] / core_order_count, 2)
+                    core_ticket_distribution = self._get_avg_ticket_distribution(
+                        connection=connection,
+                        store_id=store_id,
+                        target_date=core_end_dt,
+                    )
+                    result["core_avg_ticket_index"] = round(
+                        self._normalize_index_from_distribution(
+                            current_value=result["core_avg_ticket_size"],
+                            values=core_ticket_distribution,
+                        ),
+                        1,
+                    )
 
                 # 4. 선택 기간 전체 일자별 집계
                 if normalized_date_from or normalized_date_to:
@@ -371,6 +435,23 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                             2,
                         )
 
+                core_margin_row = self._get_sales_margin_snapshot_for_period(
+                    connection=connection,
+                    store_id=store_id,
+                    start_date=core_start_dt,
+                    end_date=core_end_dt,
+                )
+                if core_margin_row and core_margin_row.get("avg_margin_rate") is not None:
+                    core_margin = float(core_margin_row["avg_margin_rate"] or 0)
+                    result["core_margin_rate"] = round(core_margin, 4)
+                    result["core_estimated_profit"] = round(result["core_revenue"] * core_margin, 2)
+                elif result["core_revenue"] > 0 and result["core_net_revenue"] > 0:
+                    result["core_margin_rate"] = round(
+                        result["core_net_revenue"] / max(result["core_revenue"], 1),
+                        4,
+                    )
+                    result["core_estimated_profit"] = round(result["core_net_revenue"], 2)
+
         except SQLAlchemyError as exc:
             logger.exception(
                 "Failed to aggregate sales summary (store_id=%s, date_from=%s, date_to=%s): %s",
@@ -510,6 +591,62 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             for row in rows
         ]
 
+    def _get_order_count_for_period(
+        self,
+        *,
+        connection,
+        store_id: str | None,
+        start_date: str,
+        end_date: str,
+    ) -> float:
+        if not store_id or not start_date or not end_date:
+            return 0.0
+
+        analytics_daily_table = get_store_mart_table(store_id, "analytics", "daily_table")
+        if analytics_daily_table and has_table(self.engine, analytics_daily_table):
+            ticket_row = (
+                connection.execute(
+                    text(
+                        f"""
+                        SELECT COALESCE(SUM(total_order_count), 0) AS total_order_count
+                        FROM {analytics_daily_table}
+                        WHERE sale_dt >= :start_date
+                          AND sale_dt <= :end_date
+                        """
+                    ),
+                    {"start_date": start_date, "end_date": end_date},
+                )
+                .mappings()
+                .first()
+            )
+            if ticket_row:
+                return float(ticket_row["total_order_count"] or 0)
+
+        if has_table(self.engine, "core_channel_sales"):
+            channel_row = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT COALESCE(SUM(COALESCE(NULLIF(TRIM(CAST(ord_cnt AS TEXT)), '')::numeric, 0)), 0) AS total_order_count
+                        FROM core_channel_sales
+                        WHERE masked_stor_cd = :store_id
+                          AND sale_dt >= :start_date
+                          AND sale_dt <= :end_date
+                        """
+                    ),
+                    {
+                        "store_id": store_id,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if channel_row:
+                return float(channel_row["total_order_count"] or 0)
+        return 0.0
+
     def _get_sales_margin_snapshot(
         self,
         *,
@@ -517,7 +654,7 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
         store_id: str | None,
         target_date: str,
     ) -> dict | None:
-        if not target_date or not store_id or not has_table(self.engine, "raw_production_extract"):
+        if not target_date or not store_id:
             return None
 
         if has_table(self.engine, "mart_sales_margin_daily"):
@@ -537,7 +674,12 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
                 .first()
             )
             if snapshot_row:
-                return dict(snapshot_row)
+                normalized = dict(snapshot_row)
+                if self._is_valid_margin_snapshot(normalized):
+                    return normalized
+
+        if not has_table(self.engine, "raw_production_extract"):
+            return None
 
         target_day = datetime.strptime(target_date, "%Y%m%d").date()
         window_start = (target_day - timedelta(days=27)).strftime("%Y%m%d")
@@ -588,7 +730,111 @@ class SalesRepository(PromptRepositoryMixin, InsightRepositoryMixin, CampaignRep
             .mappings()
             .first()
         )
-        return dict(fallback_row) if fallback_row else None
+        if not fallback_row:
+            return None
+        normalized = dict(fallback_row)
+        return normalized if self._is_valid_margin_snapshot(normalized) else None
+
+    def _get_sales_margin_snapshot_for_period(
+        self,
+        *,
+        connection,
+        store_id: str | None,
+        start_date: str,
+        end_date: str,
+    ) -> dict | None:
+        if not start_date or not end_date or not store_id:
+            return None
+
+        if has_table(self.engine, "mart_sales_margin_daily"):
+            snapshot_row = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            AVG(avg_margin_rate) AS avg_margin_rate,
+                            AVG(avg_net_profit_per_item) AS avg_net_profit_per_item,
+                            MAX(product_count) AS product_count
+                        FROM mart_sales_margin_daily
+                        WHERE store_id = :store_id
+                          AND target_date >= :start_date
+                          AND target_date <= :end_date
+                        """
+                    ),
+                    {
+                        "store_id": store_id,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if snapshot_row:
+                normalized = dict(snapshot_row)
+                if self._is_valid_margin_snapshot(normalized):
+                    return normalized
+
+        if not has_table(self.engine, "raw_production_extract"):
+            return None
+
+        fallback_row = (
+            connection.execute(
+                text(
+                    """
+                    WITH sold_products AS (
+                        SELECT DISTINCT COALESCE(NULLIF(TRIM(CAST(item_nm AS TEXT)), ''), '') AS item_nm
+                        FROM raw_daily_store_item
+                        WHERE masked_stor_cd = :store_id
+                          AND sale_dt >= :start_date
+                          AND sale_dt <= :end_date
+                          AND COALESCE(CAST(COALESCE(NULLIF(CAST(sale_amt AS TEXT), ''), '0') AS NUMERIC), 0) > 0
+                    ),
+                    product_margin AS (
+                        SELECT
+                            COALESCE(NULLIF(TRIM(CAST(p.item_nm AS TEXT)), ''), '') AS item_nm,
+                            AVG(
+                                (CAST(p.sale_prc AS NUMERIC) - CAST(p.item_cost AS NUMERIC))
+                                / NULLIF(CAST(p.sale_prc AS NUMERIC), 0)
+                            ) AS margin_rate,
+                            AVG(CAST(p.sale_prc AS NUMERIC) - CAST(p.item_cost AS NUMERIC)) AS net_profit_per_item
+                        FROM raw_production_extract p
+                        JOIN sold_products s
+                          ON s.item_nm = COALESCE(NULLIF(TRIM(CAST(p.item_nm AS TEXT)), ''), '')
+                        WHERE p.masked_stor_cd = :store_id
+                          AND p.prod_dt >= :start_date
+                          AND p.prod_dt <= :end_date
+                          AND CAST(p.sale_prc AS NUMERIC) > 0
+                          AND CAST(p.item_cost AS NUMERIC) > 0
+                        GROUP BY COALESCE(NULLIF(TRIM(CAST(p.item_nm AS TEXT)), ''), '')
+                    )
+                    SELECT
+                        AVG(margin_rate) AS avg_margin_rate,
+                        AVG(net_profit_per_item) AS avg_net_profit_per_item,
+                        COUNT(*) AS product_count
+                    FROM product_margin
+                    """
+                ),
+                {
+                    "store_id": store_id,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+            )
+            .mappings()
+            .first()
+        )
+        if not fallback_row:
+            return None
+        normalized = dict(fallback_row)
+        return normalized if self._is_valid_margin_snapshot(normalized) else None
+
+    @staticmethod
+    def _is_valid_margin_snapshot(row: dict | None) -> bool:
+        if not row:
+            return False
+        product_count = int(row.get("product_count") or 0)
+        return product_count > 0
 
     def _get_avg_ticket_distribution(
         self,

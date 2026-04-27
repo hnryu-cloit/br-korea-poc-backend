@@ -5,6 +5,7 @@ from app.core.deps import get_ordering_service
 from app.schemas.ordering import (
     OrderingActiveCampaignsResponse,
     OrderingAlertsResponse,
+    OrderingHistoryChartsResponse,
     OrderingContextResponse,
     OrderingHistoryResponse,
     OrderingHistoryInsightsResponse,
@@ -176,3 +177,26 @@ async def get_ordering_history_insights(
             status_code=502,
             detail="AI ordering insights generation failed",
         ) from exc
+
+
+@router.get("/history/charts", response_model=OrderingHistoryChartsResponse)
+def get_ordering_history_charts(
+    store_id: str = Query(...),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    item_nm: str | None = Query(default=None),
+    is_auto: bool | None = Query(default=None),
+    x_reference_datetime: str | None = Header(default=None, alias="X-Reference-Datetime"),
+    service: OrderingService = Depends(get_ordering_service),
+) -> OrderingHistoryChartsResponse:
+    try:
+        return service.get_history_charts(
+            store_id=store_id,
+            date_from=date_from,
+            date_to=date_to,
+            item_nm=item_nm,
+            is_auto=is_auto,
+            reference_datetime=_resolve_ordering_reference_datetime(x_reference_datetime),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

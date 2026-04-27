@@ -158,6 +158,13 @@ class SalesSummaryResponse(BaseModel):
     avg_ticket_size: float = 0.0
     avg_ticket_index: float = 0.0
     estimated_today_profit: float = 0.0
+    core_revenue: float = 0.0
+    core_net_revenue: float = 0.0
+    core_margin_rate: float = 0.0
+    core_avg_ticket_size: float = 0.0
+    core_avg_ticket_index: float = 0.0
+    core_estimated_profit: float = 0.0
+    core_menu_count: int = 0
     explainability: ExplainabilityPayload | None = None
 
 

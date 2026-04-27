@@ -1996,7 +1996,7 @@ class OrderingRepository:
         self,
         *,
         store_id: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
         page: int = 1,
         date_from: str | None = None,
         date_to: str | None = None,
@@ -2026,9 +2026,12 @@ class OrderingRepository:
 
         where_clauses: list[str] = []
         page_value = max(int(page), 1)
-        limit_value = max(int(limit), 1)
-        offset_value = (page_value - 1) * limit_value
-        params: dict[str, object] = {"limit": limit_value, "offset": offset_value}
+        limit_value = max(int(limit), 1) if limit is not None else None
+        offset_value = (page_value - 1) * limit_value if limit_value is not None else 0
+        params: dict[str, object] = {}
+        if limit_value is not None:
+            params["limit"] = limit_value
+            params["offset"] = offset_value
         normalized_date_expr = f"REPLACE(CAST({date_column} AS TEXT), '-', '')"
         if store_id and store_column:
             where_clauses.append(f"CAST({store_column} AS TEXT) = :store_id")
@@ -2073,6 +2076,12 @@ class OrderingRepository:
                         {key: value for key, value in params.items() if key not in {"limit", "offset"}},
                     ).scalar_one()
                 )
+                pagination_sql = ""
+                if limit_value is not None:
+                    pagination_sql = """
+                        LIMIT :limit
+                        OFFSET :offset
+                    """
                 rows = (
                     conn.execute(
                         text(
@@ -2088,8 +2097,7 @@ class OrderingRepository:
                         WHERE {where_sql}
                         GROUP BY CAST({date_column} AS TEXT), CAST({item_name_column} AS TEXT)
                         ORDER BY {normalized_date_expr} DESC, CAST({item_name_column} AS TEXT)
-                        LIMIT :limit
-                        OFFSET :offset
+                        {pagination_sql}
                     """
                         ),
                         params,
@@ -2103,7 +2111,7 @@ class OrderingRepository:
             list(rows),
             total_count=total_count,
             page=page_value,
-            page_size=limit_value,
+            page_size=limit_value or max(total_count, 1),
         )
 
     def get_history_chart_series(
@@ -2212,7 +2220,7 @@ class OrderingRepository:
         return {
             "daily_trend": [
                 {
-                    "day": str(row.get("day") or ""),
+                    "dlv_dt": str(row.get("day") or ""),
                     "ord_qty": self._safe_int(row.get("ord_qty")) or 0,
                     "confrm_qty": self._safe_int(row.get("confrm_qty")) or 0,
                 }
@@ -2221,7 +2229,7 @@ class OrderingRepository:
             ],
             "manual_by_day": [
                 {
-                    "day": str(row.get("day") or ""),
+                    "dlv_dt": str(row.get("day") or ""),
                     "manual_count": self._safe_int(row.get("manual_count")) or 0,
                 }
                 for row in manual_rows

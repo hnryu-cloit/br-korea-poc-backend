@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import logging
+import math
 import re
 import unicodedata
 from datetime import date as date_type
@@ -1323,6 +1324,90 @@ class ProductionRepository(BaseRepository):
         return max(lower_bound, min(candidate, upper_bound))
 
     @staticmethod
+    def _resolve_recommended_qty_from_chance_loss(
+        *,
+        chance_loss_qty: float,
+        avg_first_qty: int,
+        avg_second_qty: int,
+        reference_hour: int,
+    ) -> int:
+        required_qty = max(int(math.ceil(max(chance_loss_qty, 0.0))), 0)
+        if required_qty <= 0:
+            return 0
+
+        phase_qty = avg_first_qty if reference_hour < 14 else (avg_second_qty or avg_first_qty)
+        historical_candidates = sorted(
+            {
+                qty
+                for qty in (
+                    phase_qty,
+                    avg_first_qty,
+                    avg_second_qty,
+                    avg_first_qty + avg_second_qty,
+                )
+                if qty > 0
+            }
+        )
+
+        for candidate in historical_candidates:
+            if candidate >= required_qty and candidate <= int(math.ceil(required_qty * 1.25)):
+                return candidate
+        return required_qty
+
+    @staticmethod
+    def _blend_hourly_sales_baseline(local_avg: float, peer_avg: float) -> float:
+        local_value = max(float(local_avg or 0.0), 0.0)
+        peer_value = max(float(peer_avg or 0.0), 0.0)
+        if local_value > 0 and peer_value > 0:
+            return (local_value * 0.7) + (peer_value * 0.3)
+        if local_value > 0:
+            return local_value
+        return peer_value
+
+    def _resolve_peer_store_ids_for_production(self, store_id: str | None) -> list[str]:
+        if not store_id or not self.engine or not has_table(self.engine, "store_clusters"):
+            return []
+        try:
+            with self.engine.connect() as connection:
+                cluster_row = (
+                    connection.execute(
+                        text(
+                            """
+                            SELECT cluster_id
+                            FROM store_clusters
+                            WHERE masked_stor_cd = :store_id
+                            LIMIT 1
+                            """
+                        ),
+                        {"store_id": store_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if not cluster_row or cluster_row.get("cluster_id") is None:
+                    return []
+                rows = (
+                    connection.execute(
+                        text(
+                            """
+                            SELECT masked_stor_cd
+                            FROM store_clusters
+                            WHERE cluster_id = :cluster_id
+                              AND masked_stor_cd <> :store_id
+                            ORDER BY masked_stor_cd
+                            LIMIT 30
+                            """
+                        ),
+                        {"cluster_id": cluster_row.get("cluster_id"), "store_id": store_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError:
+            return []
+        return [str(row.get("masked_stor_cd") or "").strip() for row in rows if str(row.get("masked_stor_cd") or "").strip()]
+
+    @staticmethod
     def _parse_date_str(value: str) -> date_type | None:
         """YYYYMMDD 또는 YYYY-MM-DD 형식 텍스트를 date 객체로 변환."""
         s = value.strip()
@@ -1824,6 +1909,12 @@ class ProductionRepository(BaseRepository):
             "date_from": date_from,
             "date_to": date_to,
         }
+        peer_store_ids = self._resolve_peer_store_ids_for_production(store_id)
+        peer_sales_params: dict[str, object] = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "peer_store_ids": peer_store_ids,
+        }
         production_params: dict[str, object] = {
             "store_id": store_id,
             "date_from": min(historical_dates),
@@ -1837,6 +1928,12 @@ class ProductionRepository(BaseRepository):
         )
         production_item_filter = self._build_item_filter_clause(
             params=production_params,
+            item_keys=item_keys,
+            code_column="item_cd",
+            name_column="item_nm",
+        )
+        peer_sales_item_filter = self._build_item_filter_clause(
+            params=peer_sales_params,
             item_keys=item_keys,
             code_column="item_cd",
             name_column="item_nm",
@@ -1865,6 +1962,30 @@ class ProductionRepository(BaseRepository):
                     .mappings()
                     .all()
                 )
+                peer_sales_rows = []
+                if peer_store_ids:
+                    peer_sales_rows = (
+                        connection.execute(
+                            text(
+                                f"""
+                                SELECT
+                                    CAST(masked_stor_cd AS TEXT) AS masked_stor_cd,
+                                    REPLACE(CAST(sale_dt AS TEXT), '-', '') AS sale_dt,
+                                    CAST(item_cd AS TEXT) AS item_cd,
+                                    CAST(item_nm AS TEXT) AS item_nm,
+                                    CAST(tmzon_div AS TEXT) AS tmzon_div,
+                                    COALESCE(NULLIF(TRIM(CAST(sale_qty AS TEXT)), '')::numeric, 0) AS sale_qty
+                                FROM raw_daily_store_item_tmzon
+                                WHERE CAST(masked_stor_cd AS TEXT) = ANY(:peer_store_ids)
+                                  AND REPLACE(CAST(sale_dt AS TEXT), '-', '') BETWEEN :date_from AND :date_to
+                                  {peer_sales_item_filter}
+                                """
+                            ),
+                            peer_sales_params,
+                        )
+                        .mappings()
+                        .all()
+                    )
                 production_rows = (
                     connection.execute(
                         text(
@@ -1908,6 +2029,22 @@ class ProductionRepository(BaseRepository):
                 continue
             sales_by_item_date_hour[item_key][sale_dt][hour] += self._safe_float(row.get("sale_qty"))
 
+        peer_sales_by_item_date_hour: dict[str, dict[str, dict[int, float]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(float))
+        )
+        peer_store_count = max(len(peer_store_ids), 1)
+        for row in peer_sales_rows:
+            item_key = str(row.get("item_cd") or row.get("item_nm") or "").strip()
+            if not item_key:
+                continue
+            sale_dt = str(row.get("sale_dt") or "").strip()
+            hour = self._normalize_tmzon_hour(row.get("tmzon_div"))
+            if not sale_dt or hour is None:
+                continue
+            peer_sales_by_item_date_hour[item_key][sale_dt][hour] += (
+                self._safe_float(row.get("sale_qty")) / peer_store_count
+            )
+
         production_by_item_date: dict[str, dict[str, dict[str, float]]] = defaultdict(
             lambda: defaultdict(lambda: {"prod1": 0.0, "prod2": 0.0, "sale_prc_sum": 0.0, "sale_prc_count": 0.0})
         )
@@ -1935,6 +2072,7 @@ class ProductionRepository(BaseRepository):
 
             current_stock = self._safe_non_negative_int(item.get("current"))
             daily_sales = sales_by_item_date_hour.get(item_key, {})
+            daily_peer_sales = peer_sales_by_item_date_hour.get(item_key, {})
             daily_production = production_by_item_date.get(item_key, {})
 
             avg_first_qty = int(
@@ -1967,29 +2105,23 @@ class ProductionRepository(BaseRepository):
 
             avg_sales_by_hour: dict[int, float] = {}
             for hour in future_hours:
-                avg_sales_by_hour[hour] = sum(
+                local_avg_sales = sum(
                     self._safe_float(daily_sales.get(day, {}).get(hour, 0.0)) for day in historical_dates
                 ) / max(len(historical_dates), 1)
+                peer_avg_sales = sum(
+                    self._safe_float(daily_peer_sales.get(day, {}).get(hour, 0.0)) for day in historical_dates
+                ) / max(len(historical_dates), 1)
+                avg_sales_by_hour[hour] = self._blend_hourly_sales_baseline(local_avg_sales, peer_avg_sales)
 
             predicted_sales_1h = int(round(avg_sales_by_hour.get(reference_hour, 0.0) * sales_velocity))
             predicted_sales_1h = max(predicted_sales_1h, 0)
             forecast_stock_1h = max(current_stock - predicted_sales_1h, 0)
 
-            if reference_hour < 14:
-                phase_baseline = avg_first_qty
-            else:
-                phase_baseline = avg_second_qty or avg_first_qty
-            historical_baseline = int(
-                round((avg_first_qty + avg_second_qty) / max(1, 2 if (avg_first_qty or avg_second_qty) else 1))
-            )
-            target_stock_level = max(phase_baseline, historical_baseline)
-            recommended_qty = max(target_stock_level - forecast_stock_1h, 0)
-
             remaining_stock = float(current_stock)
             stockout_hour: int | None = None
             chance_loss_qty = 0.0
             for hour in future_hours:
-                hour_qty = avg_sales_by_hour.get(hour, 0.0)
+                hour_qty = avg_sales_by_hour.get(hour, 0.0) * sales_velocity
                 if remaining_stock > 0:
                     if remaining_stock - hour_qty <= 0:
                         stockout_hour = hour
@@ -2010,6 +2142,12 @@ class ProductionRepository(BaseRepository):
                 sale_prc_total += self._safe_float(daily_production.get(day, {}).get("sale_prc_sum"))
                 sale_prc_count += self._safe_float(daily_production.get(day, {}).get("sale_prc_count"))
             unit_price = sale_prc_total / sale_prc_count if sale_prc_count > 0 else 1200.0
+            recommended_qty = self._resolve_recommended_qty_from_chance_loss(
+                chance_loss_qty=chance_loss_qty,
+                avg_first_qty=avg_first_qty,
+                avg_second_qty=avg_second_qty,
+                reference_hour=reference_hour,
+            )
             chance_loss_amt = int(round(chance_loss_qty * unit_price))
             chance_loss_reduction_amt = int(round(min(recommended_qty, max(chance_loss_qty, 0.0)) * unit_price))
 
@@ -2033,6 +2171,11 @@ class ProductionRepository(BaseRepository):
                     ),
                     "sales_velocity": sales_velocity,
                 }
+            )
+            enriched["chance_loss_basis_text"] = (
+                "추천 생산 수량은 오늘 남은 시간대의 예상 부족 수량을 먼저 채워 찬스 로스를 최소화하도록 계산하고, "
+                "평소 1차·2차 생산 평균 수량과 크게 어긋나지 않으면 그 생산 단위에 맞춰 올림 적용합니다. "
+                "찬스 로스 절감액은 최근 4주 같은 요일 시간대 판매 패턴에 오늘 판매 속도를 반영한 뒤, 현재 시각부터 마감까지 부족해질 판매 금액을 기준으로 계산합니다."
             )
 
             if forecast_stock_1h <= 0:
