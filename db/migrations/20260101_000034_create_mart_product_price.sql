@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS mart_product_price_daily (
     sample_qty              NUMERIC(18, 2) NOT NULL DEFAULT 0,
     is_promotion            BOOLEAN        NOT NULL DEFAULT FALSE,
     matched_campaign_codes  TEXT[]         NOT NULL DEFAULT ARRAY[]::TEXT[],
-    generat해당ed_at            TIMESTAMP      NOT NULL DEFAULT NOW(),
+    generated_at            TIMESTAMP      NOT NULL DEFAULT NOW(),
     PRIMARY KEY (item_cd, item_nm, price_dt)
 );
 
