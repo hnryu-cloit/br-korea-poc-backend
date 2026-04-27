@@ -1434,9 +1434,9 @@ class OrderingRepository:
         """기준일자에 진행 중인 캠페인 리스트 조회 (raw_campaign_master 기반)."""
         normalized = str(reference_date or "").strip().replace("-", "")
         if len(normalized) != 8 or not normalized.isdigit():
-            return self._stub_active_campaigns(limit)
+            return self._stub_active_campaigns(limit, reference_date=normalized or None)
         if not self.engine or not has_table(self.engine, "raw_campaign_master"):
-            return self._stub_active_campaigns(limit)
+            return self._stub_active_campaigns(limit, reference_date=normalized)
 
         query = text(
             """
@@ -1465,7 +1465,7 @@ class OrderingRepository:
                 ).mappings().all()
         except SQLAlchemyError as exc:
             logger.warning("get_active_campaigns query failed: %s", exc)
-            return self._stub_active_campaigns(limit)
+            return self._stub_active_campaigns(limit, reference_date=normalized)
 
         items: list[dict] = []
         for row in rows:
@@ -1504,27 +1504,39 @@ class OrderingRepository:
         return f"{text_value[0:4]}-{text_value[4:6]}-{text_value[6:8]}"
 
     @staticmethod
-    def _stub_active_campaigns(limit: int) -> list[dict]:
+    def _stub_active_campaigns(limit: int, reference_date: str | None = None) -> list[dict]:
+        ref_dt: datetime | None = None
+        if reference_date and len(reference_date) == 8 and reference_date.isdigit():
+            try:
+                ref_dt = datetime.strptime(reference_date, "%Y%m%d")
+            except ValueError:
+                ref_dt = None
+        if ref_dt is None:
+            ref_dt = datetime.now()
+
+        def _shift(days: int) -> str:
+            return (ref_dt + timedelta(days=days)).strftime("%Y-%m-%d")
+
         stubs = [
             {
                 "code": "CPI-STUB-001",
                 "name": "봄맞이 패밀리세트",
-                "start_date": "2026-04-20",
-                "end_date": "2026-05-10",
+                "start_date": _shift(-10),
+                "end_date": _shift(20),
                 "kind": "정액할인",
             },
             {
                 "code": "CPI-STUB-002",
                 "name": "T-day 더블할인",
-                "start_date": "2026-04-22",
-                "end_date": "2026-04-30",
+                "start_date": _shift(-3),
+                "end_date": _shift(7),
                 "kind": "통신사할인",
             },
             {
                 "code": "CPI-STUB-003",
                 "name": "신상품 런칭 행사",
-                "start_date": "2026-04-25",
-                "end_date": "2026-05-08",
+                "start_date": _shift(0),
+                "end_date": _shift(14),
                 "kind": "1+1",
             },
         ]

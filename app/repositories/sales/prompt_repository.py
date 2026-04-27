@@ -799,7 +799,24 @@ class PromptRepositoryMixin:
             if yoy:
                 return yoy
 
-        # C-08: 상품별 매출 비교
+        # 재고/품절/판매속도 의도는 매출 랭킹과 분리 — AI 서비스 미응답 시 정형 안내로 대체
+        inventory_kws = ("재고", "품절", "부족", "판매 속도", "판매속도", "납품", "유통기한")
+        if any(kw in prompt for kw in inventory_kws):
+            return {
+                "text": (
+                    "현재 AI 분석 서비스 응답이 지연되어 재고/품절 관련 상세 분석을 제공하지 못했습니다. "
+                    "잠시 후 다시 시도하시거나, 재고 진단·생산 현황 화면에서 실시간 수치를 확인해 주세요."
+                ),
+                "evidence": [
+                    "AI 분석 서비스(8001) 일시 미응답",
+                ],
+                "actions": [
+                    "재고 진단 화면에서 부족·여유 품목을 직접 확인",
+                    "생산 현황 화면에서 권고 생산 수량과 1시간 후 예측 재고 점검",
+                ],
+            }
+
+        # C-08: 상품별 매출 비교 — '품목' 단독 매칭은 위 재고 분기에서 이미 처리됨
         if self.engine and any(kw in prompt for kw in ("상품", "제품", "품목")):
             item = self._query_item_ranking()
             if item:

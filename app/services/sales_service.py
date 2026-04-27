@@ -268,9 +268,8 @@ class SalesService:
 
     @staticmethod
     def _default_follow_up_questions(prompt: str) -> list[str]:
-        compact_prompt = prompt.strip() or "현재 질의"
         return [
-            f"{compact_prompt}를 최근 7일 기준으로 다시 보여줘",
+            "동일 질문을 최근 7일 기준으로 다시 보여줘",
             "이 결과의 근거 테이블과 기간을 요약해줘",
             "지금 당장 실행할 액션 3가지를 우선순위로 알려줘",
         ]
