@@ -727,6 +727,12 @@ def test_analytics_metrics_endpoint_returns_curated_kpi_labels() -> None:
             assert "전체 매출액 중" in str(delivery_item.get("detail", ""))
 
 
+def test_analytics_repository_resolves_offline_takeout_sales_from_total_minus_delivery() -> None:
+    assert AnalyticsRepository._resolve_offline_takeout_sales(613500, 0) == 613500
+    assert AnalyticsRepository._resolve_offline_takeout_sales(613500, 120000) == 493500
+    assert AnalyticsRepository._resolve_offline_takeout_sales(100000, 120000) == 0
+
+
 def test_analytics_metrics_endpoint_fallbacks_invalid_store_id() -> None:
     default_response = client.get("/api/analytics/metrics")
     invalid_store_response = client.get("/api/analytics/metrics?store_id=STORE_DEMO")
