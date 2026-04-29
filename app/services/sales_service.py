@@ -37,7 +37,7 @@ from app.services.prompt_settings_service import PromptSettingsService
 _COMPARISON_KEYWORDS = ["배달", "매출", "전년 동월", "채널"]
 _FAQ_KEYWORDS = ["무엇", "어떻게", "왜", "설명", "가이드"]
 _DATA_LOOKUP_KEYWORDS = ["조회", "건수", "수치", "비율", "얼마", "몇"]
-_SENSITIVE_KEYWORDS = ["이익", "이익률", "원가", "손익", "마진", "타점포", "점포 성과"]
+_SENSITIVE_KEYWORDS = ["원가", "타점포"]
 _HQ_ROLES = {"hq_admin", "hq_operator", "hq_planner"}
 _FLOATING_CHAT_REQUIRED_INSTRUCTION = """
 당신은 점주 운영 보조 AI다.
