@@ -1315,6 +1315,63 @@ WHERE
     rnk = 1
 ORDER BY
     day_of_week ASC;","이번 달 요일별·시간대별 생산 등록 건수 분포를 제시하고, 특정 요일·시간에 생산이 집중되는 패턴과 그 원인(수요 패턴, 납품 일정)을 분석",,
+030-002-,POC_010,2026-03-05 09:00 (KST),생산 관리,4주 평균 생산 등록,4주 평균 1차/2차 생산 등록 시간과 생산 개수 보여줘,✅,"raw_production_extract.prod_qty, prod_dt, reg_date",한국어 오전/오후 표기 timestamp 정규화 처리; 2차 생산 데이터는 적재 미보강 상태,"WITH recent_4weeks AS (
+    -- 1. 최근 4주(28일) 윈도우 생산 등록 추출 + 한국어 timestamp 파싱
+    SELECT
+        item_cd,
+        item_nm,
+        COALESCE(NULLIF(prod_qty, '')::numeric, 0) AS prod_qty,
+        TO_TIMESTAMP(
+            REPLACE(REPLACE(reg_date, '오전', 'AM'), '오후', 'PM'),
+            'YYYY-MM-DD AM HH12:MI:SS'
+        ) AS reg_ts
+    FROM raw_production_extract
+    WHERE masked_stor_cd = :store_id
+      AND prod_dt BETWEEN
+          TO_CHAR(TO_DATE(:reference_dt, 'YYYYMMDD') - INTERVAL '28 days', 'YYYYMMDD')
+          AND :reference_dt
+)
+-- 2. 품목별 평균 생산량 + 평균 등록 시각 산출
+SELECT
+    item_cd,
+    MAX(item_nm) AS item_nm,
+    COUNT(*) AS prod_record_count,
+    ROUND(AVG(prod_qty)::numeric, 1) AS avg_prod_qty,
+    TO_CHAR(
+        TIME '00:00:00' + (AVG(EXTRACT(EPOCH FROM reg_ts::time)) || ' seconds')::interval,
+        'HH24:MI'
+    ) AS avg_reg_time
+FROM recent_4weeks
+WHERE reg_ts IS NOT NULL
+GROUP BY item_cd
+ORDER BY avg_prod_qty DESC NULLS LAST
+LIMIT 20;","WITH recent_4weeks AS (
+    SELECT
+        item_cd,
+        item_nm,
+        COALESCE(NULLIF(prod_qty, '')::numeric, 0) AS prod_qty,
+        TO_TIMESTAMP(
+            REPLACE(REPLACE(reg_date, '오전', 'AM'), '오후', 'PM'),
+            'YYYY-MM-DD AM HH12:MI:SS'
+        ) AS reg_ts
+    FROM raw_production_extract
+    WHERE masked_stor_cd = 'POC_010'
+      AND prod_dt BETWEEN '20260205' AND '20260305'
+)
+SELECT
+    item_cd,
+    MAX(item_nm) AS item_nm,
+    COUNT(*) AS prod_record_count,
+    ROUND(AVG(prod_qty)::numeric, 1) AS avg_prod_qty,
+    TO_CHAR(
+        TIME '00:00:00' + (AVG(EXTRACT(EPOCH FROM reg_ts::time)) || ' seconds')::interval,
+        'HH24:MI'
+    ) AS avg_reg_time
+FROM recent_4weeks
+WHERE reg_ts IS NOT NULL
+GROUP BY item_cd
+ORDER BY avg_prod_qty DESC NULLS LAST
+LIMIT 20;","최근 4주 품목별 평균 생산량과 평균 등록 시각을 산출 (현재 데이터에는 prod_dgre=1 1차 생산만 적재되어 있어 1차/2차 분리 분석은 미지원이며 reg_date의 한국어 오전/오후 표기를 timestamp로 정규화하여 처리)",production_get_recent4weeks_average_qty_and_register_time,"4주 평균 생산 등록 시간|4주 평균 생산량|최근 4주 생산 등록 시각|품목별 평균 생산 시간|4주 생산 평균|평균 생산 등록 시각|최근 4주 생산 평균|1차 생산 평균 등록 시간"
 031-001-,POC_010,2026-03-05 09:00 (KST),생산 관리,폐기 집중 요일,최근 30일 중 폐기가 집중된 요일은?,⚠️,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",요일 정보는 prc_dt 컬럼에서 추출; 일부 집계 정밀도 제한,"SELECT 
     TRIM(TO_CHAR(TO_DATE(stock_dt, 'YYYYMMDD'), 'Day')) AS day_of_week,  -- 요일 추출 (예: Monday, Tuesday)
     SUM(COALESCE(disuse_qty::numeric, 0)) AS total_disuse_qty            -- 해당 요일의 총 폐기 수량 합계
@@ -1759,19 +1816,19 @@ WHERE
 ORDER BY
     Sales.total_sale_qty DESC;",,,
 036-001-003,POC_010,2026-03-05 09:00 (KST),생산 관리,품절 잦은 시간대,품절이 자주 발생하는 특정 시간대가 있어?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",생산 등록 이력 컬럼 직접 없음; 판매수량 대비 재고율 변화로 추정,"SELECT
-    sold_out_tm AS stockout_time,               -- 품절 발생 시각 (시 단위)
-    COUNT(*) AS stockout_cnt                      -- 시간대별 품절 발생 횟수
-FROM 
+    stockout_hour AS stockout_time,             -- 품절 발생 시각 (시 단위)
+    COUNT(*) AS stockout_cnt                    -- 시간대별 품절 발생 횟수
+FROM
     core_stockout_time
-WHERE 
+WHERE
     masked_stor_cd = :store_id
     AND prc_dt BETWEEN :date_from AND :date_to
-    AND (CASE WHEN sold_out_tm IS NOT NULL THEN TRUE ELSE FALSE END) = TRUE                        -- 품절이 발생한 건만 필터링
-    AND sold_out_tm IS NOT NULL                 -- 시각 데이터가 있는 건만 집계
-GROUP BY 
-    sold_out_tm
-ORDER BY 
-    stockout_cnt DESC;                            -- 품절이 가장 잦은 시간대순으로 정렬","SELECT
+    AND is_stockout = TRUE                      -- 품절이 발생한 건만 필터링
+    AND stockout_hour IS NOT NULL               -- 시각 데이터가 있는 건만 집계
+GROUP BY
+    stockout_hour
+ORDER BY
+    stockout_cnt DESC;","SELECT
     sold_out_tm AS stockout_time,
     COUNT(*) AS stockout_cnt
 FROM
@@ -1786,18 +1843,18 @@ GROUP BY
 ORDER BY
     stockout_cnt DESC;",,,
 036-001-004,POC_010,2026-03-05 09:00 (KST),생산 관리,이번달 품절 1위 시간대,이번 달 품절이 가장 빈번했던 시간대는 언제야?,✅,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",생산 등록 이력 컬럼 직접 없음; 판매수량 대비 재고율 변화로 추정,"SELECT
-    sold_out_tm || '시' AS stockout_time,  -- 시간대 (예: '21시')
-    COUNT(*) AS total_stockout_cases         -- 해당 시간대의 총 품절 발생 건수
-FROM 
+    stockout_hour::text || '시' AS stockout_time,  -- 시간대 (예: '21시')
+    COUNT(*) AS total_stockout_cases               -- 해당 시간대의 총 품절 발생 건수
+FROM
     core_stockout_time
-WHERE 
-    masked_stor_cd = :store_id AND prc_dt >= :date_from 
-    AND prc_dt <= :date_to
-    AND (CASE WHEN sold_out_tm IS NOT NULL THEN TRUE ELSE FALSE END) = TRUE                   -- 품절이 발생한 항목만 필터링
-    AND sold_out_tm IS NOT NULL
-GROUP BY 
-    sold_out_tm
-ORDER BY 
+WHERE
+    masked_stor_cd = :store_id
+    AND prc_dt BETWEEN :date_from AND :date_to
+    AND is_stockout = TRUE                         -- 품절이 발생한 항목만 필터링
+    AND stockout_hour IS NOT NULL
+GROUP BY
+    stockout_hour
+ORDER BY
     total_stockout_cases DESC
 LIMIT 5;","SELECT 
     sold_out_tm || '시' AS stockout_time,
@@ -3082,7 +3139,7 @@ WHERE masked_stor_cd = 'POC_010'
 GROUP BY item_cd
 HAVING ABS(SUM(NULLIF(ord_qty, '')::numeric) - SUM(NULLIF(ord_rec_qty, '')::numeric)) > 0
 ORDER BY qty_difference DESC
-LIMIT 10;",오늘(또는 기준일) 시스템 추천 발주수량과 실제 발주수량의 편차를 품목 단위로 집계해 상위 품목을 추출하고, 과잉 발주/추천 미달 방향과 함께 점주의 발주 조정 의사결정에 필요한 정보를 제시,ordering_compare_recommended_vs_actual_order_qty,추천 발주 무시한 품목|추천량 어긋난 발주|추천 안 따른 품목|발주량 추천 차이|추천 대비 실발주|발주 권장량과 차이|오늘 추천과 실제 발주 차이 큰 품목|추천 수량 vs 실 발주 편차
+LIMIT 10;","오늘(또는 기준일) 시스템 추천 발주수량과 실제 발주수량의 편차를 품목 단위로 집계해 상위 품목을 추출하고, 과잉 발주/추천 미달 방향과 함께 점주의 발주 조정 의사결정에 필요한 정보를 제시",ordering_compare_recommended_vs_actual_order_qty,추천 발주 무시한 품목|추천량 어긋난 발주|추천 안 따른 품목|발주량 추천 차이|추천 대비 실발주|발주 권장량과 차이|오늘 추천과 실제 발주 차이 큰 품목|추천 수량 vs 실 발주 편차
 072-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,최근 30일 발주 비율이 늘어나고 있어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 = auto_ord_yn=N 기준,"SELECT
     dlv_dt AS delivery_date,                                 -- 납품(배송) 예정 일자
     SUM(CAST(ord_qty AS NUMERIC)) AS daily_order_qty,        -- 일자별 총 발주 수량
@@ -3518,7 +3575,7 @@ WHERE
 GROUP BY
     sale_dt
 ORDER BY
-    sale_dt ASC;",이번 주 일별 매출 금액·주문 건수·객단가 추이를 함께 나열하고, 요일별 흐름과 다음 영업일 운영 방향을 안내,sales_get_weekly_daily_sales_and_order_trend,이번 주 일별 매출 추이|이번 주 요일별 매출 추이|이번 주 일별 주문건수 추이|이번 주 일별 주문 건수 추이|이번 주 일별 거래 건수|이번 주 매출·주문 추이|금주 일별 판매 추이|이번 주 매출 흐름|이번 주 주문건수 흐름
+    sale_dt ASC;",이번 주 일별 매출 금액·주문 건수·객단가 추이를 함께 나열하고, 요일별 흐름과 다음 영업일 운영 방향을 안내,sales_get_weekly_daily_sales_and_order_trend
 080-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,최근 30일 주중 매출과 주말 매출 비율 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
     -- 1. 2026년 3월 4일 기준 역산 30일간의 일자별 총매출액 및 요일 번호 추출
     SELECT 
@@ -4349,7 +4406,7 @@ GROUP BY
     CASE WHEN CAST(tmzon_div AS INTEGER) < 12 THEN '1. 오전(00~11시)' ELSE '2. 오후(12~23시)' END
 ORDER BY 
     time_period ASC;","최근 30일 오전(6~12시)과 오후(12~21시) 채널별 매출 비중을 수치로 비교하고, 오전 강세 채널과 오후 강세 채널의 특징을 분석하여 시간대별 채널 전략을 제시",,
-098-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,오늘 시간대별 주문건수 변화 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT
+098-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,시간대별 주문건수,오늘 시간대별 주문건수 변화 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT
     tmzon_div AS time_zone,                 -- 판매 시간대
     SUM(ord_cnt) AS hourly_ord_cnt,         -- 시간대별 총 주문건수
     SUM(sale_amt) AS hourly_sale_amt        -- 시간대별 총 매출액 (참고용)
@@ -4373,7 +4430,7 @@ WHERE
 GROUP BY
     tmzon_div
 ORDER BY
-    tmzon_div ASC;","오늘 시간대별 주문건수를 수치로 나열하고, 피크 시간대와 비피크 시간대의 주문건수 차이를 분석하여 인력 배치 및 운영 효율화 방향을 제시",,
+    tmzon_div ASC;",오늘 시간대별 주문건수를 수치로 나열하고 피크 시간대와 비피크 시간대의 주문건수 차이를 분석하여 인력 배치 및 운영 효율화 방향을 제시,sales_get_today_hourly_order_count,오늘 시간대별 주문 건수|시간대별 주문건수 변화|오늘 시간대별 매출 분포|피크 시간대 주문|시간대별 주문 추이|오늘 시간 분포 매출|시간대별 주문건수 변화|오늘 시간대 매출 흐름
 099-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 주 일별 주문건수 추이 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT 
     sale_dt, 
     SUM(sale_amt) AS total_sale_amt,              -- 일자별 총 판매금액
@@ -4794,7 +4851,7 @@ GROUP BY
     time_period
 ORDER BY
     time_period ASC;","최근 30일 간편결제 비중 변화 추이를 수치로 제시하고, 증가 추세라면 간편결제 우대 프로모션과 UX 개선 방향을 함께 안내",,간편결제 비중|카카오페이 비중|간편결제 추세|간편결제 변화|최근 간편결제 비율|간편결제 증가 추세
-111-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 결제수단이 특정 수단에 과도하게 집중돼 있어?,✅,"raw_daily_store_pay_way.pay_way_cd, sale_amt",결제수단별 데이터는 raw_daily_store_pay_way 테이블 필요; 직접 연동 시 가능,"SELECT
+111-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,결제수단 집중도,이번 달 결제수단이 특정 수단에 과도하게 집중돼 있어?,✅,"raw_daily_store_pay_way.pay_way_cd, sale_amt",결제수단별 데이터는 raw_daily_store_pay_way 테이블 필요; 직접 연동 시 가능,"SELECT
     pay_way_cd_nm AS pay_method,                                                    -- 결제수단명
     method_pay_amt,                                                                 -- 수단별 결제금액 합계
     ROUND((method_pay_amt / NULLIF(SUM(method_pay_amt) OVER (), 0)) * 100, 1) AS pay_ratio_pct -- 결제 비중 (%)
@@ -4829,7 +4886,7 @@ FROM (
         pay_way_cd_nm
 ) AggData
 ORDER BY
-    pay_ratio_pct DESC;","이번 달 결제수단별 매출 비중을 수치로 나열하고, 특정 수단 집중도와 결제 수단 다변화 필요성, 특정 수단 장애 시 리스크를 분석",,
+    pay_ratio_pct DESC;",이번 달 결제수단별 매출 비중을 수치로 나열하고 특정 수단 집중도와 결제 수단 다변화 필요성 그리고 특정 수단 장애 시 리스크를 함께 분석,sales_get_payment_method_concentration,결제수단 집중도|결제수단 쏠림|결제수단 비중 편중|특정 결제수단 의존|결제 비중 분포|이번 달 결제수단 점유율|결제수단 다변화 진단|결제수단 과집중
 301-003-,POC_010,2026-03-05 09:00 (KST),매출 관리,,26년2월 누적 매출이 전년동월 대비 얼마나 차이 나는지 퍼센트로 알려줘,✅,"core_channel_sales.sale_dt,sale_amt",누적 비교는 동일 월 전체 합계 기준,"WITH m AS (SELECT SUBSTRING(ccs.sale_dt,1,6) AS ym, SUM(ccs.sale_amt) AS total_sale FROM core_channel_sales ccs WHERE ccs.masked_stor_cd=:store_id AND SUBSTRING(ccs.sale_dt,1,6) IN (:year_month,:prev_year_month) GROUP BY SUBSTRING(ccs.sale_dt,1,6)) SELECT ROUND(100.0*(MAX(total_sale) FILTER (WHERE ym=:year_month)-MAX(total_sale) FILTER (WHERE ym=:prev_year_month))/NULLIF(MAX(total_sale) FILTER (WHERE ym=:prev_year_month),0),2) AS yoy_change_pct FROM m ","WITH m AS (SELECT SUBSTRING(ccs.sale_dt,1,6) AS ym, SUM(ccs.sale_amt) AS total_sale FROM core_channel_sales ccs WHERE ccs.masked_stor_cd='POC_010' AND SUBSTRING(ccs.sale_dt,1,6) IN ('202602','202502') GROUP BY SUBSTRING(ccs.sale_dt,1,6)) SELECT ROUND(100.0*(MAX(total_sale) FILTER (WHERE ym='202602')-MAX(total_sale) FILTER (WHERE ym='202502'))/NULLIF(MAX(total_sale) FILTER (WHERE ym='202502'),0),2) AS yoy_change_pct FROM m ",즉시 실행 액션: 감소 시 TOP3 하락 품목/채널 즉시 점검. 근거: 전년동월 누적 매출 증감률,,
 302-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,전주 대비 배달 건 수 비교해줘,✅,"core_channel_sales.ho_chnl_div,ord_cnt,sale_dt",배달 채널 구분은 ho_chnl_div 값에 의존,"WITH delivery_sales AS (
     -- 1. 기준일(:date_from)로부터 14일간의 온라인(배달) 채널 주문 건수 추출 및 주차 분류
@@ -5640,133 +5697,59 @@ HAVING
     AVG(qty_1) IS NOT NULL
 ORDER BY 
     avg_prod_qty_1 DESC;",즉시 실행 액션: 1·2차 생산 타이밍이 늦은 품목은 등록 시간을 앞당김. 근거: 4주 평균 등록시각·생산량,,
-401-004-,POC_010,2026-03-05 09:00 (KST),생산 관리,,생산 리드타임 1시간 기준으로 알림 우선순위 정렬해줘,⚠️,"predicted_stock_1h(추정),production_registrations.registered_at",예측은 시간당 판매속도 기반 근사,"WITH recent_sales_velocity AS (
-    -- 1. 직전 3시간 데이터로 시간당 평균 판매 속도 도출
-    SELECT 
-        item_cd,
-        ROUND(SUM(sale_qty) / 3.0, 1) AS hourly_sales_velocity 
-    FROM 
-        core_hourly_item_sales
-    WHERE 
-        masked_stor_cd = :store_id
-        AND sale_dt = :date_from
-        AND CAST(tmzon_div AS INTEGER) BETWEEN (:current_hour - 3) AND (:current_hour - 1)
-    GROUP BY 
-        item_cd
-),
-current_inventory AS (
-    -- 2. 해당 점포 및 일자의 현재 실시간 재고량(stk_avg) 추출
-    SELECT 
+401-004-,POC_010,2026-03-05 09:00 (KST),생산 관리,생산 리드타임 알림 우선순위,생산 리드타임 1시간 기준으로 알림 우선순위 정렬해줘,✅,"core_stockout_time.is_stockout, stockout_hour, prc_dt",품절 시각 기반 생산 착수 마지노선 산출; 리드타임 1시간 가정,"WITH item_stockout_stats AS (
+    -- 1. 기간 내 품목별 품절 발생 일수 + 평균 품절 시각
+    SELECT
         item_cd,
         MAX(item_nm) AS item_nm,
-        stk_avg AS current_stock_qty
-    FROM 
-        core_stock_rate
-    WHERE 
-        masked_stor_cd = :store_id
-        AND prc_dt = :date_from
-    GROUP BY 
-        item_cd, stk_avg
-),
-inventory_forecast AS (
-    -- 3. 1시간 뒤 예상 재고량 산출
-    SELECT 
-        c.item_cd,
-        c.item_nm,
-        c.current_stock_qty,
-        COALESCE(v.hourly_sales_velocity, 0) AS hourly_sales_velocity,
-        ROUND(c.current_stock_qty - COALESCE(v.hourly_sales_velocity, 0), 1) AS estimated_stock_after_1h
-    FROM 
-        current_inventory c
-    LEFT JOIN 
-        recent_sales_velocity v ON c.item_cd = v.item_cd
+        COUNT(CASE WHEN is_stockout = TRUE THEN 1 END) AS stockout_days,
+        AVG(stockout_hour) AS avg_stockout_hour
+    FROM core_stockout_time
+    WHERE masked_stor_cd = :store_id
+      AND prc_dt BETWEEN :date_from AND :date_to
+    GROUP BY item_cd
+    HAVING COUNT(CASE WHEN is_stockout = TRUE THEN 1 END) > 0
 )
--- 4. 생산 리드타임(1시간) 기준 알림 등급 부여 및 우선순위 정렬
-SELECT 
+-- 2. 생산 리드타임(1시간) 반영 알림 마지노선 + 우선순위 등급
+SELECT
     item_cd,
     item_nm,
-    current_stock_qty,
-    hourly_sales_velocity,
-    estimated_stock_after_1h,
-    
-    -- 예상 소진 시점에 따른 알림 우선순위 부여
-    CASE 
-        WHEN current_stock_qty <= 0 THEN '🚨 [1순위] 이미 품절 (기회손실 중, 긴급 생산)'
-        WHEN estimated_stock_after_1h <= 0 THEN '🔥 [2순위] 1시간 내 품절 예상 (생산 리드타임 내 소진)'
-        WHEN estimated_stock_after_1h <= hourly_sales_velocity THEN '⚠️ [3순위] 1~2시간 내 품절 예상 (생산 준비 요망)'
-        ELSE '✅ [4순위] 재고 여유'
-    END AS alert_priority
-FROM 
-    inventory_forecast
-ORDER BY 
-    -- 긴급 알림 순서대로 정렬 후, 동일 순위 내에서는 예상 재고량이 적은 것부터 오름차순 정렬
-    CASE 
-        WHEN current_stock_qty <= 0 THEN 1
-        WHEN estimated_stock_after_1h <= 0 THEN 2
-        WHEN estimated_stock_after_1h <= hourly_sales_velocity THEN 3
-        ELSE 4
-    END ASC,
-    estimated_stock_after_1h ASC;
-","WITH recent_sales_velocity AS (
-    SELECT 
-        item_cd,
-        ROUND(SUM(sale_qty) / 3.0, 1) AS hourly_sales_velocity 
-    FROM 
-        core_hourly_item_sales
-    WHERE 
-        masked_stor_cd = 'POC_001'
-        AND sale_dt = '20260304'
-        AND CAST(tmzon_div AS INTEGER) BETWEEN 11 AND 13
-    GROUP BY 
-        item_cd
-),
-current_inventory AS (
-    SELECT 
+    stockout_days AS stockout_day_count,
+    ROUND(avg_stockout_hour::numeric, 1) AS avg_stockout_hour,
+    ROUND((avg_stockout_hour - 1)::numeric, 1) AS production_alert_deadline_hour,
+    CASE
+        WHEN (avg_stockout_hour - 1) < 12 THEN '1순위 (오전 중 즉시 착수 요망)'
+        WHEN (avg_stockout_hour - 1) < 15 THEN '2순위 (점심 피크 대비 오전 후반 착수)'
+        ELSE '3순위 (오후 재고 관찰 후 착수)'
+    END AS alert_priority_guide
+FROM item_stockout_stats
+ORDER BY production_alert_deadline_hour ASC,
+         stockout_days DESC;","WITH item_stockout_stats AS (
+    SELECT
         item_cd,
         MAX(item_nm) AS item_nm,
-        stk_avg AS current_stock_qty
-    FROM 
-        core_stock_rate
-    WHERE 
-        masked_stor_cd = 'POC_001'
-        AND prc_dt = '20260304'
-    GROUP BY 
-        item_cd, stk_avg
-),
-inventory_forecast AS (
-    SELECT 
-        c.item_cd,
-        c.item_nm,
-        c.current_stock_qty,
-        COALESCE(v.hourly_sales_velocity, 0) AS hourly_sales_velocity,
-        ROUND(c.current_stock_qty - COALESCE(v.hourly_sales_velocity, 0), 1) AS estimated_stock_after_1h
-    FROM 
-        current_inventory c
-    LEFT JOIN 
-        recent_sales_velocity v ON c.item_cd = v.item_cd
+        COUNT(CASE WHEN is_stockout = TRUE THEN 1 END) AS stockout_days,
+        AVG(stockout_hour) AS avg_stockout_hour
+    FROM core_stockout_time
+    WHERE masked_stor_cd = 'POC_010'
+      AND prc_dt BETWEEN '20260201' AND '20260305'
+    GROUP BY item_cd
+    HAVING COUNT(CASE WHEN is_stockout = TRUE THEN 1 END) > 0
 )
-SELECT 
+SELECT
     item_cd,
     item_nm,
-    current_stock_qty,
-    hourly_sales_velocity,
-    estimated_stock_after_1h,
-    CASE 
-        WHEN current_stock_qty <= 0 THEN '🚨 [1순위] 이미 품절 (기회손실 중, 긴급 생산)'
-        WHEN estimated_stock_after_1h <= 0 THEN '🔥 [2순위] 1시간 내 품절 예상 (생산 리드타임 내 소진)'
-        WHEN estimated_stock_after_1h <= hourly_sales_velocity THEN '⚠️ [3순위] 1~2시간 내 품절 예상 (생산 준비 요망)'
-        ELSE '✅ [4순위] 재고 여유'
-    END AS alert_priority
-FROM 
-    inventory_forecast
-ORDER BY 
-    CASE 
-        WHEN current_stock_qty <= 0 THEN 1
-        WHEN estimated_stock_after_1h <= 0 THEN 2
-        WHEN estimated_stock_after_1h <= hourly_sales_velocity THEN 3
-        ELSE 4
-    END ASC,
-    estimated_stock_after_1h ASC;",즉시 실행 액션: HIGH 우선순위 품목부터 즉시 생산 등록. 근거: 소진예상시간(hours_to_stockout)과 리드타임 1시간 비교,,
+    stockout_days AS stockout_day_count,
+    ROUND(avg_stockout_hour::numeric, 1) AS avg_stockout_hour,
+    ROUND((avg_stockout_hour - 1)::numeric, 1) AS production_alert_deadline_hour,
+    CASE
+        WHEN (avg_stockout_hour - 1) < 12 THEN '1순위 (오전 중 즉시 착수 요망)'
+        WHEN (avg_stockout_hour - 1) < 15 THEN '2순위 (점심 피크 대비 오전 후반 착수)'
+        ELSE '3순위 (오후 재고 관찰 후 착수)'
+    END AS alert_priority_guide
+FROM item_stockout_stats
+ORDER BY production_alert_deadline_hour ASC,
+         stockout_days DESC;","최근 평균 품절 시각에서 생산 리드타임 1시간을 차감해 생산 착수 마지노선을 산출하고 오전 즉시/오전 후반/오후 관찰 3개 등급으로 알림 우선순위를 안내",production_get_stockout_lead_time_alert_priority,"생산 리드타임 알림 우선순위|품절 시각 기준 생산 착수|생산 마지노선 알림|생산 리드타임 1시간|생산 알림 우선순위|품절 위험 알림 순위|착수 시점 우선순위|생산 알림 정렬"
 501-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,이번 주 추천 발주량은?,주문 마감 전 알림 기준으로 전주/전전주/전월 동요일 3가지 추천량을 보여줘,✅,"raw_order_extract.ord_qty,dlv_dt,item_cd",동요일 계산은 DOW 기준 단순화,"WITH past_sales_reference AS (
     -- 1. 기준일(:date_from)로부터 정확히 7일, 14일, 28일(4주) 전의 동일 요일 판매량 추출
     SELECT 
