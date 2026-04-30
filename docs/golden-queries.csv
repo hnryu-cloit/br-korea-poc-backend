@@ -1371,7 +1371,7 @@ FROM recent_4weeks
 WHERE reg_ts IS NOT NULL
 GROUP BY item_cd
 ORDER BY avg_prod_qty DESC NULLS LAST
-LIMIT 20;","최근 4주 품목별 평균 생산량과 평균 등록 시각을 산출 (현재 데이터에는 prod_dgre=1 1차 생산만 적재되어 있어 1차/2차 분리 분석은 미지원이며 reg_date의 한국어 오전/오후 표기를 timestamp로 정규화하여 처리)",production_get_recent4weeks_average_qty_and_register_time,"4주 평균 생산 등록 시간|4주 평균 생산량|최근 4주 생산 등록 시각|품목별 평균 생산 시간|4주 생산 평균|평균 생산 등록 시각|최근 4주 생산 평균|1차 생산 평균 등록 시간"
+LIMIT 20;",최근 4주 품목별 평균 생산량과 평균 등록 시각을 산출 (현재 데이터에는 prod_dgre=1 1차 생산만 적재되어 있어 1차/2차 분리 분석은 미지원이며 reg_date의 한국어 오전/오후 표기를 timestamp로 정규화하여 처리),production_get_recent4weeks_average_qty_and_register_time,4주 평균 생산 등록 시간|4주 평균 생산량|최근 4주 생산 등록 시각|품목별 평균 생산 시간|4주 생산 평균|평균 생산 등록 시각|최근 4주 생산 평균|1차 생산 평균 등록 시간
 031-001-,POC_010,2026-03-05 09:00 (KST),생산 관리,폐기 집중 요일,최근 30일 중 폐기가 집중된 요일은?,⚠️,"core_stock_rate.stk_rt, core_hourly_item_sales.sale_qty",요일 정보는 prc_dt 컬럼에서 추출; 일부 집계 정밀도 제한,"SELECT 
     TRIM(TO_CHAR(TO_DATE(stock_dt, 'YYYYMMDD'), 'Day')) AS day_of_week,  -- 요일 추출 (예: Monday, Tuesday)
     SUM(COALESCE(disuse_qty::numeric, 0)) AS total_disuse_qty            -- 해당 요일의 총 폐기 수량 합계
@@ -2429,7 +2429,7 @@ ORDER BY
     qty_fluctuation_range DESC NULLS LAST, -- 변동 폭이 큰 순서대로 1차 정렬
     qty_stddev DESC NULLS LAST             -- 표준편차가 큰 순서대로 2차 정렬
 LIMIT 10; -- 변동이 심한 상위 10개 품목 조회","최근 30일 발주수량의 표준편차가 높은 품목을 나열하고, 불규칙 발주가 재고 불안정으로 이어지는 연결 고리를 수치로 설명",ordering_get_recent30d_order_volume_volatility,발주 변동성 큰 품목|들쭉날쭉한 발주|발주 수량 불안정 품목|최근 30일 발주 변동|발주량 편차 큰 품목|발주 일관성 낮은 품목|30일 발주 변동성 상위
-049-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,지난달 발주 변동성 높았던 품목이 이번 달은 안정됐어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주 수량 기준; 실제 납품 완료 여부는 별도 확인 필요,"WITH daily_orders AS (
+049-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,발주 변동성 안정됐나?,지난달 발주 변동성 높았던 품목이 이번 달은 안정됐어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주 수량 기준; 실제 납품 완료 여부는 별도 확인 필요,"WITH daily_orders AS (
     -- 1. 일자별(dlv_dt), 품목별 총 발주 수량 합계 집계
     SELECT
         dlv_dt,
@@ -2580,7 +2580,7 @@ WHERE
     diff_missing_qty >= 10
 ORDER BY
     diff_missing_qty DESC;","오늘 발주-확정 수량 차이가 10 이상인 품목 목록과 차이 수치를 제시하고, 해당 품목의 재고 영향과 추가 발주 필요 여부를 즉시 판단할 수 있도록 안내",,발주 확정 차이|주문 수량 차이 큰 품목|발주량과 확정량 다른 품목|확정 안 된 발주|발주 미확정 품목|주문 확정률 낮은 품목
-053-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,어제 수동발주 설정 품목 중 실제로 자동 처리된 비율 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 여부는 auto_ord_yn 컬럼 기준,"SELECT
+053-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,수동→자동 처리율,어제 수동발주 설정 품목 중 실제로 자동 처리된 비율 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 여부는 auto_ord_yn 컬럼 기준,"SELECT
     COUNT(CASE WHEN auto_ord_yn IN ('Y','1') THEN 1 END) AS auto_ord_cnt, -- 수동발주 건수
     COUNT(item_cd) AS total_ord_cnt,                               -- 전체 발주 건수
 
@@ -2605,7 +2605,7 @@ FROM
 WHERE
     -- 쿼리 실행 시점 기준 어제 날짜의 배송(주문) 데이터 조회
     dlv_dt = TO_CHAR(TO_DATE(:reference_dt, 'YYYYMMDD') - INTERVAL '1 day', '20260305');","어제 수동발주 설정 품목의 자동 처리율을 수치로 제시하고, 자동 처리되지 않은(수동 개입 필요) 품목 목록과 원인을 함께 안내",,
-054-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,이번 달 수동발주 품목의 확정률이 수동 발주 품목보다 높아?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 여부는 auto_ord_yn 컬럼 기준,"SELECT 
+054-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,수동발주 확정률 비교,이번 달 수동발주 품목의 확정률이 수동 발주 품목보다 높아?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 여부는 auto_ord_yn 컬럼 기준,"SELECT 
     CASE 
         WHEN auto_ord_yn IN ('Y','1') THEN '자동 발주'
         ELSE '수동 발주' 
@@ -2654,7 +2654,7 @@ GROUP BY
     END
 ORDER BY
     confirmation_rate_pct DESC;","이번 달 수동발주 품목 확정률 vs 수동발주 품목 확정률을 수치로 비교하고, 수동발주의 효율성 여부를 판단하여 수동발주 확대 또는 조정 방향을 제시",,
-055-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,지난달 수동발주 비율이 이번 달보다 높았어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 여부는 auto_ord_yn 컬럼 기준,"SELECT
+055-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,수동발주 비율 변화,지난달 수동발주 비율이 이번 달보다 높았어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 여부는 auto_ord_yn 컬럼 기준,"SELECT
     SUBSTRING(dlv_dt, 1, 6) AS order_month, -- 'YYYYMMDD'에서 월(YYYYMM) 부분만 추출
     COUNT(item_cd) AS total_ord_cnt,        -- 해당 월의 전체 발주 건수
     COUNT(CASE WHEN auto_ord_yn IN ('Y','1') THEN 1 END) AS auto_ord_cnt, -- 해당 월의 수동발주 건수
@@ -2691,7 +2691,7 @@ GROUP BY
     SUBSTRING(dlv_dt, 1, 6)
 ORDER BY
     order_month DESC;","전월 vs 이번 달 수동발주 비율 변화를 수치로 비교하고, 수동발주 비율 변화 원인(신규 품목 추가, 수동 전환)을 분석하여 운영 방향을 제시",,
-058-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,이번 주 일별 확정률 변화 보여줘,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",확정률 = confrm_qty / ord_qty; 0 발주 품목 제외 처리 필요,"SELECT
+058-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,주간 확정률 추이,이번 주 일별 확정률 변화 보여줘,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",확정률 = confrm_qty / ord_qty; 0 발주 품목 제외 처리 필요,"SELECT
     dlv_dt AS delivery_date,                                      -- 배송 일자
     TRIM(TO_CHAR(TO_DATE(dlv_dt, 'YYYYMMDD'), 'Day')) AS day_of_week, -- 요일 추출
     SUM(ord_qty::numeric) AS total_order_qty,                     -- 일별 총 점주 주문 수량
@@ -2729,7 +2729,7 @@ GROUP BY
     dlv_dt
 ORDER BY
     dlv_dt ASC;","이번 주 일별 전체 확정률 변화를 수치로 나열하고, 확정률이 낮았던 날의 원인(특정 품목 집중, 외부 요인)을 분석하여 개선 방향을 제시",,
-059-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,이번 달 미확정 수량이 가장 많았던 품목 상위 5개 알려줘,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",확정률 = confrm_qty / ord_qty; 0 발주 품목 제외 처리 필요,"SELECT 
+059-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,미확정 수량 TOP5,이번 달 미확정 수량이 가장 많았던 품목 상위 5개 알려줘,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",확정률 = confrm_qty / ord_qty; 0 발주 품목 제외 처리 필요,"SELECT 
     item_cd, 
     item_nm,
     SUM(COALESCE(ord_qty::numeric, 0)) AS total_order_qty,        -- 총 점주 주문 수량
@@ -2878,7 +2878,7 @@ WHERE
     AND w1_rate < w4_rate
 ORDER BY
     total_improvement_pct DESC;","최근 30일 구간 내 확정률이 지속 개선된 품목을 나열하고, 개선 원인(발주 패턴 안정화, 수동발주 전환)을 분석하여 우수 사례로 소개",ordering_get_recent30d_improving_confirmation_rate_items,확정률 개선 품목|발주 확정률 점차 좋아진 품목|최근 30일 확정 안정화|점진적 발주 개선|확정률 우상향 품목|출하 확정 점차 좋아진 품목|발주 확정률 꾸준히 상승|최근 30일 확정률 개선 품목
-062-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,이번 주 발주 없이 납품된 날이 있어?,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",납품 없는 발주 또는 발주 없는 납품 감지는 추가 로직 필요,"SELECT
+062-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,발주 없이 납품된 날?,이번 주 발주 없이 납품된 날이 있어?,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",납품 없는 발주 또는 발주 없는 납품 감지는 추가 로직 필요,"SELECT
     dlv_dt AS delivery_date,                         -- 배송 일자
     item_cd,
     item_nm,
@@ -2984,7 +2984,7 @@ WHERE
 ORDER BY
     gap_days DESC,
     order_date DESC;","납품일 간격이 7일 이상 벌어진 품목(발주 공백)을 나열하고, 해당 기간 재고율 변화와 품절 발생 여부를 수치로 제시",ordering_get_orders_with_gap_over_7days,발주 간격 7일 이상 품목|발주 공백 큰 품목|발주 텀이 긴 품목|발주 사이 일주일 넘는 품목|작년 발주 간격 벌어진 품목|발주 띄엄띄엄 품목|납품 간격 7일 이상|이번 달 발주 공백 품목|이번 달 발주 간격 7일 이상
-064-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,최근 30일 발주가 3회 이하인 품목 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",납품 없는 발주 또는 발주 없는 납품 감지는 추가 로직 필요,"SELECT 
+064-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,발주 적은 품목은?,최근 30일 발주가 3회 이하인 품목 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",납품 없는 발주 또는 발주 없는 납품 감지는 추가 로직 필요,"SELECT 
     item_cd,
     item_nm,
     COUNT(DISTINCT dlv_dt) AS order_count,           -- 기준 기간 내 발주(배송 예정) 횟수
@@ -3021,7 +3021,7 @@ HAVING
 ORDER BY 
     order_count ASC,
     total_order_qty ASC;","최근 30일 발주 횟수가 3회 이하인 품목 목록과 해당 품목의 판매 패턴을 제시하고, 발주 빈도 증가가 필요한 품목을 우선순위로 안내",,
-065-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,이번 달 발주 후 납품까지 평균 며칠 걸려?,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주일-납품일 간격은 dlv_dt 기준 집계; 정확한 발주 전송일 필요,"SELECT 
+065-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,발주→납품 며칠?,이번 달 발주 후 납품까지 평균 며칠 걸려?,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주일-납품일 간격은 dlv_dt 기준 집계; 정확한 발주 전송일 필요,"SELECT 
     ROUND(
         AVG(TO_DATE(dlv_dt, 'YYYYMMDD') - TO_DATE(erp_send_dt, 'YYYYMMDD')), 1
     ) AS avg_lead_time_days                          -- 발주 후 납품까지의 평균 소요일수
@@ -3044,7 +3044,7 @@ WHERE
     AND CAST(ord_qty AS NUMERIC) > 0
     AND erp_send_dt IS NOT NULL
     AND erp_send_dt != '';","이번 달 발주일에서 납품일까지 평균 소요일을 품목별로 나열하고, 리드타임이 긴 품목(3일 이상)에 대한 사전 발주 시점 조정 방향을 안내",,
-066-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,최근 30일 납품 리드타임이 1일인 품목과 2일 이상인 품목 비율 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주일-납품일 간격은 dlv_dt 기준 집계; 정확한 발주 전송일 필요,"WITH ItemLeadTime AS (
+066-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,리드타임 1일/2일 비율,최근 30일 납품 리드타임이 1일인 품목과 2일 이상인 품목 비율 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주일-납품일 간격은 dlv_dt 기준 집계; 정확한 발주 전송일 필요,"WITH ItemLeadTime AS (
     -- 1. 품목별 평균 리드타임 계산
     SELECT
         item_cd,
@@ -3140,7 +3140,7 @@ GROUP BY item_cd
 HAVING ABS(SUM(NULLIF(ord_qty, '')::numeric) - SUM(NULLIF(ord_rec_qty, '')::numeric)) > 0
 ORDER BY qty_difference DESC
 LIMIT 10;","오늘(또는 기준일) 시스템 추천 발주수량과 실제 발주수량의 편차를 품목 단위로 집계해 상위 품목을 추출하고, 과잉 발주/추천 미달 방향과 함께 점주의 발주 조정 의사결정에 필요한 정보를 제시",ordering_compare_recommended_vs_actual_order_qty,추천 발주 무시한 품목|추천량 어긋난 발주|추천 안 따른 품목|발주량 추천 차이|추천 대비 실발주|발주 권장량과 차이|오늘 추천과 실제 발주 차이 큰 품목|추천 수량 vs 실 발주 편차
-072-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,최근 30일 발주 비율이 늘어나고 있어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 = auto_ord_yn=N 기준,"SELECT
+072-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,발주 비율 증가?,최근 30일 발주 비율이 늘어나고 있어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 = auto_ord_yn=N 기준,"SELECT
     dlv_dt AS delivery_date,                                 -- 납품(배송) 예정 일자
     SUM(CAST(ord_qty AS NUMERIC)) AS daily_order_qty,        -- 일자별 총 발주 수량
     SUM(CAST(confrm_qty AS NUMERIC)) AS daily_confirmed_qty, -- 일자별 총 확정(출하) 수량
@@ -3171,7 +3171,7 @@ GROUP BY
     dlv_dt
 ORDER BY
     dlv_dt ASC;","최근 30일 수동발주 비율 변화 추이를 수치로 제시하고, 수동발주 증가 원인(수동발주 해제, 신규 품목 추가)을 분석하여 자동화 확대 방향을 안내",,
-073-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,지난달 수동발주가 많았던 품목이 이번 달은 어떻게 됐어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 = auto_ord_yn=N 기준,"WITH LastMonthManual AS (
+073-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,수동발주 품목 변화,지난달 수동발주가 많았던 품목이 이번 달은 어떻게 됐어?,✅,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",수동발주 = auto_ord_yn=N 기준,"WITH LastMonthManual AS (
     -- 1. 지난달 수동 발주 수량 집계
     SELECT
         item_cd,
@@ -3257,7 +3257,7 @@ LEFT JOIN
 ORDER BY
     l.last_month_order_qty DESC
 LIMIT 20;","전월 수동발주 상위 품목의 이번 달 수동발주 전환 여부와 확정률 변화를 비교하고, 여전히 수동으로만 운영 중인 품목의 개선 방향을 제시",,
-074-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,,이번 달 품목별 평균 발주 간격(주기) 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주 주기 = 납품일 간 LAG 계산; DB에서 직접 집계 필요,"WITH DailyOrders AS (
+074-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,품목별 발주 주기,이번 달 품목별 평균 발주 간격(주기) 알려줘,⚠️,"raw_order_extract.ord_qty, confrm_qty, auto_ord_yn, dlv_dt",발주 주기 = 납품일 간 LAG 계산; DB에서 직접 집계 필요,"WITH DailyOrders AS (
     -- 1. 품목별 실제 발주가 들어간 일자 추출 (하루 여러 번 발주 시 중복 제거)
     SELECT DISTINCT
         item_cd,
@@ -3418,7 +3418,7 @@ WHERE
 ORDER BY
     gap_increase DESC NULLS LAST
 LIMIT 10;","최근 30일 발주 주기에서 직전 발주 간격이 과거 평균보다 늘어난 품목을 추출하고, 발주 공백 원인(계절적 수요 감소, 발주 오류, 추천 미반영)과 즉시 조치 방향을 함께 안내",ordering_get_recent30d_lengthening_order_cycle_items,발주 주기 길어진 품목|발주 간격 갑자기 늘어난 품목|발주 텀 늘어난 품목|발주 주기 변화 품목|최근 발주 공백 길어짐|발주 주기 둔화 품목|최근 30일 발주 텀 증가
-076-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 요일별 총매출 순위 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"SELECT 
+076-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,요일별 매출 순위,이번 달 요일별 총매출 순위 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"SELECT 
     TRIM(TO_CHAR(TO_DATE(sale_dt, 'YYYYMMDD'), 'Day')) AS day_of_week, -- 판매 일자에서 요일 추출
     SUM(actual_sale_amt) AS total_sales_amt                            -- 요일별 실매출금액 총합
 FROM 
@@ -3443,7 +3443,7 @@ GROUP BY
     TRIM(TO_CHAR(TO_DATE(sale_dt, 'YYYYMMDD'), 'Day'))
 ORDER BY
     total_sales_amt DESC NULLS LAST;","이번 달 요일별 총매출을 수치로 나열하고, 가장 높은 요일과 낮은 요일의 차이를 분석하여 요일별 운영 전략(프로모션, 인력 배치) 방향을 제시",,
-077-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,최근 30일 요일별 평균 매출 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
+077-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,요일별 평균 매출,최근 30일 요일별 평균 매출 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
     -- 1. 최근 30일 동안의 '일자별' 총 실매출금액 집계
     SELECT
         sale_dt,
@@ -3488,7 +3488,7 @@ GROUP BY
     TRIM(TO_CHAR(TO_DATE(sale_dt, 'YYYYMMDD'), 'Day'))
 ORDER BY
     avg_sales_amt DESC NULLS LAST;","최근 30일 요일별 평균 매출을 수치로 제시하고, 주중 vs 주말 매출 패턴 차이와 저매출 요일 개선 방향을 분석하여 안내",,
-078-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,지난달 요일별 매출 패턴이 이번 달과 다른 점 있어?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
+078-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,요일별 패턴 변화,지난달 요일별 매출 패턴이 이번 달과 다른 점 있어?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
     -- 1. 기준일(2026-03-04)을 바탕으로 이번 달(3월)과 지난달(2월)의 일자별 총매출 집계
     SELECT
         sale_dt,
@@ -3576,7 +3576,7 @@ GROUP BY
     sale_dt
 ORDER BY
     sale_dt ASC;",이번 주 일별 매출 금액·주문 건수·객단가 추이를 함께 나열하고, 요일별 흐름과 다음 영업일 운영 방향을 안내,sales_get_weekly_daily_sales_and_order_trend
-080-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,최근 30일 주중 매출과 주말 매출 비율 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
+080-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,주중/주말 매출 비교,최근 30일 주중 매출과 주말 매출 비율 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",요일은 sale_dt에서 추출; 공휴일 보정 없음,"WITH daily_sales AS (
     -- 1. 2026년 3월 4일 기준 역산 30일간의 일자별 총매출액 및 요일 번호 추출
     SELECT 
         sale_dt,
@@ -3682,7 +3682,7 @@ GROUP BY
     ho_chnl_nm
 ORDER BY
     avg_order_value DESC;","오늘 채널별(배달/포장/매장) 객단가를 수치로 비교하고, 가장 높은 채널과 낮은 채널의 차이를 분석하여 객단가 높은 채널 강화 방향을 제시",,채널별 객단가|배달 매장 객단가 차이|채널 객단가 비교|오늘 채널 평균 객단가|배달 포장 매장 비교|주문 채널별 단가
-084-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,지난달 채널별 객단가와 이번 달 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",채널별 객단가 = sale_amt/ord_cnt per 채널; 채널 구분 컬럼 필요,"SELECT 
+084-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,채널별 객단가 변화,지난달 채널별 객단가와 이번 달 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",채널별 객단가 = sale_amt/ord_cnt per 채널; 채널 구분 컬럼 필요,"SELECT 
     ho_chnl_nm AS channel_name,  -- 판매채널명 (예: 요기요, 매장 등)
     
     -- 지난달 객단가 계산
@@ -3749,7 +3749,7 @@ GROUP BY
     ho_chnl_nm
 ORDER BY
     this_month_avg_order_value DESC;","전월 vs 이번 달 채널별 객단가 변화를 수치로 비교하고, 개선된 채널의 원인 분석과 하락한 채널의 회복 방향을 제시",,
-085-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,최근 30일 객단가가 가장 높은 채널은?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",채널별 객단가 = sale_amt/ord_cnt per 채널; 채널 구분 컬럼 필요,"SELECT
+085-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,객단가 최고 채널?,최근 30일 객단가가 가장 높은 채널은?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",채널별 객단가 = sale_amt/ord_cnt per 채널; 채널 구분 컬럼 필요,"SELECT
     ho_chnl_nm AS channel_name,              -- 판매채널명 (예: 요기요, 배달의민족, 매장, 포장 등)
     SUM(sale_amt) AS total_sale_amt,         -- 최근 30일 총 판매금액
     SUM(ord_cnt) AS total_order_cnt,         -- 최근 30일 총 결제건수
@@ -3854,7 +3854,7 @@ SELECT
     , 2) AS top_20_sales_ratio_pct
 FROM
     ranked_sales;","이번 달 상위 20% 품목의 매출 기여율(파레토 비율)을 수치로 제시하고, 80% 이상 집중 여부와 매출 집중 품목 리스트를 안내하여 상품 포트폴리오 관리 방향을 제시",sales_get_top20_items_sales_share,상위 20% 매출 비중|상위 20% 품목 매출 점유율|매출 상위 20% 비중|파레토 80/20 분석|이번 달 매출 상위 20%|상위 20% 차지 비율|매출 집중도 분석|상위 품목 매출 기여율
-088-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 매출이 거의 없는 하위 품목 비율 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출 데이터 필요; core_channel_sales는 일자/채널 단위 집계,"WITH item_sales AS (
+088-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,하위 품목 비율,이번 달 매출이 거의 없는 하위 품목 비율 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출 데이터 필요; core_channel_sales는 일자/채널 단위 집계,"WITH item_sales AS (
     -- 1. 이번 달(3월 1일 ~ 3월 4일) 기준 품목별 총 실매출금액 집계
     SELECT
         item_cd,
@@ -3924,7 +3924,7 @@ SELECT
     , 2) AS bottom_20_sales_ratio_pct
 FROM
     ranked_sales;","이번 달 매출 하위 20% 품목 수와 전체 대비 비율을 수치로 제시하고, 해당 품목의 지속 운영 필요성 검토 및 정리 후보 목록을 안내",,
-089-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,지난달보다 매출 집중도가 이번 달에 높아졌어?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출 데이터 필요; core_channel_sales는 일자/채널 단위 집계,"WITH monthly_item_sales AS (
+089-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,매출 집중도 변화,지난달보다 매출 집중도가 이번 달에 높아졌어?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출 데이터 필요; core_channel_sales는 일자/채널 단위 집계,"WITH monthly_item_sales AS (
     -- 1. 2026년 3월 4일 기준으로 지난달(2월)과 이번 달(3월)의 월별, 품목별 실매출금액 집계
     SELECT
         SUBSTRING(sale_dt, 1, 6) AS sale_month,
@@ -4004,7 +4004,7 @@ GROUP BY
     sale_month
 ORDER BY
     sale_month DESC;","전월 vs 이번 달 상위 20% 품목 매출 기여율 변화를 수치로 비교하고, 집중도 변화 원인(특정 캠페인 효과, 신메뉴 출시)을 분석하여 제시",,
-090-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 일별 매출 변동이 얼마나 커?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",변동성 계산은 일별 집계 기반; 분·시간 단위 정밀 분석 제한,"WITH daily_total_sales AS (
+090-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,일별 매출 변동성,이번 달 일별 매출 변동이 얼마나 커?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",변동성 계산은 일별 집계 기반; 분·시간 단위 정밀 분석 제한,"WITH daily_total_sales AS (
     -- 1. 이번 달의 일별 전체 실매출금액 총합 계산
     SELECT
         sale_dt,
@@ -4204,7 +4204,7 @@ WHERE
     daily_total_amt >= month_avg_sales * 1.30
 ORDER BY
     higher_ratio_pct DESC;","이번 달 평균 대비 30% 이상 매출이 높았던 날짜와 수치, 원인(프로모션, 이벤트, 날씨)을 분석하고 해당 요인을 재현할 수 있는 방향을 제시",sales_get_high_sales_days_above_monthly_average,평균보다 매출 30% 이상 높은 날|매출 평균 이상 날|매출 피크 날|평균 대비 매출 좋은 날|이번 달 매출 이상치 날|매출 평균 초과 날|매출 30% 이상 높았던 날
-093-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,지난달 매출 변동성이 이번 달보다 컸어?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",변동성 계산은 일별 집계 기반; 분·시간 단위 정밀 분석 제한,"SELECT
+093-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,매출 변동성 월별 비교,지난달 매출 변동성이 이번 달보다 컸어?,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",변동성 계산은 일별 집계 기반; 분·시간 단위 정밀 분석 제한,"SELECT
     last_month_avg,                                                                     -- 지난달 일평균 매출
     last_month_stddev,                                                                  -- 지난달 매출 표준편차
     ROUND((last_month_stddev / NULLIF(last_month_avg, 0)) * 100, 2) AS last_month_volatility_rate, -- 지난달 매출 변동계수(%)
@@ -4257,7 +4257,7 @@ FROM (
             sale_dt
     ) DailySales
 ) AggregatedMetrics;","전월 vs 이번 달 일별 매출 표준편차 및 변동계수를 비교하고, 변동성 차이가 발생한 원인(캠페인 빈도, 계절 요인)을 분석하여 제시",,
-094-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,오늘 시간대별로 배달 vs 매장 비중이 어떻게 달라?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
+094-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,시간대별 배달/매장,오늘 시간대별로 배달 vs 매장 비중이 어떻게 달라?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
     tmzon_div AS time_zone,                                    -- 판매 시간대
     SUM(sale_amt) AS total_sale_amt,                           -- 시간대별 총 매출액
 
@@ -4302,7 +4302,7 @@ GROUP BY
     tmzon_div
 ORDER BY
     tmzon_div ASC;","오늘 시간대별(아침/점심/저녁/야간) 배달과 매장 채널 매출 비중을 수치로 나열하고, 시간대별 채널 강세 패턴과 채널 최적화 운영 방향을 제시",,
-095-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 주 점심 피크(12~14시) 시간대 배달 비중이 얼마야?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
+095-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,점심 피크 배달 비중,이번 주 점심 피크(12~14시) 시간대 배달 비중이 얼마야?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
     -- 점심 피크 시간대 배달(온라인) 비중 (%)
     ROUND(
         (SUM(CASE WHEN ho_chnl_div = '온라인' THEN sale_amt ELSE 0 END) / NULLIF(SUM(sale_amt), 0)) * 100, 1
@@ -4331,7 +4331,7 @@ WHERE
     masked_stor_cd = 'POC_010'
     AND sale_dt BETWEEN '20260218' AND '20260224' -- 이번 주 날짜 구간 적용
     AND tmzon_div IN ('12', '13', '14')","이번 주 점심 피크 시간대 배달 채널 비중(매출 및 주문건수 기준)을 수치로 제시하고, 전주 동시간대 대비 변화를 분석하여 배달 운영 방향을 안내",,
-096-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 저녁(19시 이후) 매출에서 배달 비중은?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
+096-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,저녁 배달 비중,이번 달 저녁(19시 이후) 매출에서 배달 비중은?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
     -- 저녁 시간대 배달(온라인) 비중 (%)
     ROUND(
         (SUM(CASE WHEN ho_chnl_div = '온라인' THEN sale_amt ELSE 0 END) / NULLIF(SUM(sale_amt), 0)) * 100, 1
@@ -4360,7 +4360,7 @@ WHERE
     masked_stor_cd = 'POC_010'
     AND sale_dt BETWEEN '20260301' AND '20260304'    -- 최신 데이터 기준 이번 달(3월 1일~4일) 적용
     AND tmzon_div IN ('19', '20', '21', '22', '23')","이번 달 저녁 시간대 배달 채널 비중을 수치로 제시하고, 저녁 배달 의존도와 운영 효율성(배달비 대비 매출)을 분석하여 저녁 운영 전략을 안내",,
-097-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,최근 30일 오전과 오후 채널 비중 차이 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
+097-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,오전/오후 채널 비중,최근 30일 오전과 오후 채널 비중 차이 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 채널 분리는 core_channel_sales 채널 구분 컬럼 필요; 집계 단위 제한,"SELECT
     CASE WHEN CAST(tmzon_div AS INTEGER) < 12 THEN '1. 오전(00~11시)' ELSE '2. 오후(12~23시)' END AS time_period,
     SUM(sale_amt) AS total_sale_amt,                                                           -- 시간대별 총 매출액
 
@@ -4431,7 +4431,7 @@ GROUP BY
     tmzon_div
 ORDER BY
     tmzon_div ASC;",오늘 시간대별 주문건수를 수치로 나열하고 피크 시간대와 비피크 시간대의 주문건수 차이를 분석하여 인력 배치 및 운영 효율화 방향을 제시,sales_get_today_hourly_order_count,오늘 시간대별 주문 건수|시간대별 주문건수 변화|오늘 시간대별 매출 분포|피크 시간대 주문|시간대별 주문 추이|오늘 시간 분포 매출|시간대별 주문건수 변화|오늘 시간대 매출 흐름
-099-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 주 일별 주문건수 추이 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT 
+099-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,주간 주문건수 추이,이번 주 일별 주문건수 추이 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT 
     sale_dt, 
     SUM(sale_amt) AS total_sale_amt,              -- 일자별 총 판매금액
     SUM(ord_cnt) AS total_ord_cnt,                -- 일자별 총 주문건수
@@ -4460,7 +4460,7 @@ GROUP BY
     sale_dt
 ORDER BY
     sale_dt ASC;","이번 주 일별 주문건수를 수치로 나열하고, 전주 동요일 대비 증감률을 계산하여 주문건수 증가·감소 패턴과 원인을 분석",,
-100-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 일별 주문건수 평균과 최고값 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT 
+100-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,일별 주문 평균/최고,이번 달 일별 주문건수 평균과 최고값 알려줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT 
     ROUND(AVG(daily_ord_cnt), 0) AS avg_daily_ord_cnt, -- 일별 주문건수 평균
     MAX(daily_ord_cnt) AS max_daily_ord_cnt            -- 일별 주문건수 최고값 (가장 주문이 많았던 날)
 FROM (
@@ -4491,7 +4491,7 @@ FROM (
     GROUP BY
         sale_dt
 ) DailyOrders;","이번 달 일별 주문건수의 평균과 최고·최저값을 수치로 제시하고, 최고·최저 주문건수 발생일의 원인(이벤트, 날씨)을 분석하여 제시",,
-102-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,지난달과 이번 달 주문건수 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT
+102-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,주문건수 월별 비교,지난달과 이번 달 주문건수 비교해줘,✅,"core_channel_sales.sale_amt, ord_cnt, sale_dt",주문건수 = ord_cnt 집계; 취소건 제외 여부 가정 필요,"SELECT
     SUBSTRING(dlv_dt, 1, 6) AS order_month,                -- 연월(YYYYMM) 추출
     COUNT(item_cd) AS total_order_cases,                   -- 총 주문 건수 (발주 품목 줄 수)
     SUM(COALESCE(ord_qty::numeric, 0)) AS total_order_qty  -- 점주 실 주문 수량 총합
@@ -4518,7 +4518,7 @@ GROUP BY
     SUBSTRING(dlv_dt, 1, 6)
 ORDER BY
     order_month DESC;","전월 vs 이번 달 총 주문건수와 일평균 주문건수를 비교하고, 주문건수 증감 원인(채널 변화, 캠페인 효과)을 분석하여 제시",,
-103-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 매출이 가장 낮은 품목 10개 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출은 core_daily_item_sales 필요; core_channel_sales는 일자별 집계,"SELECT
+103-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,매출 하위 10품목,이번 달 매출이 가장 낮은 품목 10개 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출은 core_daily_item_sales 필요; core_channel_sales는 일자별 집계,"SELECT
     item_cd,
     item_nm,
     total_sale_amt
@@ -4560,7 +4560,7 @@ FROM (
 ORDER BY
     total_sale_amt ASC
 LIMIT 10;","이번 달 매출 하위 10개 품목과 각 품목의 매출 수치를 나열하고, 지속 판매 필요성과 단종·축소 검토 대상 품목을 분석하여 제시",,
-105-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 전월 대비 매출 감소율이 가장 큰 품목 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출은 core_daily_item_sales 필요; core_channel_sales는 일자별 집계,"SELECT
+105-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,매출 감소 1위 품목,이번 달 전월 대비 매출 감소율이 가장 큰 품목 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",품목별 매출은 core_daily_item_sales 필요; core_channel_sales는 일자별 집계,"SELECT
     item_cd,
     item_nm,
     last_month_amt,                                                                  -- 지난달 동기간 총매출
@@ -4618,7 +4618,7 @@ WHERE
 ORDER BY
     decrease_rate_pct DESC
 LIMIT 10;","이번 달 전월 대비 매출 감소율 상위(감소 폭이 큰) 품목을 나열하고, 감소 원인(계절성, 경쟁 상품 출시)과 판촉 또는 단종 검토 방향을 제시",,
-106-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,오늘 비피크 시간대 매출 비중 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 분석은 시간대 컬럼 필요; core_channel_sales 집계 단위 확인 필요,"SELECT 
+106-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,비피크 매출 비중,오늘 비피크 시간대 매출 비중 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 분석은 시간대 컬럼 필요; core_channel_sales 집계 단위 확인 필요,"SELECT 
     SUM(sale_amt) AS total_sale_amt, -- 하루 전체 총 매출액
     
     -- 비피크 시간대 매출액 (점심 12~14시, 저녁 18~20시 제외)
@@ -4645,7 +4645,7 @@ FROM
 WHERE 
     masked_stor_cd = 'POC_010'
     AND sale_dt = '20260424';","오늘 비피크 시간대 매출 비중을 수치로 제시하고, 비피크 시간대 매출 강화를 위한 타임 세일·세트메뉴 등 프로모션 방향을 안내",,
-107-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 비피크 시간대 매출이 전월보다 늘었어?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 분석은 시간대 컬럼 필요; core_channel_sales 집계 단위 확인 필요,"SELECT 
+107-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,비피크 매출 증가?,이번 달 비피크 시간대 매출이 전월보다 늘었어?,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 분석은 시간대 컬럼 필요; core_channel_sales 집계 단위 확인 필요,"SELECT 
     last_month_avg_non_peak,                                                        -- 지난달 일평균 비피크 매출
     this_month_avg_non_peak,                                                        -- 이번 달 일평균 비피크 매출
     (this_month_avg_non_peak - last_month_avg_non_peak) AS diff_avg_non_peak        -- 일평균 매출 증감액
@@ -4697,7 +4697,7 @@ FROM (
             sale_dt
     ) DailySales
 ) AggregatedData;","이번 달 vs 전월 비피크 시간대 매출 변화를 수치로 비교하고, 비피크 매출 증가 원인(타임 프로모션, 배달 채널 확대)과 지속 성장 방향을 제시",,
-108-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,최근 30일 전체 매출을 시간대별로 나눠서 비중 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 분석은 시간대 컬럼 필요; core_channel_sales 집계 단위 확인 필요,"WITH time_sales AS (
+108-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,시간대별 매출 비중,최근 30일 전체 매출을 시간대별로 나눠서 비중 알려줘,⚠️,"core_channel_sales.sale_amt, ord_cnt, sale_dt",시간대별 분석은 시간대 컬럼 필요; core_channel_sales 집계 단위 확인 필요,"WITH time_sales AS (
     -- 1. 최근 30일(2026-03-04 기준 역산)의 시간대별 총 실매출금액 집계
     SELECT 
         tmzon_div, 
@@ -4745,7 +4745,7 @@ FROM
     time_sales
 ORDER BY 
     sales_ratio_pct DESC; -- 이번에는 매출 비중이 가장 높은 시간대 순으로 정렬","최근 30일 시간대별(아침/점심/오후/저녁/야간) 매출 비중을 수치로 나열하고, 비중이 낮은 시간대 활성화 전략을 분석하여 제시",,
-109-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 결제수단별 평균 주문금액 비교해줘,✅,"raw_daily_store_pay_way.pay_way_cd, sale_amt",결제수단별 데이터는 raw_daily_store_pay_way 테이블 필요; 직접 연동 시 가능,"SELECT
+109-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,결제수단별 객단가,이번 달 결제수단별 평균 주문금액 비교해줘,✅,"raw_daily_store_pay_way.pay_way_cd, sale_amt",결제수단별 데이터는 raw_daily_store_pay_way 테이블 필요; 직접 연동 시 가능,"SELECT
     pay_way_cd_nm AS payment_method_name, -- 결제수단명
 
     -- 1. 총 결제 금액
@@ -4887,8 +4887,8 @@ FROM (
 ) AggData
 ORDER BY
     pay_ratio_pct DESC;",이번 달 결제수단별 매출 비중을 수치로 나열하고 특정 수단 집중도와 결제 수단 다변화 필요성 그리고 특정 수단 장애 시 리스크를 함께 분석,sales_get_payment_method_concentration,결제수단 집중도|결제수단 쏠림|결제수단 비중 편중|특정 결제수단 의존|결제 비중 분포|이번 달 결제수단 점유율|결제수단 다변화 진단|결제수단 과집중
-301-003-,POC_010,2026-03-05 09:00 (KST),매출 관리,,26년2월 누적 매출이 전년동월 대비 얼마나 차이 나는지 퍼센트로 알려줘,✅,"core_channel_sales.sale_dt,sale_amt",누적 비교는 동일 월 전체 합계 기준,"WITH m AS (SELECT SUBSTRING(ccs.sale_dt,1,6) AS ym, SUM(ccs.sale_amt) AS total_sale FROM core_channel_sales ccs WHERE ccs.masked_stor_cd=:store_id AND SUBSTRING(ccs.sale_dt,1,6) IN (:year_month,:prev_year_month) GROUP BY SUBSTRING(ccs.sale_dt,1,6)) SELECT ROUND(100.0*(MAX(total_sale) FILTER (WHERE ym=:year_month)-MAX(total_sale) FILTER (WHERE ym=:prev_year_month))/NULLIF(MAX(total_sale) FILTER (WHERE ym=:prev_year_month),0),2) AS yoy_change_pct FROM m ","WITH m AS (SELECT SUBSTRING(ccs.sale_dt,1,6) AS ym, SUM(ccs.sale_amt) AS total_sale FROM core_channel_sales ccs WHERE ccs.masked_stor_cd='POC_010' AND SUBSTRING(ccs.sale_dt,1,6) IN ('202602','202502') GROUP BY SUBSTRING(ccs.sale_dt,1,6)) SELECT ROUND(100.0*(MAX(total_sale) FILTER (WHERE ym='202602')-MAX(total_sale) FILTER (WHERE ym='202502'))/NULLIF(MAX(total_sale) FILTER (WHERE ym='202502'),0),2) AS yoy_change_pct FROM m ",즉시 실행 액션: 감소 시 TOP3 하락 품목/채널 즉시 점검. 근거: 전년동월 누적 매출 증감률,,
-302-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,전주 대비 배달 건 수 비교해줘,✅,"core_channel_sales.ho_chnl_div,ord_cnt,sale_dt",배달 채널 구분은 ho_chnl_div 값에 의존,"WITH delivery_sales AS (
+301-003-,POC_010,2026-03-05 09:00 (KST),매출 관리,2월 누적 YoY %,26년2월 누적 매출이 전년동월 대비 얼마나 차이 나는지 퍼센트로 알려줘,✅,"core_channel_sales.sale_dt,sale_amt",누적 비교는 동일 월 전체 합계 기준,"WITH m AS (SELECT SUBSTRING(ccs.sale_dt,1,6) AS ym, SUM(ccs.sale_amt) AS total_sale FROM core_channel_sales ccs WHERE ccs.masked_stor_cd=:store_id AND SUBSTRING(ccs.sale_dt,1,6) IN (:year_month,:prev_year_month) GROUP BY SUBSTRING(ccs.sale_dt,1,6)) SELECT ROUND(100.0*(MAX(total_sale) FILTER (WHERE ym=:year_month)-MAX(total_sale) FILTER (WHERE ym=:prev_year_month))/NULLIF(MAX(total_sale) FILTER (WHERE ym=:prev_year_month),0),2) AS yoy_change_pct FROM m ","WITH m AS (SELECT SUBSTRING(ccs.sale_dt,1,6) AS ym, SUM(ccs.sale_amt) AS total_sale FROM core_channel_sales ccs WHERE ccs.masked_stor_cd='POC_010' AND SUBSTRING(ccs.sale_dt,1,6) IN ('202602','202502') GROUP BY SUBSTRING(ccs.sale_dt,1,6)) SELECT ROUND(100.0*(MAX(total_sale) FILTER (WHERE ym='202602')-MAX(total_sale) FILTER (WHERE ym='202502'))/NULLIF(MAX(total_sale) FILTER (WHERE ym='202502'),0),2) AS yoy_change_pct FROM m ",즉시 실행 액션: 감소 시 TOP3 하락 품목/채널 즉시 점검. 근거: 전년동월 누적 매출 증감률,,
+302-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,배달 건수 주간 비교,전주 대비 배달 건 수 비교해줘,✅,"core_channel_sales.ho_chnl_div,ord_cnt,sale_dt",배달 채널 구분은 ho_chnl_div 값에 의존,"WITH delivery_sales AS (
     -- 1. 기준일(:date_from)로부터 14일간의 온라인(배달) 채널 주문 건수 추출 및 주차 분류
     SELECT 
         sale_dt,
@@ -4966,7 +4966,7 @@ SELECT
     , 2) AS growth_rate_pct
 FROM 
     weekly_aggregated;",즉시 실행 액션: 전주 대비 감소면 배달앱 노출/쿠폰 재조정. 근거: 전주·당주 배달 주문건수 비교,,
-302-002-,POC_010,2026-03-05 09:00 (KST),매출 관리,,전월 대비 배달 건 수와 전체 매출 중 배달 비중 변화 보여줘,✅,"core_channel_sales.ho_chnl_div,ord_cnt,sale_amt,sale_dt",전월 비교는 월 경계 기준,"WITH monthly_sales AS (
+302-002-,POC_010,2026-03-05 09:00 (KST),매출 관리,배달 비중 월간 변화,전월 대비 배달 건 수와 전체 매출 중 배달 비중 변화 보여줘,✅,"core_channel_sales.ho_chnl_div,ord_cnt,sale_amt,sale_dt",전월 비교는 월 경계 기준,"WITH monthly_sales AS (
     -- 1. 지난달과 이번 달의 연월(YYYYMM) 단위로 전체 매출 및 배달(온라인) 실적 집계
     SELECT 
         SUBSTRING(sale_dt, 1, 6) AS sale_month,
@@ -5053,7 +5053,7 @@ SELECT
     MAX(CASE WHEN sale_month = '202602' THEN delivery_amt_ratio_pct END) AS diff_delivery_ratio_pct
 FROM 
     monthly_summary;",즉시 실행 액션: 배달 비중 하락 시 배달채널별 프로모션 재배분. 근거: 월별 배달건수·배달매출비중,,
-303-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 티데이 프로모션은 전체적으로 어땠어?,⚠️,raw_campaign_master.start_dt/fnsh_dt + core_daily_item_sales.sale_amt,티데이 캠페인 명칭 매칭은 cpi_nm 텍스트 의존,"SELECT 
+303-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,티데이 성과 어때?,이번 티데이 프로모션은 전체적으로 어땠어?,⚠️,raw_campaign_master.start_dt/fnsh_dt + core_daily_item_sales.sale_amt,티데이 캠페인 명칭 매칭은 cpi_nm 텍스트 의존,"SELECT 
     sale_dt,
     pay_way_cd_nm,                                      -- 결제수단명
     pay_dtl_cd_nm,                                      -- 세부 결제수단명 (예: SKT T-Day 등)
@@ -5088,7 +5088,7 @@ GROUP BY
     pay_dtl_cd_nm
 ORDER BY
     sale_dt ASC;",즉시 실행 액션: 성과 낮은 경우 참여혜택/노출구간 재설계. 근거: 프로모션 기간 매출·참여일수,,
-303-002-,POC_010,2026-03-05 09:00 (KST),매출 관리,,티데이 기간 제품군별 판매 믹스와 이전 프로모션 대비 차이 보여줘,⚠️,raw_campaign_item.item_cd + core_daily_item_sales.item_cd/sale_amt,이전 프로모션 정의는 직전 캠페인으로 가정,"SELECT 
+303-002-,POC_010,2026-03-05 09:00 (KST),매출 관리,티데이 제품 믹스 비교,티데이 기간 제품군별 판매 믹스와 이전 프로모션 대비 차이 보여줘,⚠️,raw_campaign_item.item_cd + core_daily_item_sales.item_cd/sale_amt,이전 프로모션 정의는 직전 캠페인으로 가정,"SELECT 
     item_category,                                                                              -- 제품 카테고리
     prev_promo_qty,                                                                             -- 이전 프로모션 판매수량
     ROUND((prev_promo_qty / NULLIF(SUM(prev_promo_qty) OVER(), 0)) * 100, 1) AS prev_mix_pct,   -- 이전 프로모션 판매 믹스 (%)
@@ -5164,7 +5164,7 @@ FROM (
 ) CategorySales
 ORDER BY 
     item_category ASC;",즉시 실행 액션: 행사 주력군/비주력군 재편성. 근거: 행사 품목군 매출 믹스와 직전 행사 대비 변동,,
-304-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,글레이즈드 전월 대비 매출 금액 비교해줘,✅,"core_daily_item_sales.item_nm,sale_qty,sale_amt,sale_dt",글레이즈드 식별은 item_nm 키워드 매칭,"WITH glazed_sales AS (
+304-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,글레이즈드 매출 변화,글레이즈드 전월 대비 매출 금액 비교해줘,✅,"core_daily_item_sales.item_nm,sale_qty,sale_amt,sale_dt",글레이즈드 식별은 item_nm 키워드 매칭,"WITH glazed_sales AS (
     -- 1. 기준일(:date_to) 바탕으로 지난달과 이번 달의 '글레이즈드' 품목 매출 집계
     SELECT 
         item_cd,
@@ -5241,7 +5241,7 @@ GROUP BY
     item_cd, item_nm
 ORDER BY 
     this_month_sales_amt DESC;",즉시 실행 액션: 매출 하락 시 진열/프로모션/생산량 즉시 조정. 근거: 전월 대비 판매수량·매출 비교,,
-304-002-,POC_010,2026-03-05 09:00 (KST),매출 관리,,글레이즈드의 총매출 내 비중과 순위 변화도 보여줘,✅,"core_daily_item_sales.item_cd,item_nm,sale_amt,sale_dt",순위는 월 합산 매출 기준,"WITH monthly_item_sales AS (
+304-002-,POC_010,2026-03-05 09:00 (KST),매출 관리,글레이즈드 비중/순위,글레이즈드의 총매출 내 비중과 순위 변화도 보여줘,✅,"core_daily_item_sales.item_cd,item_nm,sale_amt,sale_dt",순위는 월 합산 매출 기준,"WITH monthly_item_sales AS (
     -- 1. 지정된 기간의 전체 품목별 월간 실매출금액 합산
     SELECT 
         SUBSTRING(sale_dt, 1, 6) AS sale_month,
@@ -5363,7 +5363,7 @@ GROUP BY
     item_cd, item_nm
 ORDER BY 
     this_month_rank ASC;",즉시 실행 액션: 순위 하락 시 대체 인기품목과 번들 전략 실행. 근거: 품목 매출 비중·랭킹,,
-306-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,,이번 달 일평균 매출을 타 점포 평균과 비교해줘,⚠️,"core_channel_sales.sale_amt,sale_dt + core_store_master",클러스터링은 store_type+business_type 대체,"WITH daily_store_sales AS (
+306-001-,POC_010,2026-03-05 09:00 (KST),매출 관리,일평균 vs 타점포,이번 달 일평균 매출을 타 점포 평균과 비교해줘,⚠️,"core_channel_sales.sale_amt,sale_dt + core_store_master",클러스터링은 store_type+business_type 대체,"WITH daily_store_sales AS (
     -- 1. 지정된 기간 내 각 점포의 일자별 총 실매출금액 집계
     SELECT 
         masked_stor_cd,
@@ -5520,7 +5520,7 @@ FROM
     current_stock
 ORDER BY 
     stock_rate_pct ASC;",즉시 실행 액션: stock_qty 하위 품목부터 생산 등록 우선순위 적용. 근거: 최신 재고 스냅샷 하위 품목 리스트,,지금 만들어야 할 품목|당장 생산할 품목|지금 뭐 만들어야 해|생산 우선순위|생산해야 하는 메뉴|재고 부족 품목 생산
-401-002-,POC_010,2026-03-05 09:00 (KST),생산 관리,,1시간 뒤 예상 재고량(최근 판매속도 근거) 산출해줘,✅,raw_inventory_extract.stock_qty + core_hourly_item_sales.sale_qty,판매속도는 최근 3시간 평균으로 근사,"WITH recent_sales_velocity AS (
+401-002-,POC_010,2026-03-05 09:00 (KST),생산 관리,1시간 뒤 예상 재고,1시간 뒤 예상 재고량(최근 판매속도 근거) 산출해줘,✅,raw_inventory_extract.stock_qty + core_hourly_item_sales.sale_qty,판매속도는 최근 3시간 평균으로 근사,"WITH recent_sales_velocity AS (
     -- 1. 지정된 점포 및 일자에서 현재 시각(:current_hour) 기준 직전 3시간 동안의 데이터로 시간당 평균 판매량 도출
     SELECT 
         item_cd,
@@ -5621,7 +5621,7 @@ WHERE
 ORDER BY 
     estimated_stock_after_1h ASC;
 ",즉시 실행 액션: predicted_stock_1h 음수 예상 품목 즉시 생산 지시. 근거: 최근 판매속도 기반 1시간 후 재고 예측,,
-401-003-,POC_010,2026-03-05 09:00 (KST),생산 관리,,4주 평균 1차/2차 생산 등록 시간과 생산 개수 보여줘,⚠️,"raw_production_extract.prod_dgre,prod_qty,reg_date",reg_date 포맷이 비정형이면 시간 추출 오차 가능,"WITH production_times AS (
+401-003-,POC_010,2026-03-05 09:00 (KST),생산 관리,4주 평균 생산 등록,4주 평균 1차/2차 생산 등록 시간과 생산 개수 보여줘,⚠️,"raw_production_extract.prod_dgre,prod_qty,reg_date",reg_date 포맷이 비정형이면 시간 추출 오차 가능,"WITH production_times AS (
     -- 1. 지정된 4주 기간 내 1차/2차 생산 수량 및 시점(초 단위) 추출
     SELECT 
         item_cd,
@@ -5749,7 +5749,7 @@ SELECT
     END AS alert_priority_guide
 FROM item_stockout_stats
 ORDER BY production_alert_deadline_hour ASC,
-         stockout_days DESC;","최근 평균 품절 시각에서 생산 리드타임 1시간을 차감해 생산 착수 마지노선을 산출하고 오전 즉시/오전 후반/오후 관찰 3개 등급으로 알림 우선순위를 안내",production_get_stockout_lead_time_alert_priority,"생산 리드타임 알림 우선순위|품절 시각 기준 생산 착수|생산 마지노선 알림|생산 리드타임 1시간|생산 알림 우선순위|품절 위험 알림 순위|착수 시점 우선순위|생산 알림 정렬"
+         stockout_days DESC;",최근 평균 품절 시각에서 생산 리드타임 1시간을 차감해 생산 착수 마지노선을 산출하고 오전 즉시/오전 후반/오후 관찰 3개 등급으로 알림 우선순위를 안내,production_get_stockout_lead_time_alert_priority,생산 리드타임 알림 우선순위|품절 시각 기준 생산 착수|생산 마지노선 알림|생산 리드타임 1시간|생산 알림 우선순위|품절 위험 알림 순위|착수 시점 우선순위|생산 알림 정렬
 501-001-,POC_010,2026-03-05 09:00 (KST),주문 관리,이번 주 추천 발주량은?,주문 마감 전 알림 기준으로 전주/전전주/전월 동요일 3가지 추천량을 보여줘,✅,"raw_order_extract.ord_qty,dlv_dt,item_cd",동요일 계산은 DOW 기준 단순화,"WITH past_sales_reference AS (
     -- 1. 기준일(:date_from)로부터 정확히 7일, 14일, 28일(4주) 전의 동일 요일 판매량 추출
     SELECT 
@@ -5815,7 +5815,7 @@ FROM
     past_sales_reference
 ORDER BY 
     final_avg_rec_qty DESC;",즉시 실행 액션: 3옵션 중 보수/중립/공격안을 선택해 최종확정. 근거: 전주·전전주·전월 동요일 평균 발주량,,발주 추천량|이번 주 발주 얼마나|추천 주문량|발주 옵션 추천|주문 마감 전 추천|발주량 가이드
-501-002-,POC_010,2026-03-05 09:00 (KST),주문 관리,,각 옵션별 총량과 품목별 상세 수량을 같이 보여줘,✅,"raw_order_extract.item_cd,item_nm,ord_qty",옵션 생성 로직은 평균 기반 단순화,"WITH order_details AS (
+501-002-,POC_010,2026-03-05 09:00 (KST),주문 관리,옵션별 총량/상세,각 옵션별 총량과 품목별 상세 수량을 같이 보여줘,✅,"raw_order_extract.item_cd,item_nm,ord_qty",옵션 생성 로직은 평균 기반 단순화,"WITH order_details AS (
     -- 1. 지정된 점포 및 배송 일자의 품목별 실 주문량(옵션1)과 권고 주문량(옵션2) 집계
     SELECT 
         COALESCE(item_nm, '📊 [전체 총량]') AS item_nm,
@@ -5875,7 +5875,7 @@ FROM
 ORDER BY
     CASE WHEN item_nm = '📊 [전체 총량]' THEN 0 ELSE 1 END ASC,
     total_actual_ord_qty DESC;",즉시 실행 액션: 품목별 고위험 SKU만 옵션 상향 조정. 근거: 옵션별 총량·상세수량 비교표,,
-501-003-,POC_010,2026-03-05 09:00 (KST),주문 관리,,캠페인/이벤트 영향으로 추천량 보정이 필요한 품목 알려줘,⚠️,raw_campaign_master.start_dt/fnsh_dt + raw_order_extract.ord_qty,이벤트 영향도는 기간 중 발주량 증감으로 근사,"WITH active_campaigns AS (
+501-003-,POC_010,2026-03-05 09:00 (KST),주문 관리,이벤트 추천량 보정,캠페인/이벤트 영향으로 추천량 보정이 필요한 품목 알려줘,⚠️,raw_campaign_master.start_dt/fnsh_dt + raw_order_extract.ord_qty,이벤트 영향도는 기간 중 발주량 증감으로 근사,"WITH active_campaigns AS (
     -- 1. 배송 일자(:date_from) 기준 진행 중인 캠페인 마스터 및 대상 상품 코드 추출
     SELECT 
         c.cmp_cd,
@@ -5955,7 +5955,7 @@ JOIN
     active_campaigns ac ON o.item_cd = ac.item_cd
 ORDER BY 
     o.system_recom_qty DESC;",즉시 실행 액션: 활성 캠페인 품목은 기본안 대비 보정(상향/하향) 적용. 근거: 캠페인 기간과 과거 발주량 패턴,,
-501-004-,POC_010,2026-03-05 09:00 (KST),주문 관리,,대형 예약/단체 주문 예외건을 분리해서 보여줘,✅,"raw_order_extract.ord_qty,item_cd,dlv_dt",예외 임계값은 품목별 평균의 2배로 가정,"WITH item_daily_avg AS (
+501-004-,POC_010,2026-03-05 09:00 (KST),주문 관리,단체주문 예외건,대형 예약/단체 주문 예외건을 분리해서 보여줘,✅,"raw_order_extract.ord_qty,item_cd,dlv_dt",예외 임계값은 품목별 평균의 2배로 가정,"WITH item_daily_avg AS (
     -- 1. 지정된 기간 내 품목별 평시 일평균 판매량 산출
     SELECT 
         item_cd,
