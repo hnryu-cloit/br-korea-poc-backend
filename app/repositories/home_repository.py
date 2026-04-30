@@ -132,7 +132,21 @@ class HomeRepository:
                     self._to_dashboard_display_question(domain, str(row["question"]))
                 )
 
-            if all(len(grouped.get(domain, [])) >= 3 for domain in _DASHBOARD_DOMAIN_AGENT_MAP):
+            expected: dict[str, list[str]] = {
+                domain: [
+                    self._to_dashboard_display_question(domain, str(entry["question"]))
+                    for entry in questions[:3]
+                ]
+                for domain, questions in fallback.items()
+            }
+            is_complete = all(
+                len(grouped.get(domain, [])) >= 3 for domain in _DASHBOARD_DOMAIN_AGENT_MAP
+            )
+            is_up_to_date = all(
+                grouped.get(domain, [])[:3] == expected.get(domain, [])
+                for domain in _DASHBOARD_DOMAIN_AGENT_MAP
+            )
+            if is_complete and is_up_to_date:
                 return {domain: grouped[domain][:3] for domain in _DASHBOARD_DOMAIN_AGENT_MAP}
 
             conn.execute(
@@ -193,7 +207,7 @@ class HomeRepository:
 
     @staticmethod
     def _golden_queries_csv_path() -> Path:
-        return Path(__file__).resolve().parents[2] / "docs" / "golden-queries-store-owner.csv"
+        return Path(__file__).resolve().parents[2] / "docs" / "golden-queries.csv"
 
     @classmethod
     def _build_dashboard_recommended_questions(cls) -> dict[str, list[dict[str, str | int]]]:
