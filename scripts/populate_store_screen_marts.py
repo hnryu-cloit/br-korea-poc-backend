@@ -2,12 +2,15 @@ from __future__ import annotations
 from _runner import run_main
 
 import argparse
+import re
 import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import text
+
+_VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,7 +23,7 @@ DEFAULT_START_DATE = "20250311"
 DEFAULT_END_DATE = "20260310"
 SQL_ROOT = Path(__file__).resolve().parent / "sql"
 
-DDL_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "db" / "migrations" / "0029_recreate_poc_010_screen_marts.sql"
+DDL_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "db" / "migrations" / "20260101_000041_recreate_poc_010_screen_marts.sql"
 
 
 def resolve_store_ids(engine, *, requested_store_id: str | None, all_stores: bool) -> list[str]:
@@ -159,12 +162,13 @@ def populate_waste_daily(connection, *, store_id: str, start_date: str, end_date
         datetime.strptime(start_date, "%Y%m%d").date() - timedelta(days=60)
     ).strftime("%Y%m%d")
 
+    waste_daily_table = f"mart_{store_id.lower()}_production_waste_daily"
+    if not _VALID_IDENTIFIER.match(waste_daily_table):
+        raise ValueError(f"invalid store-derived table name: {waste_daily_table}")
     connection.execute(
         text(
-            """
-            DELETE FROM mart_poc_010_production_waste_daily
-            WHERE target_date BETWEEN :start_date AND :end_date
-            """
+            f"DELETE FROM {waste_daily_table} "
+            "WHERE target_date BETWEEN :start_date AND :end_date"
         ),
         {"start_date": start_date, "end_date": end_date},
     )
