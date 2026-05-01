@@ -733,6 +733,7 @@
       "table": "raw_stock_rate",
       "sheet": "Sheet1",
       "skip_rows": 0,
+      "skip_columns": 1,
       "paths": [
         "../resource/05. 재고 및 품절/재고율.xlsx"
       ],
@@ -755,6 +756,7 @@
       "table": "raw_stockout_time",
       "sheet": "Sheet1",
       "skip_rows": 0,
+      "skip_columns": 1,
       "paths": [
         "../resource/05. 재고 및 품절/품절시간_CK.xlsx"
       ],
@@ -782,6 +784,7 @@
       "table": "raw_stockout_time",
       "sheet": "Sheet1",
       "skip_rows": 0,
+      "skip_columns": 1,
       "paths": [
         "../resource/05. 재고 및 품절/품절시간_JBOD.xlsx"
       ],
@@ -809,6 +812,7 @@
       "table": "raw_stockout_time",
       "sheet": "Sheet1",
       "skip_rows": 0,
+      "skip_columns": 1,
       "paths": [
         "../resource/05. 재고 및 품절/품절시간_기타.xlsx"
       ],

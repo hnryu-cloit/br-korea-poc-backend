@@ -76,6 +76,7 @@ def insert_tabular_rows(
     source_file: str,
     source_sheet: str | None,
     loaded_at: str,
+    skip_columns: int = 0,
 ) -> int:
     all_columns = columns + ["source_file", "source_sheet", "loaded_at"]
     sql = text(
@@ -87,10 +88,10 @@ def insert_tabular_rows(
     for row in rows:
         if not any(value not in (None, "") for value in row):
             continue
-        values = list(row[: len(columns)])
-        if len(values) < len(columns):
-            values.extend([None] * (len(columns) - len(values)))
-        payload = dict(zip(columns, values))
+        sliced = list(row[skip_columns : skip_columns + len(columns)])
+        if len(sliced) < len(columns):
+            sliced.extend([None] * (len(columns) - len(sliced)))
+        payload = dict(zip(columns, sliced))
         payload["source_file"] = source_file
         payload["source_sheet"] = source_sheet
         payload["loaded_at"] = loaded_at
@@ -122,6 +123,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
         source_sheet = None
 
         try:
+            skip_columns = int(dataset.get("skip_columns", 0) or 0)
             if dataset["loader"] == "csv":
                 rows = read_csv_rows(source_path)
                 source_sheet = "csv"
@@ -133,6 +135,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                     source_file=source_file,
                     source_sheet=source_sheet,
                     loaded_at=loaded_at,
+                    skip_columns=skip_columns,
                 )
             elif dataset["loader"] == "xlsx":
                 source_sheet, rows = iter_xlsx_rows(
@@ -146,6 +149,7 @@ def load_dataset(connection: Any, dataset: dict[str, Any], run_id: int) -> None:
                     source_file=source_file,
                     source_sheet=source_sheet,
                     loaded_at=loaded_at,
+                    skip_columns=skip_columns,
                 )
             elif dataset["loader"] == "workbook_rows":
                 workbook = load_workbook(source_path, read_only=True, data_only=True)
