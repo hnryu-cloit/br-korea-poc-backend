@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
 
-    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5435/br_korea_poc"
+    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@db:5432/br_korea_poc"
     EXTERNAL_API_KEY: str = ""
     SBIZ_API_SNS_ANALYSIS_KEY: str = ""
     SBIZ_API_STARTUP_WEATHER_KEY: str = ""

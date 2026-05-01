@@ -9,5 +9,5 @@ COPY . .
 
 EXPOSE 6002
 
-# 백엔드 API 실행
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "6002"]
+# 백엔드 API 실행 (멀티 워커 설정)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "6002", "--workers", "4"]
