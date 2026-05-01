@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 from app.core.utils import get_now
@@ -92,34 +93,37 @@ class DashboardService:
         payload: DashboardHomeRequest,
         reference_datetime: datetime | None = None,
     ) -> DashboardSummaryCardsResponse:
-        production = await self.production_service.get_overview(
-            store_id=payload.store_id,
-            business_date=payload.business_date,
-            reference_datetime=reference_datetime,
-        )
-        production_rows = await self.production_service.repository.list_items(
-            store_id=payload.store_id,
-            business_date=payload.business_date,
-            reference_datetime=reference_datetime,
-        )
-        ordering_summary = await self.ordering_service.get_selection_summary(
-            store_id=payload.store_id,
-            date_from=payload.business_date,
-            date_to=payload.business_date,
-        )
-        ordering_options = await self.ordering_service.list_options(
-            notification_entry=False,
-            store_id=payload.store_id,
-            skip_ai=True,
-            reference_datetime=reference_datetime,
-        )
-        sales = await self.sales_service.get_dashboard_overview(
-            store_id=payload.store_id,
-            business_date=payload.business_date,
-            reference_datetime=reference_datetime,
-        )
-        recommended_questions = await self.repository.get_dashboard_recommended_questions(
-            target_date=self._resolve_date(payload.business_date),
+        (
+            production,
+            ordering_summary,
+            ordering_options,
+            sales,
+            recommended_questions,
+        ) = await asyncio.gather(
+            self.production_service.get_overview(
+                store_id=payload.store_id,
+                business_date=payload.business_date,
+                reference_datetime=reference_datetime,
+            ),
+            self.ordering_service.get_selection_summary(
+                store_id=payload.store_id,
+                date_from=payload.business_date,
+                date_to=payload.business_date,
+            ),
+            self.ordering_service.list_options(
+                notification_entry=False,
+                store_id=payload.store_id,
+                skip_ai=True,
+                reference_datetime=reference_datetime,
+            ),
+            self.sales_service.get_dashboard_overview(
+                store_id=payload.store_id,
+                business_date=payload.business_date,
+                reference_datetime=reference_datetime,
+            ),
+            self.repository.get_dashboard_recommended_questions(
+                target_date=self._resolve_date(payload.business_date),
+            ),
         )
 
         production_items = sorted(
@@ -129,10 +133,6 @@ class DashboardService:
                 int(item.current),
             ),
         )[:5]
-        hourly_sale_by_sku = {
-            str(row.get("sku_id") or ""): max(int(row.get("hourly_sale_qty") or 0), 0)
-            for row in production_rows
-        }
 
         deadline_label = self._build_deadline_label(ordering_options.deadline_at)
         top_option = next(
@@ -159,7 +159,7 @@ class DashboardService:
                     DashboardProductionSummaryItem(
                         name=item.name,
                         current_stock=int(item.current),
-                        predicted_consumption_1h=hourly_sale_by_sku.get(item.sku_id, 0),
+                        predicted_consumption_1h=item.predicted_consumption_1h,
                     )
                     for item in production_items
                 ],

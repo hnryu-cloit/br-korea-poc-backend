@@ -573,7 +573,13 @@ class ProductionService:
             production_lead_time_minutes=60,
             danger_count=danger_count,
             items=[
-                ProductionItem(**{**item, "recommended": self._recommended_qty_from_row(item)})
+                ProductionItem(
+                    **{
+                        **item,
+                        "recommended": self._recommended_qty_from_row(item),
+                        "predicted_consumption_1h": item.get("hourly_sale_qty") or 0,
+                    }
+                )
                 for item in raw_items
             ],
             explainability=create_ready_payload(
