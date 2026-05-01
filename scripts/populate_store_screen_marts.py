@@ -286,6 +286,7 @@ def populate_waste_monthly(connection, *, store_id: str, start_date: str, end_da
             "start_month": start_month,
             "end_month": end_month,
         },
+        store_id=store_id,
     )
 
 
