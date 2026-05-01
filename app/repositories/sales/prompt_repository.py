@@ -340,13 +340,14 @@ class PromptRepositoryMixin:
             return date.today().strftime("%Y%m%d")
         return value.replace("-", "")
 
-    def _load_campaign_relation_rows(self, relation_name: str, sheet_name: str) -> list[dict]:
+    def _load_campaign_relation_rows(
+        self, relation_name: str, sheet_name: str, where_clause: str = "", params: dict | None = None
+    ) -> list[dict]:
         if self.engine and has_table(self.engine, relation_name):
             try:
                 with self.engine.connect() as connection:
-                    rows = (
-                        connection.execute(text(f"SELECT * FROM {relation_name}")).mappings().all()
-                    )
+                    query = f"SELECT * FROM {relation_name} {where_clause}"
+                    rows = connection.execute(text(query), params or {}).mappings().all()
                     return [dict(row) for row in rows]
             except SQLAlchemyError:
                 pass
@@ -401,14 +402,71 @@ class PromptRepositoryMixin:
         return parsed_rows
 
     def _fetch_campaign_context(self) -> dict | None:
-        campaigns = self._load_campaign_relation_rows("raw_campaign_master", "CPI_MST")
+        # 1. 활성화된 캠페인 마스터만 먼저 조회 (Full Scan 방지)
+        campaigns = self._load_campaign_relation_rows(
+            "raw_campaign_master", 
+            "CPI_MST",
+            where_clause="WHERE UPPER(COALESCE(NULLIF(TRIM(CAST(use_yn AS TEXT)), ''), '1')) NOT IN ('0', 'N')"
+        )
         if not campaigns:
             return None
 
+        group_count_by_cd: dict[str, int] = {}
+        item_count_by_cd: dict[str, int] = {}
+
+        def _sort_key(row: dict) -> tuple[int, int, int, int, int, int, str, str]:
+            active_flag = (
+                1
+                if (
+                    (self._has_text(row.get("USE_YN")) and str(row.get("USE_YN")) == "1")
+                    or row.get("USE_YN_NM") == "사용"
+                )
+                else 0
+            )
+            try:
+                priority = int(float(str(row.get("PRRTY") or "999999")))
+            except ValueError:
+                priority = 999999
+            campaign_cd = self._first_text(row.get("CPI_CD"))
+            campaign_name = self._first_text(row.get("CPI_NM"), row.get("CPI_INFO"))
+            name_score = (
+                6
+                if self._has_text(row.get("CPI_NM"))
+                else 4 if self._has_text(row.get("CPI_INFO")) else 0
+            )
+            period_score = (4 if self._has_text(row.get("START_DT")) else 0) + (
+                4 if self._has_text(row.get("FNSH_DT")) else 0
+            )
+            completeness_score = (
+                int(self._has_text(campaign_cd)) + name_score + period_score
+            )
+            return (
+                completeness_score,
+                active_flag,
+                period_score,
+                0, # detail score는 나중에 계산
+                -priority,
+                str(row.get("START_DT") or ""),
+                campaign_name,
+            )
+
+        campaigns_sorted = sorted(campaigns, key=_sort_key, reverse=True)
+        main_campaign = campaigns_sorted[0]
+        campaign_cd = self._first_text(main_campaign.get("CPI_CD"))
+        
+        # 2. 확정된 대표 캠페인 코드로 상세 정보만 핀포인트 조회
         group_rows = self._load_campaign_relation_rows(
-            "raw_campaign_item_group", "CPI_ITEM_GRP_MNG"
+            "raw_campaign_item_group", 
+            "CPI_ITEM_GRP_MNG",
+            where_clause="WHERE CAST(cpi_cd AS TEXT) = :cpi_cd",
+            params={"cpi_cd": campaign_cd}
         )
-        item_rows = self._load_campaign_relation_rows("raw_campaign_item", "CPI_ITEM_MNG")
+        item_rows = self._load_campaign_relation_rows(
+            "raw_campaign_item", 
+            "CPI_ITEM_MNG",
+            where_clause="WHERE CAST(cpi_cd AS TEXT) = :cpi_cd",
+            params={"cpi_cd": campaign_cd}
+        )
 
         group_count_by_cd: dict[str, int] = {}
         for row in group_rows:
