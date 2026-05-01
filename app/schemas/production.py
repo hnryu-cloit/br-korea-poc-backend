@@ -14,6 +14,7 @@ class ProductionItem(BaseModel):
     recommended: int
     prod1: str
     prod2: str
+    predicted_consumption_1h: int = 0
 
 
 class ProductionSummaryStat(BaseModel):

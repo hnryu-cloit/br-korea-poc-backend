@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from textwrap import dedent
 from typing import Optional
 
@@ -62,6 +63,10 @@ def _mask_pii(text: str) -> tuple[str, list[str]]:
         masked_fields.append("phone_number")
     return masked, masked_fields
 
+# [전역 캐시] 클래스 인스턴스 재생성과 무관하게 메모리를 유지하기 위해 모듈 레벨에서 관리
+_GLOBAL_PROMPT_CACHE: dict[str, tuple[float, list[SalesPrompt]]] = {}
+_CACHE_TTL = 7200  # 2시간
+
 class SalesService:
     def __init__(
         self,
@@ -90,7 +95,6 @@ class SalesService:
 
     @staticmethod
     def _sale_dt_to_day_label(dt_str: str) -> str:
-        """YYYYMMDD 형식 날짜 문자열을 요일 라벨로 변환"""
         _DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
         if len(dt_str) == 8:
             try:
@@ -129,12 +133,12 @@ class SalesService:
         comparison = payload.get("comparison") or {}
         comparison_note = str(comparison.get("message") or "")
         sales_change_pct = comparison.get("sales_change_pct")
-        usage_gap_pct = comparison.get("usage_ratio_gap_pct")
+        usage_ratio_gap_pct = comparison.get("usage_ratio_gap_pct")
         comparison_line = ""
         if sales_change_pct is not None:
             comparison_line = f" 비교 기준 대비 전체 매출은 {float(sales_change_pct):+.1f}%입니다."
-            if usage_gap_pct is not None:
-                comparison_line += f" 티데이 사용 금액 비중 차이는 {float(usage_gap_pct):+.1f}%p입니다."
+            if usage_ratio_gap_pct is not None:
+                comparison_line += f" 티데이 사용 금액 비중 차이는 {float(usage_ratio_gap_pct):+.1f}%p입니다."
 
         text = (
             f"{payload.get('campaign_name') or '티데이'} 프로모션은 {period_text} 동안 진행됐습니다. "
@@ -190,21 +194,41 @@ class SalesService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[SalesPrompt]:
+        # 1. 전역 캐시 확인 (TTL 2시간)
+        cache_key = f"{store_id or 'default'}:{domain}"
+        now = time.time()
+        
+        if cache_key in _GLOBAL_PROMPT_CACHE:
+            timestamp, cached_prompts = _GLOBAL_PROMPT_CACHE[cache_key]
+            if now - timestamp < _CACHE_TTL:
+                logger.info("[CACHE] 전역 캐시 히트 성공: key=%s", cache_key)
+                return cached_prompts
+            else:
+                logger.info("[CACHE] 전역 캐시 만료: key=%s", cache_key)
+
         try:
+            # 점포별 데이터 기반 추천 질문 생성 (DB 조회)
             context_prompts = await self.repository.list_prompts(
                 store_id=store_id, date_from=date_from, date_to=date_to
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("추천 질문 리포지토리 조회 실패: %s", exc)
             context_prompts = self._build_prompt_fallbacks(store_id=store_id)
+        
         if not context_prompts:
             context_prompts = self._build_prompt_fallbacks(store_id=store_id)
 
         golden_prompts = list_golden_prompts(domain)
-        context_prompts = self._merge_golden_prompts(golden_prompts, context_prompts)
+        
+        # [우선순위 조정] 점포별 컨텍스트 질문을 '먼저' 배치하여 차별화 보장
+        merged_prompts = self._merge_golden_prompts(golden_prompts, context_prompts)
 
         if not self.ai_client:
-            return [SalesPrompt(**prompt) for prompt in context_prompts]
+            final_prompts = [SalesPrompt(**prompt) for prompt in merged_prompts]
+            _GLOBAL_PROMPT_CACHE[cache_key] = (time.time(), final_prompts)
+            return final_prompts
 
+        logger.info("[CACHE] AI 호출 시작 (7초 소요 예상): store_id=%s, domain=%s", store_id, domain)
         system_instruction = (
             self.prompt_settings_service.get_system_instruction(domain)
             if self.prompt_settings_service
@@ -213,24 +237,32 @@ class SalesService:
         ai_prompts = await self.ai_client.suggest_sales_prompts(
             store_id=store_id,
             domain=domain,
-            context_prompts=context_prompts,
+            context_prompts=merged_prompts,
             system_instruction=system_instruction,
         )
+        
         if not ai_prompts:
-            return [SalesPrompt(**prompt) for prompt in context_prompts]
-        merged_with_golden = self._merge_golden_prompts(golden_prompts, ai_prompts)
-        return [SalesPrompt(**prompt) for prompt in merged_with_golden]
+            final_prompts = [SalesPrompt(**prompt) for prompt in merged_prompts]
+        else:
+            # AI가 다듬은 질문들도 점포 컨텍스트를 우선순위로 병합
+            final_merged = self._merge_golden_prompts(golden_prompts, ai_prompts)
+            final_prompts = [SalesPrompt(**prompt) for prompt in final_merged]
+
+        # 2. 전역 캐시에 결과 저장
+        _GLOBAL_PROMPT_CACHE[cache_key] = (time.time(), final_prompts)
+        logger.info("[CACHE] 전역 캐시 저장 완료: key=%s", cache_key)
+        return final_prompts
 
     @staticmethod
     def _merge_golden_prompts(
         golden_prompts: list[dict[str, str]],
         context_prompts: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        if not golden_prompts:
-            return context_prompts
+        """질문 목록을 병합하되, 점포별 맞춤형 질문(context)을 최우선으로 배치"""
         merged: list[dict[str, str]] = []
         seen_keys: set[str] = set()
-        for prompt in [*golden_prompts, *context_prompts]:
+        
+        for prompt in [*context_prompts, *golden_prompts]:
             key = f"{prompt.get('label', '')}|{prompt.get('prompt', '')}"
             if key in seen_keys:
                 continue
@@ -781,12 +813,6 @@ class SalesService:
             bucket["offline_sales"] += sales
             bucket["offline_qty"] += qty
             continue
-            if "온라인" in channel:
-                bucket["delivery_sales"] += sales
-                bucket["delivery_qty"] += qty
-            else:
-                bucket["offline_sales"] += sales
-                bucket["offline_qty"] += qty
 
         items = [
             SalesHourlyChannelItem(

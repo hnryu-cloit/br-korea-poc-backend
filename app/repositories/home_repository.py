@@ -56,8 +56,33 @@ _DASHBOARD_QUESTION_DISPLAY_MAP = {
 
 
 class HomeRepository:
+    _table_cache: dict[str, bool] = {}
+    _column_cache: dict[str, set[str]] = {}
+
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
+
+    def _has_table_cached(self, table_name: str) -> bool:
+        if table_name in self._table_cache:
+            return self._table_cache[table_name]
+        result = has_table(self.engine, table_name)
+        self._table_cache[table_name] = result
+        return result
+
+    def _get_columns_cached(self, table_name: str) -> set[str]:
+        if table_name in self._column_cache:
+            return self._column_cache[table_name]
+        if not self.engine:
+            return set()
+        try:
+            columns = {
+                column["name"].lower()
+                for column in inspect(self.engine).get_columns(table_name)
+            }
+            self._column_cache[table_name] = columns
+            return columns
+        except Exception:
+            return set()
 
     async def list_schedule_events(
         self,
@@ -75,13 +100,13 @@ class HomeRepository:
         events: list[dict[str, str]] = []
 
         with self.engine.connect() as conn:
-            if has_table(self.engine, "raw_campaign_master"):
+            if self._has_table_cached("raw_campaign_master"):
                 events.extend(
                     self._query_campaign_events(
                         conn=conn, store_id=store_id, start=today_str, end=window_end_str
                     )
                 )
-            if has_table(self.engine, "raw_telecom_discount_policy"):
+            if self._has_table_cached("raw_telecom_discount_policy"):
                 events.extend(
                     self._query_telecom_events(
                         conn=conn, store_id=store_id, start=today_str, end=window_end_str
@@ -100,7 +125,7 @@ class HomeRepository:
         year_month = effective_date.strftime("%Y%m")
         fallback = self._build_dashboard_recommended_questions()
 
-        if not self.engine or not has_table(self.engine, "dashboard_recommended_questions"):
+        if not self.engine or not self._has_table_cached("dashboard_recommended_questions"):
             return {
                 domain: [
                     self._to_dashboard_display_question(domain, str(entry["question"]))
@@ -132,7 +157,21 @@ class HomeRepository:
                     self._to_dashboard_display_question(domain, str(row["question"]))
                 )
 
-            if all(len(grouped.get(domain, [])) >= 3 for domain in _DASHBOARD_DOMAIN_AGENT_MAP):
+            expected: dict[str, list[str]] = {
+                domain: [
+                    self._to_dashboard_display_question(domain, str(entry["question"]))
+                    for entry in questions[:3]
+                ]
+                for domain, questions in fallback.items()
+            }
+            is_complete = all(
+                len(grouped.get(domain, [])) >= 3 for domain in _DASHBOARD_DOMAIN_AGENT_MAP
+            )
+            is_up_to_date = all(
+                grouped.get(domain, [])[:3] == expected.get(domain, [])
+                for domain in _DASHBOARD_DOMAIN_AGENT_MAP
+            )
+            if is_complete and is_up_to_date:
                 return {domain: grouped[domain][:3] for domain in _DASHBOARD_DOMAIN_AGENT_MAP}
 
             conn.execute(
@@ -193,7 +232,7 @@ class HomeRepository:
 
     @staticmethod
     def _golden_queries_csv_path() -> Path:
-        return Path(__file__).resolve().parents[2] / "docs" / "golden-queries-store-owner.csv"
+        return Path(__file__).resolve().parents[2] / "docs" / "golden-queries.csv"
 
     @classmethod
     def _build_dashboard_recommended_questions(cls) -> dict[str, list[dict[str, str | int]]]:
@@ -298,11 +337,7 @@ class HomeRepository:
         start: str,
         end: str,
     ) -> list[dict[str, str]]:
-        if not self.engine:
-            return []
-        campaign_columns = {
-            column["name"].lower() for column in inspect(self.engine).get_columns("raw_campaign_master")
-        }
+        campaign_columns = self._get_columns_cached("raw_campaign_master")
         campaign_store_col = next(
             (
                 column
@@ -361,12 +396,7 @@ class HomeRepository:
         start: str,
         end: str,
     ) -> list[dict[str, str]]:
-        if not self.engine:
-            return []
-        telecom_columns = {
-            column["name"].lower()
-            for column in inspect(self.engine).get_columns("raw_telecom_discount_policy")
-        }
+        telecom_columns = self._get_columns_cached("raw_telecom_discount_policy")
         telecom_store_col = next(
             (
                 column

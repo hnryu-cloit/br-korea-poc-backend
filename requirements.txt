@@ -6,6 +6,7 @@ sqlalchemy
 psycopg[binary]
 openpyxl
 httpx
+diskcache
 python-dotenv
 pytest
 pytest-asyncio
