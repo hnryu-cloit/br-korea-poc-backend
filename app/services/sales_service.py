@@ -55,7 +55,7 @@ _PHONE_RE = re.compile(r"0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}")
 
 
 def _mask_pii(text: str) -> tuple[str, list[str]]:
-    \"\"\"텍스트에서 PII를 마스킹하고 마스킹된 필드 목록을 반환\"\"\"
+    """텍스트에서 PII를 마스킹하고 마스킹된 필드 목록을 반환"""
     masked_fields: list[str] = []
     masked = text
     if _PHONE_RE.search(text):
@@ -95,7 +95,6 @@ class SalesService:
 
     @staticmethod
     def _sale_dt_to_day_label(dt_str: str) -> str:
-        \"\"\"YYYYMMDD 형식 날짜 문자열을 요일 라벨로 변환\"\"\"
         _DAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
         if len(dt_str) == 8:
             try:
@@ -259,7 +258,7 @@ class SalesService:
         golden_prompts: list[dict[str, str]],
         context_prompts: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        \"\"\"질문 목록을 병합하되, 점포별 맞춤형 질문(context)을 최우선으로 배치\"\"\"
+        """질문 목록을 병합하되, 점포별 맞춤형 질문(context)을 최우선으로 배치"""
         merged: list[dict[str, str]] = []
         seen_keys: set[str] = set()
         
@@ -497,7 +496,7 @@ class SalesService:
             return
 
         enrichment_prompt = dedent(
-            f\"\"\"
+            f"""
             다음 매출 응답을 보강하세요.
             - 액션은 점주가 즉시 수행 가능한 문장 2~3개
             - 근거는 수치/기간/비교 기준을 포함한 문장 2~3개
@@ -508,7 +507,7 @@ class SalesService:
             [현재 응답] {base_text}
             [기존 액션] {'; '.join(base_actions)}
             [기존 근거] {'; '.join(base_evidence)}
-            \"\"\"
+            """
         ).strip()
 
         try:
@@ -783,7 +782,7 @@ class SalesService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> SalesHourlyChannelResponse:
-        \"\"\"시간대별 채널 매출(오프라인+투고 / 배달) 및 판매건수 응답 구성\"\"\"
+        """시간대별 채널 매출(오프라인+투고 / 배달) 및 판매건수 응답 구성"""
         rows = await self.repository.get_hourly_channel(
             store_id=store_id, date_from=date_from, date_to=date_to
         )
